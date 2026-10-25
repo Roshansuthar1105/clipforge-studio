@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ClipForge Studio</title>
+    <style>
+        body {
+            font: 15px system-ui;
+            background: #f5f6fc;
+            color: #202137;
+            max-width: 850px;
+            margin: 35px auto;
+            padding: 0 16px
+        }
+
+        main {
+            background: white;
+            border: 1px solid #e5e6f0;
+            border-radius: 16px;
+            padding: 24px
+        }
+
+        h1 {
+            color: #7357f5
+        }
+
+        label {
+            display: block;
+            font-weight: 650;
+            margin: 15px 0 6px
+        }
+
+        input,
+        select,
+        button {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 11px;
+            border: 1px solid #ddd;
+            border-radius: 8px
+        }
+
+        button {
+            background: #7357f5;
+            color: white;
+            border: 0;
+            font-weight: 700;
+            margin-top: 16px;
+            cursor: pointer
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px
+        }
+
+        .check {
+            display: flex;
+            align-items: center;
+            gap: 8px
+        }
+
+        .check input {
+            width: auto
+        }
+
+        pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f5f4ff;
+            padding: 12px;
+            border-radius: 8px
+        }
+
+        @media(max-width:600px) {
+            .grid {
+                grid-template-columns: 1fr
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <h1>✂ ClipForge Studio</h1>
+        <p>Download a video and create vertical clips with Python.</p>
+
+        <form id="form">
+            <label>YouTube URL</label>
+            <input id="url" type="url" required placeholder="https://www.youtube.com/watch?v=...">
+
+            <label>Video title</label>
+            <input id="title" value="My Best Moments" required>
+
+            <div class="grid">
+                <div>
+                    <label>Clip length in seconds</label>
+                    <input id="length" type="number" min="1" max="600" value="30">
+                </div>
+                <div>
+                    <label>Maximum clips</label>
+                    <input id="count" type="number" min="1" max="100" value="5">
+                </div>
+                <div>
+                    <label>Start at (seconds)</label>
+                    <input id="start" type="number" min="0" value="0">
+                </div>
+                <div>
+                    <label>End at (optional)</label>
+                    <input id="end" type="number" min="1" placeholder="End of video">
+                </div>
+            </div>
+
+            <label>Download folder name</label>
+            <input id="downloadFolder" value="downloads">
+
+            <label>Clips folder name</label>
+            <input id="clipsFolder" value="my_clips">
+
+            <label class="check"><input id="showTitle" type="checkbox" checked>
+                Show title on clips</label>
+            <label class="check"><input id="showParts" type="checkbox" checked>
+                Add Part 1, Part 2 labels</label>
+            <label class="check"><input id="keepSource" type="checkbox" checked>
+                Keep downloaded source video</label>
+
+            <button id="submit" type="submit">Generate clips</button>
+        </form>
+
+        <h2>Job status</h2>
+        <progress id="progress" value="0" max="100" style="width:100%"></progress>
+        <p id="status">Ready.</p>
+        <pre id="log">Your job details will appear here.</pre>
+        <div id="files"></div>
+    </main>
+
+    <script>
+        const $ = id => document.getElementById(id);
+        let timer;
+
+        $("form").addEventListener("submit", async event => {
+            event.preventDefault();
+            clearInterval(timer);
+            $("submit").disabled = true;
+            $("files").replaceChildren();
+            $("progress").value = 0;
+            $("status").textContent = "Starting job…";
+
+            const endValue = $("end").value;
+
+            const payload = {
+                url: $("url").value.trim(),
+                title: $("title").value.trim(),
+                clip_length: Number($("length").value),
+                max_clips: Number($("count").value),
+                start_seconds: Number($("start").value || 0),
+                end_seconds: endValue ? Number(endValue) : null,
+                download_folder: $("downloadFolder").value,
+                clips_folder: $("clipsFolder").value,
+                show_title: $("showTitle").checked,
+                show_parts: $("showParts").checked,
+                keep_source: $("keepSource").checked
+            };
+
+            try {
+                const response = await fetch("/api/jobs", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || "Job failed");
+
+                $("log").textContent = "Job ID: " + data.job_id;
+                await poll(data.job_id);
+            } catch (error) {
+                $("status").textContent = "Error: " + error.message;
+                $("submit").disabled = false;
+            }
+        });
+
+        async function poll(id) {
+            const check = async () => {
+                try {
+                    const response = await fetch("/api/jobs/" + id);
+                    const job = await response.json();
+                    if (!response.ok) throw new Error(job.detail || "Status unavailable");
+
+                    $("progress").value = job.progress || 0;
+                    $("status").textContent =
+                        job.status + " — " + job.message;
+
+                    if (job.status === "completed" || job.status === "failed") {
+                        clearInterval(timer);
+                        $("submit").disabled = false;
+                        $("log").textContent = JSON.stringify(job, null, 2);
+
+                        if (job.status === "completed") {
+                            job.files.forEach(file => {
+                                const link = document.createElement("a");
+                                link.href = file.url;
+                                link.textContent = "Download " + file.name;
+                                link.style.display = "block";
+                                link.style.marginTop = "12px";
+                                link.download = file.name;
+                                $("files").appendChild(link);
+                            });
+                        }
+                    }
+                } catch (error) {
+                    clearInterval(timer);
+                    $("status").textContent = "Status error: " + error.message;
+                    $("submit").disabled = false;
+                }
+            };
+
+            await check();
+            timer = setInterval(check, 2000);
+        }
+    </script>
+</body>
+
+</html>
