@@ -158,14 +158,14 @@ def probe_duration(video_path: Path) -> float:
 
 
 def find_windows_font() -> Path:
-    """Find a font that works with FFmpeg on Windows."""
-    windows_dir = Path(os.environ.get("WINDIR", r"C:\Windows"))
-    fonts_dir = windows_dir / "Fonts"
-
+    """Find a font that works on Windows or Linux."""
     candidates = [
-        fonts_dir / "arialbd.ttf",
-        fonts_dir / "arial.ttf",
-        fonts_dir / "segoeui.ttf",
+        Path(os.environ.get("WINDIR", r"C:\Windows"))
+        / "Fonts" / "arialbd.ttf",
+        Path(os.environ.get("WINDIR", r"C:\Windows"))
+        / "Fonts" / "arial.ttf",
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     ]
 
     for candidate in candidates:
@@ -173,8 +173,7 @@ def find_windows_font() -> Path:
             return candidate
 
     raise RuntimeError(
-        "No supported font was found in the Windows Fonts folder. "
-        "Install Arial or Segoe UI and retry."
+        "No supported font was found. Install Arial or DejaVu Sans."
     )
 
 
