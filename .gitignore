@@ -1,3 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+data/
+test_clip.mp4
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
