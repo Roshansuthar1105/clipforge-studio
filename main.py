@@ -32,7 +32,13 @@ STATIC_DIR = APP_DIR / "static"
 for folder in (DOWNLOAD_DIR, CLIPS_DIR, STATIC_DIR):
     folder.mkdir(parents=True, exist_ok=True)
 
+from routers.accounts_router import router as accounts_router
+from routers.publish_router import router as publish_router
+
 app = FastAPI(title="ClipForge Studio")
+
+app.include_router(accounts_router)
+app.include_router(publish_router)
 
 app.mount(
     "/static",
@@ -887,3 +893,21 @@ def download_clip(job_id: str, filename: str):
         media_type="video/mp4",
         filename=safe_filename,
     )
+
+
+@app.get("/media/clips/{filename}")
+def serve_clip_media(filename: str):
+    """Serve generated clip video directly by filename for preview or social publishing."""
+    safe_filename = Path(filename).name
+    matches = list(CLIPS_DIR.glob(f"**/{safe_filename}"))
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Clip '{safe_filename}' not found",
+        )
+    return FileResponse(
+        matches[0],
+        media_type="video/mp4",
+        filename=safe_filename,
+    )
+

@@ -898,14 +898,373 @@
             display: block;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
+        /* Multi-Account & Publish Modal System */
+        .badge-mini {
+            background: var(--primary);
+            color: #fff;
+            padding: 2px 7px;
+            border-radius: var(--radius-full);
+            font-size: 11px;
+            font-weight: 700;
         }
 
-        @keyframes slideUp {
-            from { transform: translateY(20px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
+        .btn-publish-full {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, #6366f1, #ec4899);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            font-weight: 700;
+            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+        }
+
+        .btn-publish-full:hover {
+            box-shadow: 0 6px 20px rgba(236, 72, 153, 0.45);
+            transform: translateY(-1px);
+            background: linear-gradient(135deg, #4f46e5, #db2777);
+            color: #fff;
+        }
+
+        .app-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(4, 6, 12, 0.85);
+            backdrop-filter: blur(16px);
+            z-index: 1200;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .app-modal-overlay.active {
+            display: flex;
+        }
+
+        .app-modal-card {
+            background: #111420;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: var(--radius-lg);
+            width: 100%;
+            max-width: 620px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.85);
+            animation: slideUp 0.25s ease;
+        }
+
+        .app-modal-card.wide {
+            max-width: 780px;
+        }
+
+        .app-modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(23, 28, 46, 0.6);
+        }
+
+        .app-modal-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 19px;
+            font-weight: 700;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .app-modal-subtitle {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .app-modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .app-modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+            background: rgba(23, 28, 46, 0.6);
+        }
+
+        .btn-social {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 10px 18px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            border: none;
+            transition: var(--transition);
+            color: #fff;
+            text-decoration: none;
+        }
+
+        .btn-social-yt {
+            background: #ef4444;
+            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35);
+        }
+
+        .btn-social-yt:hover {
+            background: #dc2626;
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .btn-social-ig {
+            background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+            box-shadow: 0 4px 14px rgba(220, 39, 67, 0.35);
+        }
+
+        .btn-social-ig:hover {
+            opacity: 0.95;
+            box-shadow: 0 6px 20px rgba(204, 35, 102, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .btn-social-manual {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+        }
+
+        .btn-social-manual:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.25);
+        }
+
+        /* Account Card Items */
+        .account-item {
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 14px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            transition: var(--transition);
+        }
+
+        .account-item:hover {
+            border-color: rgba(255, 255, 255, 0.18);
+            background: #1c2238;
+        }
+
+        .account-avatar {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: #252d48;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            flex-shrink: 0;
+        }
+
+        .account-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .account-alias {
+            font-weight: 600;
+            font-size: 14px;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .account-meta {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 3px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge-platform {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 2px 7px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-platform-youtube {
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .badge-platform-instagram {
+            background: rgba(236, 72, 153, 0.15);
+            color: #f472b6;
+            border: 1px solid rgba(236, 72, 153, 0.3);
+        }
+
+        .badge-token-status {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: var(--radius-full);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .badge-token-valid {
+            background: rgba(16, 185, 129, 0.12);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+
+        .badge-token-invalid {
+            background: rgba(239, 68, 68, 0.12);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.25);
+        }
+
+        /* Checkbox Account Selector */
+        .publish-account-card {
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            transition: var(--transition);
+            user-select: none;
+        }
+
+        .publish-account-card:hover {
+            border-color: var(--primary);
+            background: #1c2238;
+        }
+
+        .publish-account-card.selected {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.12);
+        }
+
+        .custom-checkbox {
+            width: 20px;
+            height: 20px;
+            border-radius: 6px;
+            border: 2px solid rgba(255, 255, 255, 0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #fff;
+            transition: var(--transition);
+            flex-shrink: 0;
+        }
+
+        .publish-account-card.selected .custom-checkbox {
+            background: var(--primary);
+            border-color: var(--primary);
+        }
+
+        /* Publish Status Item in Live Progress */
+        .target-status-item {
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: var(--transition);
+        }
+
+        .target-status-item.success {
+            border-color: rgba(16, 185, 129, 0.4);
+            background: rgba(16, 185, 129, 0.06);
+        }
+
+        .target-status-item.failed {
+            border-color: rgba(239, 68, 68, 0.4);
+            background: rgba(239, 68, 68, 0.06);
+        }
+
+        .target-status-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .target-status-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #818cf8;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            padding: 4px 10px;
+            background: rgba(99, 102, 241, 0.15);
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            transition: var(--transition);
+        }
+
+        .target-status-link:hover {
+            color: #fff;
+            background: var(--primary);
+        }
+
+        /* History Table / Records */
+        .history-card {
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .history-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 10px;
         }
     </style>
 </head>
@@ -921,7 +1280,15 @@
                     <p class="brand-subtitle">AI-Powered YouTube to 9:16 Vertical Video Engine</p>
                 </div>
             </div>
-            <div class="badge-status">FastAPI Backend Active</div>
+            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                <button type="button" class="btn-clip-action" onclick="openAccountsModal()" title="Manage YouTube & Instagram accounts" style="font-size: 13px; padding: 9px 16px;">
+                    📡 Connected Accounts <span id="headerAccountCount" class="badge-mini">0</span>
+                </button>
+                <button type="button" class="btn-clip-action" onclick="openHistoryModal()" title="View past publishes" style="font-size: 13px; padding: 9px 16px;">
+                    📜 Publish History
+                </button>
+                <div class="badge-status">FastAPI Active</div>
+            </div>
         </header>
 
         <!-- Main Workspace -->
@@ -1132,6 +1499,188 @@
             <div class="phone-controls-overlay">
                 <a id="modalDownloadLink" class="btn-clip-action btn-clip-primary" style="flex: 1;" download>⬇ Download MP4</a>
                 <button class="btn-clip-action" style="flex: 1;" onclick="copyModalVideoLink()">📋 Copy Link</button>
+                <button class="btn-clip-action btn-publish-full" style="flex: 1.2;" onclick="openPublishFromModal()">🚀 Publish</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Accounts Management Modal -->
+    <div id="accountsModal" class="app-modal-overlay" onclick="closeAccountsModal(event)">
+        <div class="app-modal-card" onclick="event.stopPropagation()">
+            <div class="app-modal-header">
+                <div>
+                    <h3 class="app-modal-title"><span>📡</span> Connected Accounts</h3>
+                    <p class="app-modal-subtitle">Connect YouTube channels & Instagram accounts to publish clips directly.</p>
+                </div>
+                <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceCloseAccountsModal()">✕</button>
+            </div>
+            <div class="app-modal-body">
+                <!-- Action Connect Bar -->
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button type="button" class="btn-social btn-social-yt" onclick="connectOAuth('youtube')">
+                        <span>▶</span> Connect YouTube
+                    </button>
+                    <button type="button" class="btn-social btn-social-ig" onclick="connectOAuth('instagram')">
+                        <span>📷</span> Connect Instagram
+                    </button>
+                    <button type="button" class="btn-social btn-social-manual" onclick="toggleManualAccountForm()">
+                        <span>🔑</span> Manual Token
+                    </button>
+                </div>
+
+                <!-- Manual Connect Collapsible Form -->
+                <div id="manualAccountForm" style="display: none; background: #171c2e; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 18px; gap: 14px; flex-direction: column;">
+                    <div style="font-weight: 700; font-size: 14px; color: #fff;">🔑 Connect Account with Token Directly</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div>
+                            <label style="font-size: 11px;">Platform</label>
+                            <select id="manualPlatform" style="width: 100%; background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); color: #fff; padding: 10px; border-radius: var(--radius-sm); outline: none;">
+                                <option value="youtube">YouTube</option>
+                                <option value="instagram">Instagram</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px;">Display Alias (e.g. @mychannel)</label>
+                            <input id="manualAlias" type="text" placeholder="Channel / Page Name" style="padding: 10px;">
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size: 11px;">Access Token</label>
+                        <input id="manualToken" type="text" placeholder="OAuth Access Token or Page Token" style="padding: 10px;">
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div>
+                            <label style="font-size: 11px;">Channel / IG User ID (optional)</label>
+                            <input id="manualChannelId" type="text" placeholder="Channel or IG User ID" style="padding: 10px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 11px;">Refresh Token (YouTube only)</label>
+                            <input id="manualRefreshToken" type="text" placeholder="Optional refresh token" style="padding: 10px;">
+                        </div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px;">
+                        <button type="button" class="btn-clip-action" onclick="toggleManualAccountForm()">Cancel</button>
+                        <button type="button" class="btn-clip-action btn-clip-primary" onclick="submitManualAccount()">Save Account</button>
+                    </div>
+                </div>
+
+                <!-- Accounts List Container -->
+                <div id="accountsListContainer" style="display: flex; flex-direction: column; gap: 12px;">
+                    <div style="text-align: center; padding: 24px; color: var(--text-muted);">
+                        Loading accounts...
+                    </div>
+                </div>
+            </div>
+            <div class="app-modal-footer">
+                <button type="button" class="btn-clip-action" onclick="forceCloseAccountsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- One-Click Multi-Account Publish Modal -->
+    <div id="publishModal" class="app-modal-overlay" onclick="closePublishModal(event)">
+        <div class="app-modal-card wide" onclick="event.stopPropagation()">
+            <div class="app-modal-header">
+                <div>
+                    <h3 class="app-modal-title"><span>🚀</span> One-Click Multi-Account Publish</h3>
+                    <p class="app-modal-subtitle">Publish this clip instantly to multiple YouTube and Instagram accounts.</p>
+                </div>
+                <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceClosePublishModal()">✕</button>
+            </div>
+            <div class="app-modal-body">
+                <!-- Top Section: Clip Preview and Target Accounts -->
+                <div style="display: grid; grid-template-columns: 160px 1fr; gap: 20px; align-items: start;">
+                    <!-- Video Preview Thumb -->
+                    <div style="border-radius: var(--radius-md); overflow: hidden; background: #000; border: 1px solid var(--border-subtle); aspect-ratio: 9/16; position: relative;">
+                        <video id="publishModalVideo" src="" style="width: 100%; height: 100%; object-fit: cover;" preload="metadata" muted playsinline></video>
+                        <div id="publishClipBadge" style="position: absolute; bottom: 8px; left: 8px; right: 8px; font-size: 11px; background: rgba(0,0,0,0.8); color: #fff; padding: 4px 8px; border-radius: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">clip.mp4</div>
+                    </div>
+
+                    <!-- Targets Selection Section -->
+                    <div style="display: flex; flex-direction: column; gap: 14px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <label style="margin: 0; font-size: 13px; font-weight: 700; color: #fff;">Target Accounts</label>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" class="chip-btn" style="font-size: 11px; padding: 3px 8px;" onclick="selectAllPublishAccounts(true)">Select All</button>
+                                <button type="button" class="chip-btn" style="font-size: 11px; padding: 3px 8px;" onclick="selectAllPublishAccounts(false)">Clear All</button>
+                            </div>
+                        </div>
+
+                        <!-- Target Accounts Checkbox List -->
+                        <div id="publishAccountsList" style="max-height: 190px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;">
+                            <!-- Injected dynamically -->
+                        </div>
+
+                        <!-- Metadata Fields -->
+                        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 4px;">
+                            <div>
+                                <label style="font-size: 11px;">Title Banner (YouTube Shorts)</label>
+                                <input id="publishTitleInput" type="text" placeholder="Title for YouTube..." style="padding: 10px;">
+                            </div>
+                            <div>
+                                <label style="font-size: 11px;">Caption & Description (Instagram & YouTube)</label>
+                                <input id="publishCaptionInput" type="text" placeholder="Description / Caption / Hashtags..." style="padding: 10px;">
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: center;">
+                                <div>
+                                    <label style="font-size: 11px;">YouTube Privacy</label>
+                                    <select id="publishPrivacySelect" style="width: 100%; background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); color: #fff; padding: 9px; border-radius: var(--radius-sm); outline: none;">
+                                        <option value="public" selected>Public (Everyone)</option>
+                                        <option value="unlisted">Unlisted (Link only)</option>
+                                        <option value="private">Private (Only you)</option>
+                                    </select>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 10px; margin-top: 18px;">
+                                    <input id="publishIgFeedCheck" type="checkbox" checked style="width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer;">
+                                    <label for="publishIgFeedCheck" style="margin: 0; text-transform: none; font-size: 12px; cursor: pointer; color: var(--text-primary);">Share to Instagram Feed</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Publishing Progress Container -->
+                <div id="publishProgressContainer" style="display: none; border-top: 1px solid var(--border-subtle); padding-top: 18px; flex-direction: column; gap: 12px;">
+                    <div style="font-size: 14px; font-weight: 700; color: #fff; display: flex; align-items: center; justify-content: space-between;">
+                        <span id="publishOverallStatus">Publishing to accounts...</span>
+                        <span id="publishOverallPercent" style="color: var(--primary);">0%</span>
+                    </div>
+                    <div id="publishTargetsProgressList" style="display: flex; flex-direction: column; gap: 10px;">
+                        <!-- Injected live -->
+                    </div>
+                </div>
+            </div>
+            <div class="app-modal-footer">
+                <button type="button" class="btn-clip-action" onclick="forceClosePublishModal()">Cancel</button>
+                <button id="executePublishBtn" type="button" class="btn-publish-full" style="padding: 12px 28px; width: auto; font-size: 14px;" onclick="executePublish()">
+                    🚀 Publish to Selected (0 accounts)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Publish History Modal -->
+    <div id="historyModal" class="app-modal-overlay" onclick="closeHistoryModal(event)">
+        <div class="app-modal-card wide" onclick="event.stopPropagation()">
+            <div class="app-modal-header">
+                <div>
+                    <h3 class="app-modal-title"><span>📜</span> Publish History Log</h3>
+                    <p class="app-modal-subtitle">All past multi-account publish runs and published links.</p>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <button type="button" class="chip-btn" onclick="loadPublishHistory(true)">🔄 Refresh</button>
+                    <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceCloseHistoryModal()">✕</button>
+                </div>
+            </div>
+            <div class="app-modal-body">
+                <div id="historyListContainer" style="display: flex; flex-direction: column; gap: 14px;">
+                    <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+                        Loading history...
+                    </div>
+                </div>
+            </div>
+            <div class="app-modal-footer">
+                <button type="button" class="btn-clip-action" onclick="forceCloseHistoryModal()">Close</button>
             </div>
         </div>
     </div>
@@ -1406,6 +1955,9 @@
                             <a class="btn-clip-action btn-clip-primary" href="${file.url}" download="${escapeHtml(file.name)}">
                                 ⬇ Save
                             </a>
+                            <button class="btn-clip-action btn-publish-full" onclick="openPublishModal('${jobId}', '${escapeHtml(file.name)}', '${file.url}')">
+                                🚀 One-Click Publish
+                            </button>
                         </div>
                     </div>
                 `;
@@ -1414,14 +1966,23 @@
         }
 
         // 9:16 Phone Modal Handlers
+        let currentModalFilename = "";
         function openPhoneModal(url, filename) {
             currentModalUrl = window.location.origin + url;
+            currentModalFilename = filename;
             const video = $("modalVideo");
             video.src = url;
             video.play().catch(() => {});
             $("modalDownloadLink").href = url;
             $("modalDownloadLink").setAttribute("download", filename);
             $("phoneModal").classList.add("active");
+        }
+
+        function openPublishFromModal() {
+            const url = currentModalUrl;
+            const filename = currentModalFilename;
+            forceClosePhoneModal();
+            openPublishModal("", filename, url);
         }
 
         function closePhoneModal(event) {
@@ -1480,10 +2041,595 @@
             }[tag] || tag));
         }
 
+        // ──────────────────────────────────────────────────────────────────────
+        // Multi-Account & Automation Logic
+        // ──────────────────────────────────────────────────────────────────────
+        let connectedAccounts = [];
+        let selectedPublishAccountIds = new Set();
+        let currentPublishTarget = { jobId: "", filename: "", url: "" };
+        let publishPollInterval = null;
+
+        // Load Accounts on Startup
+        async function loadConnectedAccounts() {
+            try {
+                const res = await fetch("/accounts");
+                if (!res.ok) return;
+                const data = await res.json();
+                connectedAccounts = data.accounts || [];
+                const countBadge = $("headerAccountCount");
+                if (countBadge) countBadge.textContent = connectedAccounts.length;
+                renderAccountsList();
+            } catch (err) {
+                console.error("Failed to load connected accounts:", err);
+            }
+        }
+
+        // Render Accounts List in Accounts Modal
+        function renderAccountsList() {
+            const container = $("accountsListContainer");
+            if (!container) return;
+
+            if (connectedAccounts.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 32px 16px; color: var(--text-muted); background: var(--bg-surface-elevated); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md);">
+                        <div style="font-size: 32px; margin-bottom: 8px;">📡</div>
+                        <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">No accounts connected yet</div>
+                        <div style="font-size: 13px;">Connect your YouTube channels and Instagram accounts using the buttons above.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = "";
+            connectedAccounts.forEach(acc => {
+                const isYt = acc.platform === "youtube";
+                const platformBadge = isYt 
+                    ? `<span class="badge-platform badge-platform-youtube">YouTube</span>`
+                    : `<span class="badge-platform badge-platform-instagram">Instagram</span>`;
+                
+                const avatar = acc.avatar_url
+                    ? `<img class="account-avatar" src="${escapeHtml(acc.avatar_url)}" alt="${escapeHtml(acc.alias)}">`
+                    : `<div class="account-avatar" style="background: ${isYt ? '#ef4444' : '#ec4899'}">${escapeHtml((acc.alias || '?').charAt(0).toUpperCase())}</div>`;
+
+                const item = document.createElement("div");
+                item.className = "account-item";
+                item.id = `account-item-${acc.id}`;
+                item.innerHTML = `
+                    ${avatar}
+                    <div class="account-details">
+                        <div class="account-alias">
+                            ${escapeHtml(acc.alias)}
+                            ${platformBadge}
+                        </div>
+                        <div class="account-meta">
+                            <span id="account-status-${acc.id}" class="badge-token-status badge-token-valid">● Active</span>
+                            <span>ID: ${escapeHtml(acc.channel_id || acc.id.slice(0, 8))}</span>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" class="btn-clip-action" style="padding: 6px 10px; font-size: 12px;" onclick="testAccountHealth('${acc.id}')" title="Test Token Health">
+                            🔄 Test
+                        </button>
+                        <button type="button" class="btn-clip-action" style="padding: 6px 10px; font-size: 12px; color: #f87171;" onclick="disconnectAccount('${acc.id}', '${escapeHtml(acc.alias)}')" title="Disconnect">
+                            ✕ Disconnect
+                        </button>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        // Open & Close Accounts Modal
+        function openAccountsModal() {
+            $("accountsModal").classList.add("active");
+            loadConnectedAccounts();
+        }
+
+        function closeAccountsModal(event) {
+            if (event.target === $("accountsModal")) forceCloseAccountsModal();
+        }
+
+        function forceCloseAccountsModal() {
+            $("accountsModal").classList.remove("active");
+            $("manualAccountForm").style.display = "none";
+        }
+
+        // OAuth Popup Trigger
+        async function connectOAuth(platform) {
+            try {
+                showToast(`Opening ${platform.toUpperCase()} authentication...`);
+                const res = await fetch(`/accounts/${platform}/connect`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to obtain auth URL");
+
+                const w = 600, h = 720;
+                const left = (window.innerWidth - w) / 2;
+                const top = (window.innerHeight - h) / 2;
+                window.open(data.auth_url, `Connect_${platform}`, `width=${w},height=${h},top=${top},left=${left},scrollbars=yes`);
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        // Listen for OAuth Popup PostMessage
+        window.addEventListener("message", event => {
+            if (event.data && event.data.type === "account_connected") {
+                if (event.data.success) {
+                    showToast(`🎉 Connected ${event.data.platform} account successfully!`);
+                    loadConnectedAccounts();
+                } else {
+                    showToast(`⚠️ Connection failed: ${event.data.error || 'Unknown error'}`);
+                }
+            }
+        });
+
+        // Test Account Health
+        async function testAccountHealth(accountId) {
+            const badge = $(`account-status-${accountId}`);
+            if (badge) {
+                badge.textContent = "⏳ Testing...";
+                badge.className = "badge-token-status";
+            }
+            try {
+                const res = await fetch(`/accounts/${accountId}/status`);
+                const data = await res.json();
+                if (data.valid) {
+                    if (badge) {
+                        badge.textContent = "● Valid";
+                        badge.className = "badge-token-status badge-token-valid";
+                    }
+                    showToast(`✅ ${data.message || "Token is healthy and active"}`);
+                } else {
+                    if (badge) {
+                        badge.textContent = "● Invalid";
+                        badge.className = "badge-token-status badge-token-invalid";
+                    }
+                    showToast(`⚠️ ${data.message || "Token is invalid"}`);
+                }
+            } catch (err) {
+                if (badge) {
+                    badge.textContent = "● Error";
+                    badge.className = "badge-token-status badge-token-invalid";
+                }
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        // Disconnect Account
+        async function disconnectAccount(accountId, alias) {
+            if (!confirm(`Are you sure you want to disconnect ${alias}?`)) return;
+            try {
+                const res = await fetch(`/accounts/${accountId}`, { method: "DELETE" });
+                if (!res.ok) throw new Error("Failed to delete account");
+                showToast(`Disconnected ${alias}`);
+                loadConnectedAccounts();
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        // Manual Account Form
+        function toggleManualAccountForm() {
+            const form = $("manualAccountForm");
+            const isOpen = form.style.display === "flex";
+            form.style.display = isOpen ? "none" : "flex";
+        }
+
+        async function submitManualAccount() {
+            const platform = $("manualPlatform").value;
+            const alias = $("manualAlias").value.trim();
+            const token = $("manualToken").value.trim();
+            const channelId = $("manualChannelId").value.trim();
+            const refreshToken = $("manualRefreshToken").value.trim();
+
+            if (!alias || !token) {
+                showToast("Please provide at least display name and access token.");
+                return;
+            }
+
+            try {
+                const res = await fetch("/accounts/manual", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        platform,
+                        alias,
+                        access_token: token,
+                        channel_id: channelId || null,
+                        refresh_token: refreshToken || null
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to add account");
+
+                showToast(`✅ Connected account: ${alias}`);
+                toggleManualAccountForm();
+                $("manualAlias").value = "";
+                $("manualToken").value = "";
+                $("manualChannelId").value = "";
+                $("manualRefreshToken").value = "";
+                loadConnectedAccounts();
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // One-Click Multi-Account Publish System
+        // ──────────────────────────────────────────────────────────────────────
+        function openPublishModal(jobId, filename, url) {
+            currentPublishTarget = { jobId, filename, url };
+            clearInterval(publishPollInterval);
+
+            // Populate Video and Badge
+            const video = $("publishModalVideo");
+            video.src = url;
+            $("publishClipBadge").textContent = filename;
+
+            // Pre-fill Title & Caption
+            const cleanTitle = filename.replace(/\.mp4$/i, '').replace(/[_-]/g, ' ');
+            $("publishTitleInput").value = cleanTitle;
+            $("publishCaptionInput").value = cleanTitle;
+
+            // Load saved account selections from localStorage
+            try {
+                const saved = JSON.parse(localStorage.getItem("clipforge_selected_accounts") || "[]");
+                selectedPublishAccountIds = new Set(saved);
+            } catch (_) {
+                selectedPublishAccountIds = new Set();
+            }
+
+            // Render Account Checkboxes
+            renderPublishAccountCheckboxes();
+
+            // Reset progress view
+            $("publishProgressContainer").style.display = "none";
+            $("executePublishBtn").disabled = false;
+
+            $("publishModal").classList.add("active");
+        }
+
+        function closePublishModal(event) {
+            if (event.target === $("publishModal")) forceClosePublishModal();
+        }
+
+        function forceClosePublishModal() {
+            clearInterval(publishPollInterval);
+            const video = $("publishModalVideo");
+            video.pause();
+            video.src = "";
+            $("publishModal").classList.remove("active");
+        }
+
+        function renderPublishAccountCheckboxes() {
+            const container = $("publishAccountsList");
+            container.innerHTML = "";
+
+            if (connectedAccounts.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 20px; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border-subtle); border-radius: var(--radius-sm);">
+                        <div>No accounts connected.</div>
+                        <button type="button" class="btn-clip-action" style="margin-top: 8px; display: inline-flex;" onclick="openAccountsModal()">+ Connect Accounts</button>
+                    </div>
+                `;
+                updateExecutePublishBtn();
+                return;
+            }
+
+            connectedAccounts.forEach(acc => {
+                const isSelected = selectedPublishAccountIds.has(acc.id);
+                const isYt = acc.platform === "youtube";
+                const platformBadge = isYt 
+                    ? `<span class="badge-platform badge-platform-youtube">YouTube</span>`
+                    : `<span class="badge-platform badge-platform-instagram">Instagram</span>`;
+                
+                const card = document.createElement("div");
+                card.className = `publish-account-card ${isSelected ? 'selected' : ''}`;
+                card.id = `pub-card-${acc.id}`;
+                card.onclick = () => togglePublishAccount(acc.id);
+                card.innerHTML = `
+                    <div class="custom-checkbox">${isSelected ? '✓' : ''}</div>
+                    <div style="font-size: 16px;">${isYt ? '▶' : '📷'}</div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 600; font-size: 13px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            ${escapeHtml(acc.alias)}
+                        </div>
+                    </div>
+                    ${platformBadge}
+                `;
+                container.appendChild(card);
+            });
+
+            updateExecutePublishBtn();
+        }
+
+        function togglePublishAccount(accountId) {
+            if (selectedPublishAccountIds.has(accountId)) {
+                selectedPublishAccountIds.delete(accountId);
+            } else {
+                selectedPublishAccountIds.add(accountId);
+            }
+            savePublishSelection();
+            renderPublishAccountCheckboxes();
+        }
+
+        function selectAllPublishAccounts(selectAll) {
+            if (selectAll) {
+                connectedAccounts.forEach(a => selectedPublishAccountIds.add(a.id));
+            } else {
+                selectedPublishAccountIds.clear();
+            }
+            savePublishSelection();
+            renderPublishAccountCheckboxes();
+        }
+
+        function savePublishSelection() {
+            try {
+                localStorage.setItem("clipforge_selected_accounts", JSON.stringify([...selectedPublishAccountIds]));
+            } catch (_) {}
+        }
+
+        function updateExecutePublishBtn() {
+            const count = selectedPublishAccountIds.size;
+            const btn = $("executePublishBtn");
+            btn.textContent = `🚀 Publish to Selected (${count} account${count === 1 ? '' : 's'})`;
+            btn.disabled = count === 0;
+        }
+
+        async function executePublish() {
+            if (selectedPublishAccountIds.size === 0) {
+                showToast("Please select at least one account to publish to.");
+                return;
+            }
+
+            const targets = [];
+            selectedPublishAccountIds.forEach(id => {
+                const acc = connectedAccounts.find(a => a.id === id);
+                if (acc) {
+                    targets.push({
+                        account_id: id,
+                        platform: acc.platform,
+                        youtube_config: acc.platform === "youtube" ? {
+                            title: $("publishTitleInput").value.trim(),
+                            description: $("publishCaptionInput").value.trim(),
+                            privacy: $("publishPrivacySelect").value
+                        } : null,
+                        instagram_config: acc.platform === "instagram" ? {
+                            caption: $("publishCaptionInput").value.trim(),
+                            share_to_feed: $("publishIgFeedCheck").checked
+                        } : null
+                    });
+                }
+            });
+
+            const payload = {
+                clip_path: currentPublishTarget.filename,
+                title: $("publishTitleInput").value.trim(),
+                caption: $("publishCaptionInput").value.trim(),
+                privacy: $("publishPrivacySelect").value,
+                targets: targets
+            };
+
+            const btn = $("executePublishBtn");
+            btn.disabled = true;
+            btn.innerHTML = `<span>⏳ Initiating...</span>`;
+
+            // Display progress container
+            const progContainer = $("publishProgressContainer");
+            progContainer.style.display = "flex";
+            $("publishOverallStatus").textContent = "Dispatching upload jobs...";
+            $("publishOverallPercent").textContent = "0%";
+
+            renderLiveTargetsProgress(targets.map(t => {
+                const acc = connectedAccounts.find(a => a.id === t.account_id);
+                return {
+                    account_id: t.account_id,
+                    account_alias: acc ? acc.alias : t.platform,
+                    platform: t.platform,
+                    status: "queued",
+                    progress: 0,
+                    url: null,
+                    error: null
+                };
+            }));
+
+            try {
+                const res = await fetch("/publish", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const job = await res.json();
+                if (!res.ok) throw new Error(job.detail || "Publish request failed");
+
+                showToast("🚀 Publishing initiated! Tracking real-time status...");
+                startPublishJobPolling(job.job_id);
+            } catch (err) {
+                btn.disabled = false;
+                updateExecutePublishBtn();
+                $("publishOverallStatus").textContent = `Error: ${err.message}`;
+                showToast(`Publish error: ${err.message}`);
+            }
+        }
+
+        function renderLiveTargetsProgress(targets) {
+            const list = $("publishTargetsProgressList");
+            list.innerHTML = "";
+
+            targets.forEach(t => {
+                const isYt = t.platform === "youtube";
+                const isSuccess = t.status === "success";
+                const isFailed = t.status === "failed";
+                const isUploading = t.status === "uploading" || t.status === "processing";
+
+                let statusBadge = `<span style="font-size: 12px; color: var(--text-muted);">⏳ Queued</span>`;
+                if (isUploading) {
+                    statusBadge = `<span style="font-size: 12px; color: var(--primary);">🔄 Uploading (${t.progress || 0}%)</span>`;
+                } else if (isSuccess) {
+                    statusBadge = `<span style="font-size: 12px; color: var(--success); font-weight: 700;">✅ Published</span>`;
+                } else if (isFailed) {
+                    statusBadge = `<span style="font-size: 12px; color: var(--danger); font-weight: 700;">❌ Failed</span>`;
+                }
+
+                let linkHtml = "";
+                if (isSuccess && t.url) {
+                    linkHtml = `<a class="target-status-link" href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer">🔗 View ${isYt ? 'Short' : 'Reel'}</a>`;
+                } else if (isFailed && t.error) {
+                    linkHtml = `<span style="font-size: 11px; color: #f87171;" title="${escapeHtml(t.error)}">${escapeHtml(t.error.slice(0, 75))}</span>`;
+                }
+
+                const item = document.createElement("div");
+                item.className = `target-status-item ${isSuccess ? 'success' : ''} ${isFailed ? 'failed' : ''}`;
+                item.innerHTML = `
+                    <div class="target-status-top">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 15px;">${isYt ? '▶' : '📷'}</span>
+                            <span style="font-weight: 600; font-size: 13px; color: #fff;">${escapeHtml(t.account_alias || t.platform)}</span>
+                        </div>
+                        <div>${statusBadge}</div>
+                    </div>
+                    ${linkHtml ? `<div style="display: flex; justify-content: flex-end; margin-top: 4px;">${linkHtml}</div>` : ''}
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        function startPublishJobPolling(jobId) {
+            clearInterval(publishPollInterval);
+
+            const check = async () => {
+                try {
+                    const res = await fetch(`/publish/${jobId}/status`);
+                    const job = await res.json();
+                    if (!res.ok) throw new Error(job.detail || "Status fetch failed");
+
+                    renderLiveTargetsProgress(job.targets || []);
+
+                    const total = job.targets ? job.targets.length : 1;
+                    const finished = job.targets ? job.targets.filter(t => t.status === "success" || t.status === "failed").length : 0;
+                    const pct = Math.floor((finished / total) * 100);
+                    $("publishOverallPercent").textContent = `${pct}%`;
+
+                    if (job.all_done) {
+                        clearInterval(publishPollInterval);
+                        $("publishOverallStatus").textContent = "All publish targets completed!";
+                        $("executePublishBtn").disabled = false;
+                        $("executePublishBtn").innerHTML = `<span>🚀 Publish Again</span>`;
+
+                        const successCount = job.targets.filter(t => t.status === "success").length;
+                        showToast(`🎉 Published to ${successCount} of ${total} account(s)!`);
+                    }
+                } catch (err) {
+                    console.error("Publish polling error:", err);
+                }
+            };
+
+            check();
+            publishPollInterval = setInterval(check, 2500);
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // Publish History System
+        // ──────────────────────────────────────────────────────────────────────
+        function openHistoryModal() {
+            $("historyModal").classList.add("active");
+            loadPublishHistory();
+        }
+
+        function closeHistoryModal(event) {
+            if (event.target === $("historyModal")) forceCloseHistoryModal();
+        }
+
+        function forceCloseHistoryModal() {
+            $("historyModal").classList.remove("active");
+        }
+
+        async function loadPublishHistory(showSuccessToast = false) {
+            const container = $("historyListContainer");
+            container.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--text-muted);">Loading publish history...</div>`;
+
+            try {
+                const res = await fetch("/publish/history");
+                const data = await res.json();
+                const records = data.records || [];
+
+                if (records.length === 0) {
+                    container.innerHTML = `
+                        <div style="text-align: center; padding: 36px 16px; color: var(--text-muted); background: var(--bg-surface-elevated); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md);">
+                            <div style="font-size: 32px; margin-bottom: 8px;">📜</div>
+                            <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">No publish history yet</div>
+                            <div style="font-size: 13px;">Generate vertical clips and use One-Click Publish to publish to YouTube and Instagram!</div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = "";
+                records.forEach(rec => {
+                    const dateStr = rec.started_at ? new Date(rec.started_at).toLocaleString() : "Recent";
+                    const card = document.createElement("div");
+                    card.className = "history-card";
+
+                    let targetsHtml = "";
+                    (rec.targets || []).forEach(t => {
+                        const isYt = t.platform === "youtube";
+                        const isSuccess = t.status === "success";
+                        const badge = isSuccess
+                            ? `<span style="color: #34d399; font-size: 11px; font-weight: 700;">✅ Success</span>`
+                            : `<span style="color: #f87171; font-size: 11px; font-weight: 700;">❌ Failed</span>`;
+                        const link = (isSuccess && t.url)
+                            ? `<a class="target-status-link" href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer">🔗 View Link</a>`
+                            : (t.error ? `<span style="font-size: 11px; color: #f87171;" title="${escapeHtml(t.error)}">${escapeHtml(t.error.slice(0, 45))}</span>` : '');
+
+                        targetsHtml += `
+                            <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span>${isYt ? '▶' : '📷'}</span>
+                                    <span style="font-weight: 600; font-size: 13px; color: #fff;">${escapeHtml(t.account_alias || t.platform)}</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    ${badge}
+                                    ${link}
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    card.innerHTML = `
+                        <div class="history-card-header">
+                            <div>
+                                <div style="font-weight: 700; font-size: 14px; color: #fff;">🎬 ${escapeHtml(rec.clip_name || 'Clip')}</div>
+                                <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${dateStr} · Job ${escapeHtml((rec.job_id || '').slice(0, 8))}</div>
+                            </div>
+                            <button type="button" class="btn-clip-action" style="padding: 4px 8px; font-size: 11px; color: #f87171;" onclick="deleteHistoryRecord('${rec.job_id}')" title="Delete Log">
+                                🗑 Delete
+                            </button>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                            ${targetsHtml}
+                        </div>
+                    `;
+                    container.appendChild(card);
+                });
+
+                if (showSuccessToast) showToast("Publish history refreshed");
+            } catch (err) {
+                container.innerHTML = `<div style="text-align: center; padding: 20px; color: #f87171;">Failed to load history: ${err.message}</div>`;
+            }
+        }
+
         // Keyboard ESC handler
         document.addEventListener("keydown", event => {
-            if (event.key === "Escape") forceClosePhoneModal();
+            if (event.key === "Escape") {
+                forceClosePhoneModal();
+                forceCloseAccountsModal();
+                forceClosePublishModal();
+                forceCloseHistoryModal();
+            }
         });
+
+        // Initialize Accounts on Page Load
+        loadConnectedAccounts();
     </script>
 </body>
 

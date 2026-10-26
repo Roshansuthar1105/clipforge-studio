@@ -3,3 +3,7 @@ uvicorn[standard]
 yt-dlp
 Pillow
 python-multipart
+google-auth-oauthlib
+google-api-python-client
+requests
+python-dotenv
