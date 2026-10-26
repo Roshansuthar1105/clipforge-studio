@@ -7,7 +7,7 @@ import shutil
 import threading
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, urlunparse
 
 import yt_dlp
 from fastapi import FastAPI, HTTPException
@@ -75,6 +75,9 @@ class ClipRequest(BaseModel):
     # "blur" for cinematic blurred 9:16 background, "black" for classic bars.
     background_style: str = "blur"
 
+    # When True, generate only the first clip (fast preview / test render).
+    is_preview: bool = False
+
 
 # --------------------------------------------------
 # UTILITIES
@@ -138,6 +141,51 @@ def safe_name(value: str) -> str:
     value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
     value = re.sub(r"\s+", " ", value).strip(" .")
     return value[:100] or "video"
+
+
+def extract_video_id(url: str) -> str | None:
+    """
+    Extract the YouTube video ID from any supported URL form:
+      https://www.youtube.com/watch?v=XXXXXXXXXXX
+      https://youtu.be/XXXXXXXXXXX
+      https://www.youtube.com/shorts/XXXXXXXXXXX
+    Returns the 11-character ID, or None if it cannot be parsed.
+    """
+    url = url.strip()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+
+    # youtu.be short links
+    if host in ("youtu.be", "www.youtu.be"):
+        vid = parsed.path.lstrip("/").split("/")[0].split("?")[0]
+        return vid if len(vid) == 11 else None
+
+    # /shorts/<id>
+    if "/shorts/" in parsed.path:
+        vid = parsed.path.split("/shorts/")[1].split("/")[0].split("?")[0]
+        return vid if len(vid) == 11 else None
+
+    # /watch?v=<id>
+    qs = parse_qs(parsed.query)
+    vids = qs.get("v", [])
+    if vids:
+        vid = vids[0]
+        return vid if len(vid) == 11 else None
+
+    return None
+
+
+def find_cached_source(download_folder: Path, video_id: str) -> Path | None:
+    """
+    Search *download_folder* for a previously downloaded file whose name
+    contains *[video_id]* and whose size is greater than zero.
+    Returns the Path if found, else None.
+    """
+    pattern = f"*\[{video_id}\]*"
+    for p in download_folder.glob(f"*{video_id}*"):
+        if p.is_file() and p.stat().st_size > 0 and p.suffix.lower() in (".mp4", ".mkv", ".webm"):
+            return p
+    return None
 
 
 def check_url(url: str):
@@ -270,7 +318,7 @@ def process_job(job_id: str, request: ClipRequest):
             job_id,
             status="downloading",
             progress=5,
-            message="Preparing download folders",
+            message="Preparing folders",
         )
 
         download_folder = DOWNLOAD_DIR / safe_name(
@@ -279,7 +327,6 @@ def process_job(job_id: str, request: ClipRequest):
         download_folder.mkdir(parents=True, exist_ok=True)
 
         if request.output_path and request.output_path.strip():
-            # Allow an absolute output path selected by the user.
             output_folder = Path(
                 os.path.expandvars(
                     os.path.expanduser(request.output_path.strip())
@@ -293,96 +340,112 @@ def process_job(job_id: str, request: ClipRequest):
         output_folder.mkdir(parents=True, exist_ok=True)
         job_output_dirs[job_id] = output_folder
 
-        source_basename = safe_name(
-            request.source_name or "source"
-        )
+        # --------------------------------------------------
+        # Derive a stable, video-unique filename
+        # --------------------------------------------------
+        video_id = extract_video_id(request.url)
 
-        update_job(
-            job_id,
-            progress=10,
-            message="Downloading source video",
-        )
+        # Check if we already have this exact video on disk
+        cached = find_cached_source(download_folder, video_id) if video_id else None
 
-        base_dl_opts = {
-            "format": (
-                "bestvideo[height<=1080]+bestaudio/"
-                "best[height<=1080]/best"
-            ),
-            "merge_output_format": "mp4",
-            "outtmpl": str(
-                download_folder / f"{source_basename}.%(ext)s"
-            ),
-            "noplaylist": True,
-            "restrictfilenames": True,
-        }
+        if cached:
+            source_path = cached
+            update_job(
+                job_id,
+                progress=18,
+                message=f"Reusing cached source: {cached.name}",
+            )
+        else:
+            # Build a filename: "<safe-title> [<video_id>]" or fall back to source_name
+            if video_id:
+                # We'll let yt-dlp fill in the real title; use a placeholder outtmpl
+                # that guarantees the video_id is always in the filename.
+                outtmpl_name = f"%(title).80s [{video_id}].%(ext)s"
+            else:
+                outtmpl_name = f"{safe_name(request.source_name or 'source')}.%(ext)s"
 
-        # Download the video using yt-dlp with mobile client fallback
-        download_success = False
-        last_dl_error = None
-        prepared_name = None
-        client_candidates = [
-            ["android", "ios"],
-            ["android"],
-            ["ios"],
-            ["tv", "mweb"],
-            None,
-        ]
+            update_job(
+                job_id,
+                progress=10,
+                message="Downloading source video",
+            )
 
-        for dl_clients in client_candidates:
-            try:
-                current_opts = get_yt_dlp_options(
-                    extra_opts=base_dl_opts,
-                    player_clients=dl_clients,
-                )
-                with yt_dlp.YoutubeDL(current_opts) as downloader:
-                    info = downloader.extract_info(
-                        request.url.strip(),
-                        download=True,
+            base_dl_opts = {
+                "format": (
+                    "bestvideo[height<=1080]+bestaudio/"
+                    "best[height<=1080]/best"
+                ),
+                "merge_output_format": "mp4",
+                "outtmpl": str(download_folder / outtmpl_name),
+                "noplaylist": True,
+                "restrictfilenames": True,
+                "windowsfilenames": True,
+            }
+
+            download_success = False
+            last_dl_error = None
+            prepared_name = None
+            client_candidates = [
+                ["android", "ios"],
+                ["android"],
+                ["ios"],
+                ["tv", "mweb"],
+                None,
+            ]
+
+            for dl_clients in client_candidates:
+                try:
+                    current_opts = get_yt_dlp_options(
+                        extra_opts=base_dl_opts,
+                        player_clients=dl_clients,
                     )
-                    prepared_name = downloader.prepare_filename(info)
-                    download_success = True
-                    break
-            except Exception as dl_err:
-                last_dl_error = dl_err
-                continue
+                    with yt_dlp.YoutubeDL(current_opts) as downloader:
+                        info = downloader.extract_info(
+                            request.url.strip(),
+                            download=True,
+                        )
+                        prepared_name = downloader.prepare_filename(info)
+                        download_success = True
+                        break
+                except Exception as dl_err:
+                    last_dl_error = dl_err
+                    continue
 
-        if not download_success or not prepared_name:
-            err_msg = clean_error_message(str(last_dl_error or "Unknown download failure"))
-            if "bot" in err_msg.lower() or "sign in" in err_msg.lower():
-                err_msg = (
-                    f"{err_msg} (YouTube bot check triggered. "
-                    "Place a 'cookies.txt' file in the ClipForge folder or set COOKIES_FILE to authenticate.)"
-                )
-            raise RuntimeError(f"Download failed: {err_msg}")
+            if not download_success or not prepared_name:
+                err_msg = clean_error_message(str(last_dl_error or "Unknown download failure"))
+                if "bot" in err_msg.lower() or "sign in" in err_msg.lower():
+                    err_msg = (
+                        f"{err_msg} (YouTube bot check triggered. "
+                        "Place a 'cookies.txt' file in the ClipForge folder or set COOKIES_FILE to authenticate.)"
+                    )
+                raise RuntimeError(f"Download failed: {err_msg}")
 
-        source_path = Path(prepared_name)
+            # yt-dlp may change the extension after merging streams.
+            guessed = Path(prepared_name)
+            possible_paths: list[Path] = [guessed, guessed.with_suffix(".mp4")]
 
-        # yt-dlp may change the extension after merging streams.
-        possible_paths = [
-            source_path,
-            source_path.with_suffix(".mp4"),
-        ]
+            if not any(p.exists() for p in possible_paths):
+                # Fall back: scan the folder for any file containing the video ID
+                if video_id:
+                    possible_paths += [
+                        p for p in download_folder.glob(f"*{video_id}*") if p.is_file()
+                    ]
+                possible_paths += [
+                    p for p in download_folder.glob("*") if p.is_file()
+                    and p.suffix.lower() in (".mp4", ".mkv", ".webm")
+                ]
 
-        if not any(path.exists() for path in possible_paths):
-            possible_paths.extend(
-                path for path in download_folder.glob(
-                    f"{source_basename}.*"
-                )
-                if path.is_file()
+            source_path = next(
+                (p for p in possible_paths if p.exists() and p.stat().st_size > 0),
+                None,
             )
 
-        source_path = next(
-            (path for path in possible_paths if path.exists()),
-            None,
-        )
+            if source_path is None:
+                raise RuntimeError(
+                    "Download finished, but the source video file could not be found."
+                )
 
-        if source_path is None:
-            raise RuntimeError(
-                "Download finished, but the source video file "
-                "could not be found."
-            )
-
-        downloaded_by_job = True
+            downloaded_by_job = True
 
         update_job(
             job_id,
@@ -406,13 +469,18 @@ def process_job(job_id: str, request: ClipRequest):
             )
 
         available_seconds = end - start
-        count = min(
-            request.max_clips,
-            max(
-                1,
-                math.ceil(available_seconds / request.clip_length),
-            ),
-        )
+
+        if request.is_preview:
+            # Preview mode: render only the very first clip
+            count = 1
+        else:
+            count = min(
+                request.max_clips,
+                max(
+                    1,
+                    math.ceil(available_seconds / request.clip_length),
+                ),
+            )
 
         font_path = find_windows_font()
         fontfile = escape_filter_path(font_path)
@@ -421,7 +489,7 @@ def process_job(job_id: str, request: ClipRequest):
             job_id,
             status="processing",
             progress=20,
-            message="Generating vertical clips",
+            message="Rendering preview clip" if request.is_preview else "Generating vertical clips",
             files=[],
         )
 
@@ -585,7 +653,15 @@ def process_job(job_id: str, request: ClipRequest):
                 "No clips were created. Check the selected time range."
             )
 
-        if not request.keep_source and downloaded_by_job and source_path:
+        # Always keep the source when running a preview so that subsequent
+        # preview tweaks and "Generate All" can reuse the cached file.
+        should_delete = (
+            not request.keep_source
+            and not request.is_preview
+            and downloaded_by_job
+            and source_path
+        )
+        if should_delete:
             try:
                 source_path.unlink(missing_ok=True)
             except OSError as error:
@@ -597,12 +673,18 @@ def process_job(job_id: str, request: ClipRequest):
                     ),
                 )
 
+        completion_msg = (
+            f"Preview clip ready! Adjust settings or click Generate All to create all clips."
+            if request.is_preview
+            else f"Successfully created {len(created_files)} clip(s)"
+        )
         update_job(
             job_id,
             status="completed",
             progress=100,
-            message=f"Successfully created {len(created_files)} clip(s)",
+            message=completion_msg,
             files=created_files,
+            is_preview=request.is_preview,
         )
 
     except Exception as error:
@@ -633,6 +715,21 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/cache-check")
+def cache_check(url: str):
+    """
+    Return whether a local cached download already exists for this YouTube URL.
+    Used by the frontend to show/hide the 'Source cached' pill.
+    """
+    check_url(url)
+    video_id = extract_video_id(url)
+    if not video_id:
+        return {"cached": False, "video_id": None}
+
+    cached = find_cached_source(DOWNLOAD_DIR / "downloads", video_id)
+    return {"cached": cached is not None, "video_id": video_id, "file": cached.name if cached else None}
 
 
 @app.get("/api/preview")
@@ -702,6 +799,7 @@ def preview_video(url: str):
         "thumbnail": thumbnail,
         "view_count": info.get("view_count"),
         "upload_date": info.get("upload_date"),
+        "video_id": info.get("id") or extract_video_id(url),
     }
 
 

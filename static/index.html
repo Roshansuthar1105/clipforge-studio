@@ -457,25 +457,53 @@
             transform: translateX(20px);
         }
 
-        /* Submit Button */
-        .btn-submit {
-            width: 100%;
-            background: linear-gradient(135deg, var(--primary), var(--accent-purple));
-            color: #fff;
-            border: none;
+        /* Action Buttons */
+        .action-row {
+            display: grid;
+            grid-template-columns: 1fr 1.6fr;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .btn-preview {
+            background: rgba(6, 182, 212, 0.1);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+            color: var(--accent-cyan);
             font-family: 'Outfit', sans-serif;
-            font-size: 17px;
+            font-size: 15px;
             font-weight: 700;
-            padding: 16px;
+            padding: 15px 10px;
             border-radius: var(--radius-md);
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
+            gap: 8px;
+            transition: var(--transition);
+        }
+
+        .btn-preview:hover:not(:disabled) {
+            background: rgba(6, 182, 212, 0.2);
+            border-color: var(--accent-cyan);
+            transform: translateY(-1px);
+        }
+
+        .btn-submit {
+            background: linear-gradient(135deg, var(--primary), var(--accent-purple));
+            color: #fff;
+            border: none;
+            font-family: 'Outfit', sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            padding: 15px 10px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
             box-shadow: 0 10px 25px var(--primary-glow);
             transition: var(--transition);
-            margin-top: 24px;
         }
 
         .btn-submit:hover:not(:disabled) {
@@ -483,11 +511,70 @@
             box-shadow: 0 14px 32px rgba(99, 102, 241, 0.5);
         }
 
-        .btn-submit:disabled {
-            opacity: 0.6;
+        .btn-submit:disabled,
+        .btn-preview:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
             transform: none;
         }
+
+        /* Cached-source indicator pill */
+        .cache-pill {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            color: #34d399;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 7px 12px;
+            border-radius: var(--radius-full);
+            margin-top: 10px;
+        }
+
+        .cache-pill.active { display: flex; }
+
+        /* Post-preview prompt banner */
+        .preview-done-banner {
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            background: rgba(99, 102, 241, 0.08);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: var(--radius-md);
+            padding: 13px 16px;
+            margin-top: 14px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .preview-done-banner.active { display: flex; }
+
+        .preview-done-text {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .preview-done-text strong { color: #fff; }
+
+        .btn-generate-all {
+            flex-shrink: 0;
+            background: linear-gradient(135deg, var(--primary), var(--accent-purple));
+            color: #fff;
+            border: none;
+            font-family: 'Outfit', sans-serif;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 9px 16px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: var(--transition);
+        }
+
+        .btn-generate-all:hover { opacity: 0.9; transform: translateY(-1px); }
 
         /* Progress Card */
         .progress-box {
@@ -964,9 +1051,28 @@
                             </label>
                         </div>
 
-                        <button id="submitBtn" type="submit" class="btn-submit">
-                            <span>⚡ Generate Vertical Clips</span>
-                        </button>
+                        <!-- Action Row -->
+                        <div class="action-row">
+                            <button id="previewBtn" type="button" class="btn-preview" onclick="submitJob(true)">
+                                🧪 Preview Clip 1
+                            </button>
+                            <button id="submitBtn" type="submit" class="btn-submit">
+                                ⚡ Generate All Clips
+                            </button>
+                        </div>
+
+                        <!-- Cached source indicator -->
+                        <div id="cachePill" class="cache-pill">
+                            ⚡ Source cached · skipping download
+                        </div>
+
+                        <!-- Post-preview prompt -->
+                        <div id="previewDoneBanner" class="preview-done-banner">
+                            <div class="preview-done-text">
+                                <strong>Preview looks good?</strong> Hit Generate All to render the full batch, or tweak settings and preview again.
+                            </div>
+                            <button class="btn-generate-all" onclick="submitJob(false)">⚡ Generate All</button>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -1039,6 +1145,9 @@
         let pollTimer = null;
         let previewAbortCtrl = null;
         let currentModalUrl = "";
+        // Track the last submitted URL for cache-pill display
+        let lastSubmittedUrl = "";
+        let lastJobWasPreview = false;
 
         // Style Selector
         function selectStyle(style) {
@@ -1072,6 +1181,7 @@
             const url = $("urlInput").value.trim();
             if (!url || !url.startsWith("http")) {
                 $("previewCard").classList.remove("active");
+                $("cachePill").classList.remove("active");
                 return;
             }
 
@@ -1082,6 +1192,8 @@
             $("previewTitle").textContent = "Fetching video details…";
             $("previewChannel").textContent = "Connecting to YouTube…";
             $("previewDuration").textContent = "--:--";
+            $("cachePill").classList.remove("active");
+            $("previewDoneBanner").classList.remove("active");
 
             try {
                 const res = await fetch(`/api/preview?url=${encodeURIComponent(url)}`, {
@@ -1105,6 +1217,11 @@
                 if (data.duration && !$("endTime").value) {
                     $("endTime").placeholder = `Max: ${Math.floor(data.duration)}s`;
                 }
+
+                // Check if this video is already cached
+                if (data.video_id) {
+                    checkCacheStatus(url);
+                }
             } catch (err) {
                 if (err.name !== "AbortError") {
                     $("previewTitle").textContent = "⚠️ Unable to preview URL";
@@ -1115,23 +1232,45 @@
             }
         }, 500));
 
-        // Form Submit & Job Creation
-        $("clipForm").addEventListener("submit", async event => {
-            event.preventDefault();
+        // Check if the video is already cached (for the cache-pill UI)
+        async function checkCacheStatus(url) {
+            try {
+                const res = await fetch(`/api/cache-check?url=${encodeURIComponent(url)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    $("cachePill").classList.toggle("active", !!data.cached);
+                }
+            } catch (_) { /* silent */ }
+        }
+
+        // Unified submit: isPreview=true → preview clip 1, false → full generate
+        async function submitJob(isPreview) {
             clearInterval(pollTimer);
+            $("previewDoneBanner").classList.remove("active");
 
-            const submitBtn = $("submitBtn");
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = `<span>⏳ Preparing video...</span>`;
+            const previewBtn = $("previewBtn");
+            const submitBtn  = $("submitBtn");
+            previewBtn.disabled = true;
+            submitBtn.disabled  = true;
 
-            $("progressMessage").textContent = "Submitting job…";
+            if (isPreview) {
+                previewBtn.innerHTML = `⏳ Rendering…`;
+            } else {
+                submitBtn.innerHTML = `<span>⏳ Processing…</span>`;
+            }
+
+            $("progressMessage").textContent = isPreview ? "Generating preview clip…" : "Submitting job…";
             $("progressBar").style.width = "5%";
             $("progressPercent").textContent = "5%";
             setStepPill("stepQueue");
 
             const endVal = $("endTime").value;
+            const url    = $("urlInput").value.trim();
+            lastSubmittedUrl  = url;
+            lastJobWasPreview = isPreview;
+
             const payload = {
-                url: $("urlInput").value.trim(),
+                url,
                 title: $("titleInput").value.trim(),
                 clip_length: Number($("clipLength").value),
                 max_clips: Number($("maxClips").value),
@@ -1142,7 +1281,8 @@
                 show_parts: $("showParts").checked,
                 keep_source: $("keepSource").checked,
                 download_folder: "downloads",
-                clips_folder: "my_clips"
+                clips_folder: "my_clips",
+                is_preview: isPreview,
             };
 
             try {
@@ -1154,18 +1294,26 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || "Failed to submit job");
 
-                showToast("Job initiated! Processing background clips...");
-                await pollJob(data.job_id);
+                showToast(isPreview ? "Rendering preview clip…" : "Job initiated! Processing background clips...");
+                await pollJob(data.job_id, isPreview);
             } catch (err) {
                 $("progressMessage").textContent = `Error: ${err.message}`;
                 showToast(`Error: ${err.message}`);
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = `<span>⚡ Generate Vertical Clips</span>`;
+                previewBtn.disabled = false;
+                submitBtn.disabled  = false;
+                previewBtn.innerHTML = `🧪 Preview Clip 1`;
+                submitBtn.innerHTML  = `<span>⚡ Generate All Clips</span>`;
             }
+        }
+
+        // Form submit → full generate
+        $("clipForm").addEventListener("submit", async event => {
+            event.preventDefault();
+            submitJob(false);
         });
 
         // Polling Worker
-        async function pollJob(jobId) {
+        async function pollJob(jobId, isPreview) {
             const check = async () => {
                 try {
                     const res = await fetch(`/api/jobs/${jobId}`);
@@ -1178,19 +1326,37 @@
                     $("progressMessage").textContent = job.message || job.status;
 
                     // Update Step Indicators
-                    if (job.status === "queued") setStepPill("stepQueue");
+                    if (job.status === "queued")      setStepPill("stepQueue");
                     else if (job.status === "downloading") setStepPill("stepDownload");
-                    else if (job.status === "processing") setStepPill("stepSlice");
-                    else if (job.status === "completed") setStepPill("stepDone");
+                    else if (job.status === "processing")  setStepPill("stepSlice");
+                    else if (job.status === "completed")   setStepPill("stepDone");
 
                     if (job.status === "completed" || job.status === "failed") {
                         clearInterval(pollTimer);
-                        $("submitBtn").disabled = false;
-                        $("submitBtn").innerHTML = `<span>⚡ Generate Vertical Clips</span>`;
+                        $("previewBtn").disabled = false;
+                        $("submitBtn").disabled  = false;
+                        $("previewBtn").innerHTML = `🧪 Preview Clip 1`;
+                        $("submitBtn").innerHTML  = `<span>⚡ Generate All Clips</span>`;
+
+                        // Refresh cache pill after any successful job
+                        if (job.status === "completed" && lastSubmittedUrl) {
+                            checkCacheStatus(lastSubmittedUrl);
+                        }
 
                         if (job.status === "completed") {
-                            showToast(`Success! Created ${job.files.length} vertical clip(s).`);
+                            showToast(
+                                isPreview
+                                    ? "✅ Preview clip ready! Check it out below."
+                                    : `✅ Created ${job.files.length} vertical clip(s)!`
+                            );
                             renderClipsShowcase(jobId, job.files);
+
+                            if (isPreview && job.files.length > 0) {
+                                // Auto-open the smartphone modal for the preview clip
+                                setTimeout(() => openPhoneModal(job.files[0].url, job.files[0].name), 400);
+                                // Show the "Generate All" prompt banner
+                                $("previewDoneBanner").classList.add("active");
+                            }
                         } else {
                             showToast(`Job failed: ${job.message}`);
                         }
@@ -1198,8 +1364,10 @@
                 } catch (err) {
                     clearInterval(pollTimer);
                     $("progressMessage").textContent = `Error: ${err.message}`;
-                    $("submitBtn").disabled = false;
-                    $("submitBtn").innerHTML = `<span>⚡ Generate Vertical Clips</span>`;
+                    $("previewBtn").disabled = false;
+                    $("submitBtn").disabled  = false;
+                    $("previewBtn").innerHTML = `🧪 Preview Clip 1`;
+                    $("submitBtn").innerHTML  = `<span>⚡ Generate All Clips</span>`;
                 }
             };
 
