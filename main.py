@@ -71,6 +71,9 @@ class ClipRequest(BaseModel):
     show_parts: bool = True
     keep_source: bool = True
 
+    # "blur" for cinematic blurred 9:16 background, "black" for classic bars.
+    background_style: str = "blur"
+
 
 # --------------------------------------------------
 # UTILITIES
@@ -369,41 +372,80 @@ def process_job(job_id: str, request: ClipRequest):
             )
             output_path = output_folder / filename
 
-            # Fit the video into a centered 9:16 frame.
-            # The top and bottom areas are available for labels.
-            filters = (
-                "scale=1080:1440:"
-                "force_original_aspect_ratio=decrease,"
-                "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
-                "pad=1080:1920:0:240:black"
-            )
+            # Fit the video into a 9:16 frame.
+            if request.background_style == "blur":
+                # Dual-stream: scale & heavily blur background (1080x1920) and overlay sharp centered foreground
+                filter_script = (
+                    "[0:v:0]split=2[bg][fg];"
+                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                    "crop=1080:1920,boxblur=25:5[blurred];"
+                    "[fg]scale=1080:1440:force_original_aspect_ratio=decrease[fg_scaled];"
+                    "[blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2[base]"
+                )
+                last_pad = "base"
+                if title:
+                    safe_title = escape_drawtext(title)
+                    filter_script += (
+                        f";[{last_pad}]drawtext=text='{safe_title}':"
+                        f"fontfile='{fontfile}':"
+                        "fontcolor=white:"
+                        "fontsize=48:"
+                        "x=(w-text_w)/2:"
+                        "y=55:"
+                        "box=1:"
+                        "boxcolor=black@0.45:"
+                        "boxborderw=14[t1]"
+                    )
+                    last_pad = "t1"
 
-            if title:
-                safe_title = escape_drawtext(title)
+                if part:
+                    safe_part = escape_drawtext(part)
+                    filter_script += (
+                        f";[{last_pad}]drawtext=text='{safe_part}':"
+                        f"fontfile='{fontfile}':"
+                        "fontcolor=white:"
+                        "fontsize=34:"
+                        "x=(w-text_w)/2:"
+                        "y=175[t2]"
+                    )
+                    last_pad = "t2"
 
-                filters += (
-                    f",drawtext=text='{safe_title}':"
-                    f"fontfile='{fontfile}':"
-                    "fontcolor=white:"
-                    "fontsize=48:"
-                    "x=(w-text_w)/2:"
-                    "y=55:"
-                    "box=1:"
-                    "boxcolor=black@0.35:"
-                    "boxborderw=14"
+                filter_args = ["-filter_complex", filter_script, "-map", f"[{last_pad}]"]
+            else:
+                # Classic centered letterbox with black padding
+                filters = (
+                    "scale=1080:1440:"
+                    "force_original_aspect_ratio=decrease,"
+                    "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
+                    "pad=1080:1920:0:240:black"
                 )
 
-            if part:
-                safe_part = escape_drawtext(part)
+                if title:
+                    safe_title = escape_drawtext(title)
+                    filters += (
+                        f",drawtext=text='{safe_title}':"
+                        f"fontfile='{fontfile}':"
+                        "fontcolor=white:"
+                        "fontsize=48:"
+                        "x=(w-text_w)/2:"
+                        "y=55:"
+                        "box=1:"
+                        "boxcolor=black@0.35:"
+                        "boxborderw=14"
+                    )
 
-                filters += (
-                    f",drawtext=text='{safe_part}':"
-                    f"fontfile='{fontfile}':"
-                    "fontcolor=white:"
-                    "fontsize=34:"
-                    "x=(w-text_w)/2:"
-                    "y=175"
-                )
+                if part:
+                    safe_part = escape_drawtext(part)
+                    filters += (
+                        f",drawtext=text='{safe_part}':"
+                        f"fontfile='{fontfile}':"
+                        "fontcolor=white:"
+                        "fontsize=34:"
+                        "x=(w-text_w)/2:"
+                        "y=175"
+                    )
+
+                filter_args = ["-vf", filters, "-map", "0:v:0"]
 
             update_job(
                 job_id,
@@ -421,9 +463,8 @@ def process_job(job_id: str, request: ClipRequest):
                 "-ss", str(clip_start),
                 "-i", str(source_path),
                 "-t", str(clip_duration),
-                "-map", "0:v:0",
+                *filter_args,
                 "-map", "0:a?",
-                "-vf", filters,
                 "-c:v", "libx264",
                 "-preset", "veryfast",
                 "-crf", "23",
@@ -509,6 +550,52 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/preview")
+def preview_video(url: str):
+    check_url(url)
+    ydl_opts = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url.strip(), download=False)
+            if not info:
+                raise ValueError("Could not extract video information.")
+
+            duration = float(info.get("duration") or 0)
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            hours = mins // 60
+            mins = mins % 60
+            if hours > 0:
+                duration_str = f"{hours}:{mins:02d}:{secs:02d}"
+            else:
+                duration_str = f"{mins:02d}:{secs:02d}"
+
+            thumbnail = info.get("thumbnail")
+            thumbnails = info.get("thumbnails")
+            if thumbnails and isinstance(thumbnails, list):
+                # Pick best resolution thumbnail if available
+                thumbnail = thumbnails[-1].get("url", thumbnail)
+
+            return {
+                "title": info.get("title") or "YouTube Video",
+                "channel": info.get("uploader") or info.get("channel") or "YouTube Creator",
+                "duration": duration,
+                "duration_formatted": duration_str,
+                "thumbnail": thumbnail,
+                "view_count": info.get("view_count"),
+                "upload_date": info.get("upload_date"),
+            }
+    except Exception as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to load preview for this video: {str(error)[:300]}",
+        )
 
 
 @app.post("/api/jobs")
