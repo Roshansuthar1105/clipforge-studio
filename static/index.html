@@ -1107,8 +1107,10 @@
                 }
             } catch (err) {
                 if (err.name !== "AbortError") {
-                    $("previewTitle").textContent = "Unable to preview URL";
+                    $("previewTitle").textContent = "⚠️ Unable to preview URL";
                     $("previewChannel").textContent = err.message;
+                    $("previewDuration").textContent = "--:--";
+                    $("previewViews").textContent = "Verify YouTube URL or cookies";
                 }
             }
         }, 500));

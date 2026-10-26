@@ -3,6 +3,7 @@ import os
 import re
 import uuid
 import math
+import shutil
 import threading
 import subprocess
 from pathlib import Path
@@ -78,6 +79,59 @@ class ClipRequest(BaseModel):
 # --------------------------------------------------
 # UTILITIES
 # --------------------------------------------------
+
+def clean_error_message(err_msg: str) -> str:
+    """Strip ANSI color codes and clean up error messages."""
+    clean = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", err_msg)
+    clean = re.sub(r"\[[0-9;]*m", "", clean)
+    clean = clean.replace("ERROR: ", "").strip()
+    return clean
+
+
+def get_yt_dlp_options(
+    extra_opts: dict | None = None,
+    player_clients: list[str] | None = None,
+) -> dict:
+    """
+    Build yt-dlp options configured to bypass YouTube bot detection checks
+    using mobile player API clients (android/ios) and optional cookies.txt.
+    """
+    clients = player_clients or ["android", "ios", "mweb"]
+    opts: dict = {
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": clients
+            }
+        },
+    }
+
+    # Enable Node.js as JavaScript runtime if installed
+    node_path = shutil.which("node")
+    if node_path:
+        opts["js_runtimes"] = {"node": {}}
+
+    # Automatically detect cookies.txt file
+    cookie_candidates = [
+        os.getenv("YTDLP_COOKIES"),
+        os.getenv("COOKIES_FILE"),
+        APP_DIR / "cookies.txt",
+        BASE_DIR / "cookies.txt",
+        Path("cookies.txt"),
+    ]
+    for candidate in cookie_candidates:
+        if candidate:
+            cand_path = Path(candidate).resolve()
+            if cand_path.exists() and cand_path.is_file():
+                opts["cookiefile"] = str(cand_path)
+                break
+
+    if extra_opts:
+        opts.update(extra_opts)
+
+    return opts
+
 
 def safe_name(value: str) -> str:
     """Remove characters that are unsafe in Windows filenames."""
@@ -243,7 +297,13 @@ def process_job(job_id: str, request: ClipRequest):
             request.source_name or "source"
         )
 
-        options = {
+        update_job(
+            job_id,
+            progress=10,
+            message="Downloading source video",
+        )
+
+        base_dl_opts = {
             "format": (
                 "bestvideo[height<=1080]+bestaudio/"
                 "best[height<=1080]/best"
@@ -254,23 +314,46 @@ def process_job(job_id: str, request: ClipRequest):
             ),
             "noplaylist": True,
             "restrictfilenames": True,
-            "quiet": True,
-            "no_warnings": True,
         }
 
-        update_job(
-            job_id,
-            progress=10,
-            message="Downloading source video",
-        )
+        # Download the video using yt-dlp with mobile client fallback
+        download_success = False
+        last_dl_error = None
+        prepared_name = None
+        client_candidates = [
+            ["android", "ios"],
+            ["android"],
+            ["ios"],
+            ["tv", "mweb"],
+            None,
+        ]
 
-        # Download the video using yt-dlp.
-        with yt_dlp.YoutubeDL(options) as downloader:
-            info = downloader.extract_info(
-                request.url.strip(),
-                download=True,
-            )
-            prepared_name = downloader.prepare_filename(info)
+        for dl_clients in client_candidates:
+            try:
+                current_opts = get_yt_dlp_options(
+                    extra_opts=base_dl_opts,
+                    player_clients=dl_clients,
+                )
+                with yt_dlp.YoutubeDL(current_opts) as downloader:
+                    info = downloader.extract_info(
+                        request.url.strip(),
+                        download=True,
+                    )
+                    prepared_name = downloader.prepare_filename(info)
+                    download_success = True
+                    break
+            except Exception as dl_err:
+                last_dl_error = dl_err
+                continue
+
+        if not download_success or not prepared_name:
+            err_msg = clean_error_message(str(last_dl_error or "Unknown download failure"))
+            if "bot" in err_msg.lower() or "sign in" in err_msg.lower():
+                err_msg = (
+                    f"{err_msg} (YouTube bot check triggered. "
+                    "Place a 'cookies.txt' file in the ClipForge folder or set COOKIES_FILE to authenticate.)"
+                )
+            raise RuntimeError(f"Download failed: {err_msg}")
 
         source_path = Path(prepared_name)
 
@@ -555,47 +638,71 @@ def health():
 @app.get("/api/preview")
 def preview_video(url: str):
     check_url(url)
-    ydl_opts = {
-        "skip_download": True,
-        "quiet": True,
-        "no_warnings": True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url.strip(), download=False)
-            if not info:
-                raise ValueError("Could not extract video information.")
 
-            duration = float(info.get("duration") or 0)
-            mins = int(duration // 60)
-            secs = int(duration % 60)
-            hours = mins // 60
-            mins = mins % 60
-            if hours > 0:
-                duration_str = f"{hours}:{mins:02d}:{secs:02d}"
-            else:
-                duration_str = f"{mins:02d}:{secs:02d}"
+    # Try client chains in order of reliability to avoid bot check challenges
+    client_chains = [
+        ["android", "ios"],
+        ["android"],
+        ["ios"],
+        ["tv", "mweb"],
+        None,
+    ]
 
-            thumbnail = info.get("thumbnail")
-            thumbnails = info.get("thumbnails")
-            if thumbnails and isinstance(thumbnails, list):
-                # Pick best resolution thumbnail if available
-                thumbnail = thumbnails[-1].get("url", thumbnail)
+    last_error = None
+    info = None
 
-            return {
-                "title": info.get("title") or "YouTube Video",
-                "channel": info.get("uploader") or info.get("channel") or "YouTube Creator",
-                "duration": duration,
-                "duration_formatted": duration_str,
-                "thumbnail": thumbnail,
-                "view_count": info.get("view_count"),
-                "upload_date": info.get("upload_date"),
-            }
-    except Exception as error:
+    for clients in client_chains:
+        try:
+            ydl_opts = get_yt_dlp_options(
+                extra_opts={"skip_download": True},
+                player_clients=clients,
+            )
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url.strip(), download=False)
+                if info and info.get("title"):
+                    break
+        except Exception as error:
+            last_error = error
+            continue
+
+    if not info:
+        cleaned_msg = clean_error_message(str(last_error or "Could not extract video metadata"))
+        if "bot" in cleaned_msg.lower() or "sign in" in cleaned_msg.lower():
+            cleaned_msg = (
+                "YouTube bot check detected. "
+                "Place an exported 'cookies.txt' file in your ClipForge folder, "
+                "or try again in a few moments."
+            )
         raise HTTPException(
             status_code=400,
-            detail=f"Unable to load preview for this video: {str(error)[:300]}",
+            detail=f"Unable to load preview for this video: {cleaned_msg[:300]}",
         )
+
+    duration = float(info.get("duration") or 0)
+    mins = int(duration // 60)
+    secs = int(duration % 60)
+    hours = mins // 60
+    mins = mins % 60
+    if hours > 0:
+        duration_str = f"{hours}:{mins:02d}:{secs:02d}"
+    else:
+        duration_str = f"{mins:02d}:{secs:02d}"
+
+    thumbnail = info.get("thumbnail")
+    thumbnails = info.get("thumbnails")
+    if thumbnails and isinstance(thumbnails, list):
+        # Pick best resolution thumbnail if available
+        thumbnail = thumbnails[-1].get("url", thumbnail)
+
+    return {
+        "title": info.get("title") or "YouTube Video",
+        "channel": info.get("uploader") or info.get("channel") or "YouTube Creator",
+        "duration": duration,
+        "duration_formatted": duration_str,
+        "thumbnail": thumbnail,
+        "view_count": info.get("view_count"),
+        "upload_date": info.get("upload_date"),
+    }
 
 
 @app.post("/api/jobs")

@@ -204,3 +204,4 @@ By default, files are saved in the `data/` directory:
 | **PowerShell script execution disabled** | Run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` to allow virtual environment activation scripts. |
 | **Fonts not found on Linux** | Ensure `fonts-dejavu-core` is installed: `sudo apt install fonts-dejavu-core`. |
 | **yt-dlp download failure** | Update `yt-dlp` to the latest release: `python -m pip install --upgrade yt-dlp`. |
+| **YouTube "Sign in to confirm you’re not a bot"** | ClipForge Studio automatically uses mobile API clients (`android`, `ios`, `mweb`) to bypass bot detection. For age-restricted or private videos, export your YouTube cookies into a `cookies.txt` file (e.g. using the "Get cookies.txt LOCALLY" browser extension) and place it in the project root directory. |
