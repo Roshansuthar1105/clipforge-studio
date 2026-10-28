@@ -62,7 +62,13 @@ def write_json(path: Path, data: dict) -> None:
 # Accounts helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_accounts() -> list[dict]:
+def load_accounts(user_id: str | None = None) -> list[dict]:
+    try:
+        import db
+        if db.is_db_connected():
+            return db.db_load_accounts(user_id)
+    except Exception:
+        pass
     return read_json(ACCOUNTS_FILE, {"accounts": []}).get("accounts", [])
 
 
@@ -70,12 +76,24 @@ def save_accounts(accounts: list[dict]) -> None:
     write_json(ACCOUNTS_FILE, {"accounts": accounts})
 
 
-def find_account(account_id: str) -> dict | None:
+def find_account(account_id: str, user_id: str | None = None) -> dict | None:
+    try:
+        import db
+        if db.is_db_connected():
+            return db.db_find_account(account_id, user_id)
+    except Exception:
+        pass
     return next((a for a in load_accounts() if a["id"] == account_id), None)
 
 
-def upsert_account(account: dict) -> None:
-    accounts = load_accounts()
+def upsert_account(account: dict, user_id: str | None = None) -> None:
+    try:
+        import db
+        if db.is_db_connected():
+            db.db_upsert_account(account, user_id)
+    except Exception:
+        pass
+    accounts = read_json(ACCOUNTS_FILE, {"accounts": []}).get("accounts", [])
     for i, a in enumerate(accounts):
         if a["id"] == account["id"]:
             accounts[i] = account
@@ -85,8 +103,14 @@ def upsert_account(account: dict) -> None:
     save_accounts(accounts)
 
 
-def delete_account(account_id: str) -> bool:
-    accounts = load_accounts()
+def delete_account(account_id: str, user_id: str | None = None) -> bool:
+    try:
+        import db
+        if db.is_db_connected():
+            db.db_delete_account(account_id, user_id)
+    except Exception:
+        pass
+    accounts = read_json(ACCOUNTS_FILE, {"accounts": []}).get("accounts", [])
     new_list = [a for a in accounts if a["id"] != account_id]
     if len(new_list) == len(accounts):
         return False

@@ -71,9 +71,14 @@ def upload_to_youtube(
                 progress_percent = int(status.progress() * 100)
                 progress_callback(min(progress_percent, 99))
         except HttpError as err:
-            raise RuntimeError(f"YouTube upload HTTP error: {err.reason} ({err.resp.status})") from err
-        except Exception as err:
-            raise RuntimeError(f"YouTube upload error: {str(err)}") from err
+            reason = getattr(err, "reason", str(err))
+            status_code = getattr(err.resp, "status", "403") if hasattr(err, "resp") else "403"
+            if "quota" in reason.lower() or "upload" in reason.lower():
+                raise RuntimeError(
+                    "YouTube daily upload quota exceeded (free tier limit is ~6 video uploads/day per Google Cloud project). "
+                    "Resets at 12:00 AM PST (approx. 12:30 PM / 1:30 PM IST). You can still publish to Facebook and Instagram!"
+                ) from err
+            raise RuntimeError(f"YouTube upload HTTP error: {reason} ({status_code})") from err
 
     video_id = response.get("id")
     if not video_id:

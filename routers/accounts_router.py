@@ -15,6 +15,7 @@ from accounts.manager import (
     connect_instagram_from_code,
     add_manual_account,
     check_account_health,
+    sync_accounts_from_env,
 )
 from accounts.youtube_oauth import get_youtube_auth_url
 from accounts.instagram_oauth import get_instagram_auth_url
@@ -94,23 +95,44 @@ class ManualAccountPayload(BaseModel):
     avatar_url: Optional[str] = None
 
 
+from fastapi import Header
+from routers.auth_router import get_current_user_optional
+
+
 @router.get("")
-def list_accounts():
+def list_accounts(authorization: Optional[str] = Header(None)):
     """List all connected accounts with safe tokens."""
-    return {"accounts": list_accounts_safe()}
+    user = get_current_user_optional(authorization)
+    user_id = user["id"] if user else None
+    return {"accounts": list_accounts_safe(user_id)}
+
+
+@router.post("/sync-env")
+def sync_accounts_from_env_endpoint(authorization: Optional[str] = Header(None)):
+    """Sync Facebook Page and Instagram accounts defined in .env into connected accounts."""
+    user = get_current_user_optional(authorization)
+    user_id = user["id"] if user else None
+    synced = sync_accounts_from_env(user_id=user_id)
+    return {
+        "success": True,
+        "message": f"Successfully synced {len(synced)} account(s) from .env",
+        "accounts": list_accounts_safe(user_id),
+    }
 
 
 @router.delete("/{account_id}")
-def delete_single_account(account_id: str):
+def delete_single_account(account_id: str, authorization: Optional[str] = Header(None)):
     """Disconnect and remove an account."""
-    success = remove_account(account_id)
+    user = get_current_user_optional(authorization)
+    user_id = user["id"] if user else None
+    success = remove_account(account_id, user_id=user_id)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"success": True, "message": "Account disconnected"}
 
 
 @router.get("/{account_id}/status")
-def test_account(account_id: str):
+def test_account(account_id: str, authorization: Optional[str] = Header(None)):
     """Test token validity and connection health for an account."""
     return check_account_health(account_id)
 
@@ -120,10 +142,12 @@ def test_account(account_id: str):
 # ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/youtube/connect")
-def connect_youtube():
-    """Return YouTube Google OAuth authorization URL."""
+def connect_youtube(authorization: Optional[str] = Header(None)):
+    """Return YouTube Google OAuth authorization URL with user-scoped state."""
     try:
-        url = get_youtube_auth_url()
+        user = get_current_user_optional(authorization)
+        state = user["id"] if user else "global"
+        url = get_youtube_auth_url(state=state)
         return {"auth_url": url}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -132,6 +156,7 @@ def connect_youtube():
 @router.get("/youtube/callback", response_class=HTMLResponse)
 def youtube_oauth_callback(
     code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
     error: Optional[str] = Query(None),
 ):
     """Handle Google OAuth callback redirect."""
@@ -147,7 +172,7 @@ def youtube_oauth_callback(
         )
 
     try:
-        acc = connect_youtube_from_code(code)
+        acc = connect_youtube_from_code(code, user_id=state)
         return HTMLResponse(_popup_callback_html("youtube", True, f"Connected channel: {acc.get('alias')}"))
     except Exception as exc:
         return HTMLResponse(_popup_callback_html("youtube", False, str(exc)), status_code=500)
@@ -158,10 +183,12 @@ def youtube_oauth_callback(
 # ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/instagram/connect")
-def connect_instagram():
-    """Return Instagram Meta OAuth authorization URL."""
+def connect_instagram(authorization: Optional[str] = Header(None)):
+    """Return Instagram Meta OAuth authorization URL with user-scoped state."""
     try:
-        url = get_instagram_auth_url()
+        user = get_current_user_optional(authorization)
+        state = user["id"] if user else "global"
+        url = get_instagram_auth_url(state=state)
         return {"auth_url": url}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -170,6 +197,7 @@ def connect_instagram():
 @router.get("/instagram/callback", response_class=HTMLResponse)
 def instagram_oauth_callback(
     code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
     error: Optional[str] = Query(None),
     error_description: Optional[str] = Query(None),
 ):
@@ -187,7 +215,7 @@ def instagram_oauth_callback(
         )
 
     try:
-        accounts = connect_instagram_from_code(code)
+        accounts = connect_instagram_from_code(code, user_id=state)
         count = len(accounts)
         names = ", ".join([a.get("alias", "") for a in accounts])
         return HTMLResponse(
@@ -202,12 +230,14 @@ def instagram_oauth_callback(
 # ──────────────────────────────────────────────────────────────────────────────
 
 @router.post("/manual")
-def add_manual_account_endpoint(payload: ManualAccountPayload):
+def add_manual_account_endpoint(payload: ManualAccountPayload, authorization: Optional[str] = Header(None)):
     """Directly connect an account using a user-supplied token or developer key."""
-    if payload.platform.lower() not in ("youtube", "instagram"):
-        raise HTTPException(status_code=400, detail="Platform must be 'youtube' or 'instagram'")
+    if payload.platform.lower() not in ("youtube", "instagram", "facebook"):
+        raise HTTPException(status_code=400, detail="Platform must be 'youtube', 'instagram', or 'facebook'")
 
     try:
+        user = get_current_user_optional(authorization)
+        user_id = user["id"] if user else "global"
         acc = add_manual_account(
             platform=payload.platform,
             alias=payload.alias,
@@ -215,7 +245,11 @@ def add_manual_account_endpoint(payload: ManualAccountPayload):
             channel_id=payload.channel_id,
             refresh_token=payload.refresh_token,
             avatar_url=payload.avatar_url,
+            user_id=user_id,
         )
+        return {"success": True, "account": acc}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
         return {"success": True, "account": acc}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

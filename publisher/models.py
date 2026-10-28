@@ -21,11 +21,18 @@ class InstagramPublishConfig(BaseModel):
     share_to_feed: bool = True
 
 
+class FacebookPublishConfig(BaseModel):
+    title: str = ""
+    description: str = ""
+    as_reel: bool = True             # True = Facebook Reel, False = Facebook Feed Video
+
+
 class PublishTarget(BaseModel):
     account_id: str
-    platform: str                    # "youtube" | "instagram"
+    platform: str                    # "youtube" | "instagram" | "facebook"
     youtube_config: Optional[YouTubePublishConfig] = None
     instagram_config: Optional[InstagramPublishConfig] = None
+    facebook_config: Optional[FacebookPublishConfig] = None
 
 
 class PublishRequest(BaseModel):

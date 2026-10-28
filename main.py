@@ -1,19 +1,33 @@
 
 import os
 import re
+import time
 import uuid
 import math
 import shutil
+import logging
 import threading
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlunparse
 
 import yt_dlp
+from typing import Optional
+import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+# --------------------------------------------------
+# LOGGING
+# --------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 
 # --------------------------------------------------
@@ -32,13 +46,28 @@ STATIC_DIR = APP_DIR / "static"
 for folder in (DOWNLOAD_DIR, CLIPS_DIR, STATIC_DIR):
     folder.mkdir(parents=True, exist_ok=True)
 
+from fastapi import Header
+import db
+from routers.auth_router import router as auth_router, get_current_user_optional
 from routers.accounts_router import router as accounts_router
 from routers.publish_router import router as publish_router
+from routers.meta_publish_router import router as meta_publish_router
 
 app = FastAPI(title="ClipForge Studio")
 
+logger = logging.getLogger("clipforge")
+
+@app.on_event("startup")
+def on_startup():
+    if db.is_db_connected():
+        cleaned = db.db_cleanup_stale_jobs()
+        if cleaned > 0:
+            logger.info("Cleaned up %d stale job(s) from previous server run", cleaned)
+
+app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(publish_router)
+app.include_router(meta_publish_router)
 
 app.mount(
     "/static",
@@ -49,6 +78,8 @@ app.mount(
 jobs = {}
 jobs_lock = threading.Lock()
 job_output_dirs = {}
+job_cancel_events: dict[str, threading.Event] = {}
+
 
 
 # --------------------------------------------------
@@ -60,12 +91,14 @@ class ClipRequest(BaseModel):
     title: str = "My Video"
     source_file: str | None = None
 
-
     clip_length: int = Field(default=30, ge=1, le=600)
     max_clips: int = Field(default=5, ge=1, le=100)
+    count: int | None = None
 
     start_seconds: int = Field(default=0, ge=0)
+    start_time: float | None = None
     end_seconds: int | None = Field(default=None, ge=1)
+    end_time: float | None = None
 
     download_folder: str = "downloads"
     clips_folder: str = "my_clips"
@@ -76,6 +109,7 @@ class ClipRequest(BaseModel):
     # Optional absolute output folder.
     output_path: str | None = None
 
+    aspect_ratio: str = "9:16"
     show_title: bool = True
     show_parts: bool = True
     keep_source: bool = True
@@ -85,6 +119,17 @@ class ClipRequest(BaseModel):
 
     # When True, generate only the first clip (fast preview / test render).
     is_preview: bool = False
+
+    def model_post_init(self, __context):
+        if self.count is not None:
+            self.max_clips = self.count
+        else:
+            self.count = self.max_clips
+
+        if self.start_time is not None:
+            self.start_seconds = int(self.start_time)
+        if self.end_time is not None:
+            self.end_seconds = int(self.end_time)
 
 
 # --------------------------------------------------
@@ -233,16 +278,15 @@ def check_url(url: str):
         )
 
 
-def run_command(command: list[str]) -> str:
-    """Run a command and return useful error output."""
+def run_command(command: list[str], cancel_event: Optional[threading.Event] = None) -> str:
+    """Run a command and return useful error output, supporting responsive cancellation."""
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             command,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             errors="replace",
-            timeout=3600,
-            check=False,
         )
     except FileNotFoundError as error:
         raise RuntimeError(
@@ -250,16 +294,27 @@ def run_command(command: list[str]) -> str:
             "Install FFmpeg and make sure ffmpeg.exe and "
             "ffprobe.exe are available in PATH."
         ) from error
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError(
-            f"Command timed out: {command[0]}"
-        ) from error
 
-    if result.returncode != 0:
-        message = (result.stderr or result.stdout or "Command failed").strip()
+    # Responsive polling loop checking for user cancellation
+    while proc.poll() is None:
+        if cancel_event and cancel_event.is_set():
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            raise RuntimeError("Process cancelled by user")
+        time.sleep(0.1)
+
+    stdout, stderr = proc.communicate()
+    if proc.returncode != 0:
+        message = (stderr or stdout or "Command failed").strip()
         raise RuntimeError(message[-4000:])
 
-    return result.stdout.strip()
+    return (stdout or "").strip()
 
 
 def probe_duration(video_path: Path) -> float:
@@ -324,14 +379,23 @@ def escape_drawtext(value: str) -> str:
 def update_job(job_id: str, **values):
     with jobs_lock:
         if job_id in jobs:
+            # Prevent overwriting a cancelled job with completed/failed
+            if jobs[job_id].get("status") == "cancelled" and values.get("status") not in (None, "cancelled"):
+                return
             jobs[job_id].update(values)
+            jobs[job_id]["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            if db.is_db_connected():
+                try:
+                    db.db_save_job(jobs[job_id])
+                except Exception:
+                    pass
 
 
 # --------------------------------------------------
 # VIDEO PROCESSING
 # --------------------------------------------------
 
-def process_job(job_id: str, request: ClipRequest):
+def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[threading.Event] = None):
     source_path = None
     downloaded_by_job = False
 
@@ -402,6 +466,22 @@ def process_job(job_id: str, request: ClipRequest):
                     message="Downloading source video",
                 )
 
+            def dl_progress_hook(d):
+                if cancel_event and cancel_event.is_set():
+                    raise RuntimeError("Download cancelled by user")
+                if d.get("status") == "downloading":
+                    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                    downloaded = d.get("downloaded_bytes") or 0
+                    if total > 0:
+                        pct = min(18, int(10 + (downloaded / total) * 8))
+                        mb_down = downloaded / (1024 * 1024)
+                        mb_tot = total / (1024 * 1024)
+                        update_job(
+                            job_id,
+                            progress=pct,
+                            message=f"Downloading source: {mb_down:.1f}/{mb_tot:.1f} MB",
+                        )
+
             base_dl_opts = {
                 "format": (
                     "bestvideo[height<=1080]+bestaudio/"
@@ -412,6 +492,7 @@ def process_job(job_id: str, request: ClipRequest):
                 "noplaylist": True,
                 "restrictfilenames": True,
                 "windowsfilenames": True,
+                "progress_hooks": [dl_progress_hook],
             }
 
             download_success = False
@@ -525,9 +606,17 @@ def process_job(job_id: str, request: ClipRequest):
             files=[],
         )
 
+        if cancel_event and cancel_event.is_set():
+            update_job(job_id, status="cancelled", progress=0, message="Job cancelled by user")
+            return
+
         created_files = []
 
         for index in range(count):
+            if cancel_event and cancel_event.is_set():
+                update_job(job_id, status="cancelled", message="Job cancelled by user", files=created_files)
+                return
+
             clip_start = start + index * request.clip_length
 
             if clip_start >= end:
@@ -563,7 +652,7 @@ def process_job(job_id: str, request: ClipRequest):
                     "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
                     "crop=1080:1920,boxblur=25:5[blurred];"
                     "[fg]scale=1080:1440:force_original_aspect_ratio=decrease[fg_scaled];"
-                    "[blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2[base]"
+                    "[blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[base]"
                 )
                 last_pad = "base"
                 if title:
@@ -600,7 +689,8 @@ def process_job(job_id: str, request: ClipRequest):
                     "scale=1080:1440:"
                     "force_original_aspect_ratio=decrease,"
                     "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
-                    "pad=1080:1920:0:240:black"
+                    "pad=1080:1920:0:240:black,"
+                    "setsar=1"
                 )
 
                 if title:
@@ -649,16 +739,19 @@ def process_job(job_id: str, request: ClipRequest):
                 *filter_args,
                 "-map", "0:a?",
                 "-c:v", "libx264",
+                "-profile:v", "main",
+                "-level", "4.0",
                 "-preset", "veryfast",
                 "-crf", "23",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
+                "-ar", "48000",
                 "-b:a", "128k",
                 "-movflags", "+faststart",
                 str(output_path),
             ]
 
-            run_command(command)
+            run_command(command, cancel_event=cancel_event)
 
             if not output_path.exists() or output_path.stat().st_size == 0:
                 raise RuntimeError(
@@ -720,11 +813,19 @@ def process_job(job_id: str, request: ClipRequest):
         )
 
     except Exception as error:
-        update_job(
-            job_id,
-            status="failed",
-            message=str(error)[:4000],
-        )
+        err_str = str(error).lower()
+        if (cancel_event and cancel_event.is_set()) or "cancelled" in err_str:
+            update_job(
+                job_id,
+                status="cancelled",
+                message="Job was cancelled by user",
+            )
+        else:
+            update_job(
+                job_id,
+                status="failed",
+                message=str(error)[:4000],
+            )
 
 
 # --------------------------------------------------
@@ -836,7 +937,10 @@ def preview_video(url: str):
 
 
 @app.post("/api/jobs")
-def create_job(request: ClipRequest):
+def create_job(request: ClipRequest, authorization: Optional[str] = Header(None)):
+    user = get_current_user_optional(authorization)
+    user_id = user["id"] if user else "guest"
+
     if request.source_file:
         source_path = find_file_in_dir(DOWNLOAD_DIR, request.source_file)
         if not source_path:
@@ -848,24 +952,69 @@ def create_job(request: ClipRequest):
         check_url(request.url)
 
     job_id = uuid.uuid4().hex
+    cancel_event = threading.Event()
+    job_cancel_events[job_id] = cancel_event
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    job_doc = {
+        "id": job_id,
+        "job_id": job_id,
+        "user_id": user_id,
+        "status": "queued",
+        "progress": 0,
+        "message": "Waiting to start",
+        "files": [],
+        "created_at": now,
+        "updated_at": now,
+        "request": {
+            "title": request.title,
+            "url": request.url,
+            "clip_length": request.clip_length,
+            "count": request.count,
+            "aspect_ratio": request.aspect_ratio,
+            "background_style": request.background_style,
+            "is_preview": request.is_preview,
+            "source_file": request.source_file,
+        },
+    }
 
     with jobs_lock:
-        jobs[job_id] = {
-            "id": job_id,
-            "status": "queued",
-            "progress": 0,
-            "message": "Waiting to start",
-            "files": [],
-        }
+        jobs[job_id] = job_doc
+
+    if db.is_db_connected():
+        try:
+            db.db_save_job(job_doc)
+        except Exception:
+            pass
 
     thread = threading.Thread(
         target=process_job,
-        args=(job_id, request),
+        args=(job_id, request, cancel_event),
         daemon=True,
     )
     thread.start()
 
-    return {"job_id": job_id, **jobs[job_id]}
+    return {"job_id": job_id, **job_doc}
+
+
+@app.get("/api/jobs")
+def list_jobs(authorization: Optional[str] = Header(None)):
+    """List recent requests/jobs scoped to user or guest."""
+    user = get_current_user_optional(authorization)
+    user_id = user["id"] if user else None
+
+    jobs_map = {}
+    if db.is_db_connected():
+        for j in db.db_list_jobs(user_id=user_id, limit=50):
+            jobs_map[j["id"]] = j
+
+    with jobs_lock:
+        for jid, active in jobs.items():
+            if not user_id or active.get("user_id") in (user_id, "guest", "global"):
+                jobs_map[jid] = dict(active)
+
+    result_list = sorted(jobs_map.values(), key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"jobs": result_list}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -873,14 +1022,90 @@ def get_job(job_id: str):
     with jobs_lock:
         job = jobs.get(job_id)
 
-        if not job:
-            raise HTTPException(
-                status_code=404,
-                detail="Job not found",
-            )
+    if not job and db.is_db_connected():
+        job = db.db_get_job(job_id)
 
-        # Return a snapshot rather than the mutable internal dictionary.
-        return dict(job)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found",
+        )
+
+    # Return a snapshot rather than the mutable internal dictionary.
+    return dict(job)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job_endpoint(job_id: str):
+    """Cancel a running or queued job."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job and db.is_db_connected():
+            job = db.db_get_job(job_id)
+
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job.get("status") in ("completed", "failed", "cancelled"):
+            return {
+                "success": True,
+                "message": f"Job is already {job.get('status')}",
+                "job": job,
+            }
+
+        # Signal cancellation event
+        ev = job_cancel_events.get(job_id)
+        if ev:
+            ev.set()
+
+        update_job(
+            job_id,
+            status="cancelled",
+            message="Job was cancelled by user",
+        )
+
+        updated_job = jobs.get(job_id) or job
+        return {
+            "success": True,
+            "message": "Job cancelled successfully",
+            "job": updated_job,
+        }
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job_endpoint(job_id: str, authorization: Optional[str] = Header(None)):
+    """Delete a job record from memory and MongoDB history."""
+    user = get_current_user_optional(authorization)
+    user_id = user["id"] if user else None
+
+    with jobs_lock:
+        jobs.pop(job_id, None)
+        job_cancel_events.pop(job_id, None)
+
+    deleted = False
+    if db.is_db_connected():
+        deleted = db.db_delete_job(job_id, user_id=user_id)
+
+    return {"success": True, "message": "Job record deleted", "deleted": deleted}
+
+
+@app.delete("/api/jobs")
+def clear_jobs_endpoint(authorization: Optional[str] = Header(None)):
+    """Clear completed/cancelled job records from history."""
+    user = get_current_user_optional(authorization)
+    user_id = user["id"] if user else None
+
+    with jobs_lock:
+        to_del = [jid for jid, j in jobs.items() if j.get("status") in ("completed", "cancelled", "failed")]
+        for jid in to_del:
+            jobs.pop(jid, None)
+            job_cancel_events.pop(jid, None)
+
+    count = 0
+    if db.is_db_connected():
+        count = db.db_clear_completed_jobs(user_id=user_id)
+
+    return {"success": True, "message": f"Cleared {count} completed job record(s)"}
 
 
 @app.get("/api/jobs/{job_id}/files/{filename}")

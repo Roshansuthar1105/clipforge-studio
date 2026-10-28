@@ -123,7 +123,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                     job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         elif platform == "instagram":
-            def ig_progress(pct: int, msg: str):
+            def ig_progress(pct: int, msg: str = ""):
                 with _jobs_lock:
                     job["targets"][i]["progress"] = pct
 
@@ -136,23 +136,127 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
             )
             share_feed = ig_cfg.share_to_feed if ig_cfg else True
 
-            # Formulate public URL to reach this clip via the /media/ endpoint or server
-            rel_clip_name = clip_file.name
-            video_public_url = f"{public_base}/media/clips/{quote(rel_clip_name)}"
+            # Try direct resumable binary upload first (no public URL required)
+            ig_token = account.get("access_token")
+            ig_uid = account.get("channel_id")
+            published = False
+
+            if ig_token and ig_uid:
+                try:
+                    import asyncio
+                    from services.instagram_publisher import publish_instagram_reel as publish_ig_direct
+                    ig_progress(20, "Uploading binary bytes to Meta...")
+                    res = asyncio.run(
+                        publish_ig_direct(
+                            video_path=clip_file,
+                            caption=caption,
+                            share_to_feed=share_feed,
+                            ig_user_id=ig_uid,
+                            page_access_token=ig_token,
+                        )
+                    )
+                    if res.status.value == "published":
+                        with _jobs_lock:
+                            job["targets"][i]["status"] = "success"
+                            job["targets"][i]["progress"] = 100
+                            job["targets"][i]["url"] = f"https://www.instagram.com/reel/{res.media_id}/" if res.media_id else "https://www.instagram.com"
+                            job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        published = True
+                    else:
+                        raise Exception(res.error_message or "Instagram direct upload failed")
+                except Exception as direct_err:
+                    err_msg = str(direct_err)
+                    print(f"[Instagram Publisher] Direct binary upload error: {err_msg}")
+                    if "localhost" in public_base or "127.0.0.1" in public_base:
+                        with _jobs_lock:
+                            job["targets"][i]["status"] = "failed"
+                            job["targets"][i]["progress"] = 0
+                            job["targets"][i]["error"] = err_msg
+                            job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        published = True
+
+            if not published:
+                # Formulate public URL fallback
+                rel_clip_name = clip_file.name
+                video_public_url = f"{public_base}/media/clips/{quote(rel_clip_name)}"
+
+                try:
+                    res = publish_to_instagram_reel(
+                        account=account,
+                        video_public_url=video_public_url,
+                        caption=caption,
+                        share_to_feed=share_feed,
+                        progress_callback=ig_progress,
+                    )
+                    with _jobs_lock:
+                        job["targets"][i]["status"] = "success"
+                        job["targets"][i]["progress"] = 100
+                        job["targets"][i]["url"] = res.get("permalink") or res.get("url")
+                        job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                except Exception as exc:
+                    with _jobs_lock:
+                        job["targets"][i]["status"] = "failed"
+                        job["targets"][i]["progress"] = 0
+                        job["targets"][i]["error"] = str(exc)
+                        job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        elif platform == "facebook":
+            def fb_progress(pct: int):
+                with _jobs_lock:
+                    job["targets"][i]["progress"] = pct
+
+            fb_cfg = target.facebook_config
+            video_title = (
+                (fb_cfg.title if fb_cfg and fb_cfg.title else None)
+                or request.title
+                or clip_file.stem
+            )
+            caption = (
+                (fb_cfg.description if fb_cfg and fb_cfg.description else None)
+                or request.caption
+                or request.title
+                or clip_file.stem
+            )
+            as_reel = fb_cfg.as_reel if fb_cfg is not None else True
+
+            page_id = account.get("channel_id")
+            token = account.get("access_token")
 
             try:
-                res = publish_to_instagram_reel(
-                    account=account,
-                    video_public_url=video_public_url,
-                    caption=caption,
-                    share_to_feed=share_feed,
-                    progress_callback=ig_progress,
-                )
-                with _jobs_lock:
-                    job["targets"][i]["status"] = "success"
-                    job["targets"][i]["progress"] = 100
-                    job["targets"][i]["url"] = res.get("permalink") or res.get("url")
-                    job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                import asyncio
+                from services.facebook_publisher import publish_facebook_reel, publish_facebook_video
+
+                fb_progress(20)
+                if as_reel:
+                    res = asyncio.run(
+                        publish_facebook_reel(
+                            video_path=clip_file,
+                            caption=caption,
+                            title=video_title,
+                            page_id=page_id,
+                            page_access_token=token,
+                        )
+                    )
+                else:
+                    res = asyncio.run(
+                        publish_facebook_video(
+                            video_path=clip_file,
+                            title=video_title,
+                            description=caption,
+                            page_id=page_id,
+                            page_access_token=token,
+                        )
+                    )
+
+                if res.status.value == "published":
+                    with _jobs_lock:
+                        job["targets"][i]["status"] = "success"
+                        job["targets"][i]["progress"] = 100
+                        vid = res.media_id
+                        job["targets"][i]["url"] = f"https://www.facebook.com/{vid}" if vid else f"https://www.facebook.com/{page_id}"
+                        job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                else:
+                    raise Exception(res.error_message or "Facebook publish failed")
             except Exception as exc:
                 with _jobs_lock:
                     job["targets"][i]["status"] = "failed"
@@ -306,24 +410,115 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest) -> None:
                         batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
             elif platform == "instagram":
-                def ig_progress(pct: int, msg: str):
+                def ig_progress(pct: int, msg: str = ""):
                     with _jobs_lock:
                         batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
 
-                video_public_url = f"{public_base}/media/clips/{quote(clip_file.name)}"
-                try:
-                    res = publish_to_instagram_reel(
-                        account=account,
-                        video_public_url=video_public_url,
-                        caption=clip_caption,
-                        share_to_feed=True,
-                        progress_callback=ig_progress,
-                    )
+                ig_token = account.get("access_token")
+                ig_uid = account.get("channel_id")
+                batch_published = False
+
+                if ig_token and ig_uid:
+                    try:
+                        import asyncio
+                        from services.instagram_publisher import publish_instagram_reel as publish_ig_direct
+                        ig_progress(25)
+                        res = asyncio.run(
+                            publish_ig_direct(
+                                video_path=clip_file,
+                                caption=clip_caption,
+                                share_to_feed=True,
+                                ig_user_id=ig_uid,
+                                page_access_token=ig_token,
+                            )
+                        )
+                        if res.status.value == "published":
+                            with _jobs_lock:
+                                batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
+                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
+                                batch["clips"][clip_idx]["targets"][target_idx]["url"] = f"https://www.instagram.com/reel/{res.media_id}/" if res.media_id else "https://www.instagram.com"
+                                batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                            batch_published = True
+                        else:
+                            raise Exception(res.error_message or "Instagram direct upload failed")
+                    except Exception as direct_err:
+                        err_msg = str(direct_err)
+                        print(f"[Batch Instagram] Direct binary upload error: {err_msg}")
+                        if "localhost" in public_base or "127.0.0.1" in public_base:
+                            with _jobs_lock:
+                                batch["clips"][clip_idx]["targets"][target_idx]["status"] = "failed"
+                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 0
+                                batch["clips"][clip_idx]["targets"][target_idx]["error"] = err_msg
+                                batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                            batch_published = True
+
+                if not batch_published:
+                    video_public_url = f"{public_base}/media/clips/{quote(clip_file.name)}"
+                    try:
+                        res = publish_to_instagram_reel(
+                            account=account,
+                            video_public_url=video_public_url,
+                            caption=clip_caption,
+                            share_to_feed=True,
+                            progress_callback=ig_progress,
+                        )
+                        with _jobs_lock:
+                            batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
+                            batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
+                            batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("permalink") or res.get("url")
+                            batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    except Exception as exc:
+                        with _jobs_lock:
+                            batch["clips"][clip_idx]["targets"][target_idx]["status"] = "failed"
+                            batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 0
+                            batch["clips"][clip_idx]["targets"][target_idx]["error"] = str(exc)
+                            batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            elif platform == "facebook":
+                def fb_batch_progress(pct: int):
                     with _jobs_lock:
-                        batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
-                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
-                        batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("permalink") or res.get("url")
-                        batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
+
+                fb_cfg = target.facebook_config
+                as_reel = fb_cfg.as_reel if fb_cfg is not None else True
+                page_id = account.get("channel_id")
+                token = account.get("access_token")
+
+                try:
+                    import asyncio
+                    from services.facebook_publisher import publish_facebook_reel, publish_facebook_video
+
+                    fb_batch_progress(20)
+                    if as_reel:
+                        res = asyncio.run(
+                            publish_facebook_reel(
+                                video_path=clip_file,
+                                caption=clip_caption,
+                                title=clip_title,
+                                page_id=page_id,
+                                page_access_token=token,
+                            )
+                        )
+                    else:
+                        res = asyncio.run(
+                            publish_facebook_video(
+                                video_path=clip_file,
+                                title=clip_title,
+                                description=clip_caption,
+                                page_id=page_id,
+                                page_access_token=token,
+                            )
+                        )
+
+                    if res.status.value == "published":
+                        with _jobs_lock:
+                            batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
+                            batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
+                            vid = res.media_id
+                            batch["clips"][clip_idx]["targets"][target_idx]["url"] = f"https://www.facebook.com/{vid}" if vid else f"https://www.facebook.com/{page_id}"
+                            batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    else:
+                        raise Exception(res.error_message or "Facebook publish failed")
                 except Exception as exc:
                     with _jobs_lock:
                         batch["clips"][clip_idx]["targets"][target_idx]["status"] = "failed"

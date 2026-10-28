@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 class Account(BaseModel):
     id: str
-    platform: str                   # "youtube" | "instagram"
+    platform: str                   # "youtube" | "instagram" | "facebook"
     alias: str                      # Display name shown in the UI
     channel_id: Optional[str] = None
     avatar_url: Optional[str] = None
