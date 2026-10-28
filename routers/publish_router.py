@@ -3,8 +3,13 @@ routers/publish_router.py — FastAPI endpoints for publishing clips and retriev
 """
 
 from fastapi import APIRouter, HTTPException
-from publisher.models import PublishRequest
-from publisher.jobs import start_publish_job, get_publish_job_status
+from publisher.models import PublishRequest, BatchPublishRequest
+from publisher.jobs import (
+    start_publish_job,
+    get_publish_job_status,
+    start_batch_publish_job,
+    get_batch_publish_job_status,
+)
 from publisher.history import get_publish_history, delete_publish_record
 
 router = APIRouter(prefix="/publish", tags=["Publishing"])
@@ -13,8 +18,7 @@ router = APIRouter(prefix="/publish", tags=["Publishing"])
 @router.post("")
 def publish_clip(request: PublishRequest):
     """
-    Start an asynchronous multi-target publishing job.
-    Accepts clip path and list of target accounts with optional per-platform configs.
+    Start an asynchronous multi-target publishing job for a single clip.
     """
     if not request.targets:
         raise HTTPException(status_code=400, detail="At least one target account must be selected")
@@ -26,6 +30,32 @@ def publish_clip(request: PublishRequest):
         raise HTTPException(status_code=404, detail=str(fnf))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/batch")
+def publish_batch_clips(request: BatchPublishRequest):
+    """
+    Start an asynchronous batch publishing job to publish multiple clips across selected targets.
+    """
+    if not request.clip_paths:
+        raise HTTPException(status_code=400, detail="At least one clip must be selected")
+    if not request.targets:
+        raise HTTPException(status_code=400, detail="At least one target account must be selected")
+
+    try:
+        batch_job = start_batch_publish_job(request)
+        return batch_job
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/batch/{batch_id}/status")
+def get_batch_status(batch_id: str):
+    """Get live progress for a batch publish job."""
+    status = get_batch_publish_job_status(batch_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Batch publish job not found")
+    return status
 
 
 @router.get("/history")
@@ -51,3 +81,4 @@ def get_job_status(job_id: str):
     if not status:
         raise HTTPException(status_code=404, detail="Publish job not found")
     return status
+

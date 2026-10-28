@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         :root {
             --bg-base: #090B10;
@@ -1266,6 +1267,395 @@
             border-bottom: 1px solid var(--border-subtle);
             padding-bottom: 10px;
         }
+
+        /* Storage Manager Styles */
+        .storage-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+
+        .storage-stat-card {
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .storage-stat-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+
+        .storage-stat-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .storage-tab-bar {
+            display: flex;
+            gap: 8px;
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 10px;
+        }
+
+        .storage-tab-btn {
+            background: none;
+            border: 1px solid transparent;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .storage-tab-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .storage-tab-btn.active {
+            color: #fff;
+            background: rgba(99, 102, 241, 0.15);
+            border-color: rgba(99, 102, 241, 0.35);
+        }
+
+        .storage-file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            gap: 12px;
+            transition: var(--transition);
+        }
+
+        .storage-file-item:hover {
+            border-color: rgba(255, 255, 255, 0.16);
+            background: #191f33;
+        }
+
+        .danger-banner {
+            background: rgba(239, 68, 68, 0.06);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            border-radius: var(--radius-md);
+            padding: 14px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        /* Pipeline Stepper Header Bar */
+        .pipeline-stepper-bar {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 14px 20px;
+            margin-bottom: 26px;
+            box-shadow: var(--shadow-card);
+            backdrop-filter: blur(12px);
+            overflow-x: auto;
+        }
+
+        .pipeline-step-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+            min-width: 220px;
+            padding: 8px 14px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: var(--transition);
+            border: 1px solid transparent;
+        }
+
+        .pipeline-step-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        .pipeline-step-item.active {
+            background: rgba(99, 102, 241, 0.12);
+            border-color: rgba(99, 102, 241, 0.35);
+        }
+
+        .step-num-badge {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 14px;
+            flex-shrink: 0;
+            transition: var(--transition);
+        }
+
+        .pipeline-step-item.active .step-num-badge {
+            background: linear-gradient(135deg, var(--primary), var(--accent-purple));
+            box-shadow: 0 0 16px var(--primary-glow);
+        }
+
+        .step-text-wrap {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .step-super {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .pipeline-step-item.active .step-super {
+            color: #a5b4fc;
+        }
+
+        .step-main-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .step-sub-desc {
+            font-size: 11px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .pipeline-arrow {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
+        /* Downloaded Source Videos Grid */
+        .downloads-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 16px;
+        }
+
+        .download-card {
+            background: var(--bg-surface-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: var(--transition);
+        }
+
+        .download-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+        }
+
+        .download-card.active-source-selected {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary), 0 8px 24px var(--primary-glow);
+            background: #171c30;
+        }
+
+        .download-thumb-wrap {
+            position: relative;
+            width: 100%;
+            height: 140px;
+            background: #000;
+            cursor: pointer;
+            overflow: hidden;
+        }
+
+        .download-thumb {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s ease;
+        }
+
+        .download-thumb-wrap:hover .download-thumb {
+            transform: scale(1.05);
+        }
+
+        .download-size-badge {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(4px);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .download-play-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 40px;
+            height: 40px;
+            background: rgba(0, 0, 0, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 14px;
+            opacity: 0.85;
+            transition: var(--transition);
+        }
+
+        .download-thumb-wrap:hover .download-play-overlay {
+            transform: translate(-50%, -50%) scale(1.1);
+            background: var(--primary);
+            opacity: 1;
+        }
+
+        .download-info {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex: 1;
+        }
+
+        .download-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-height: 1.35;
+            min-height: 35px;
+        }
+
+        .download-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .download-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: auto;
+        }
+
+        /* Active Local Source Banner */
+        .active-source-banner {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.18), rgba(168, 85, 247, 0.12));
+            border: 1px solid rgba(99, 102, 241, 0.4);
+            border-radius: var(--radius-md);
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .active-source-info {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .active-source-badge {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #a5b4fc;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .active-source-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .active-source-meta {
+            font-size: 11px;
+            color: #c7d2fe;
+        }
+
+        .btn-clear-source {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: var(--transition);
+        }
+
+        .btn-clear-source:hover {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: #ef4444;
+            color: #fca5a5;
+        }
+
+        .empty-state-box {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 36px 16px;
+            background: var(--bg-surface-elevated);
+            border: 1px dashed var(--border-subtle);
+            border-radius: var(--radius-md);
+            color: var(--text-muted);
+        }
     </style>
 </head>
 
@@ -1274,7 +1664,7 @@
         <!-- Top App Bar -->
         <header>
             <div class="brand">
-                <div class="brand-icon">✂</div>
+                <div class="brand-icon"><i class="fa-solid fa-scissors"></i></div>
                 <div>
                     <h1 class="brand-title">ClipForge Studio</h1>
                     <p class="brand-subtitle">AI-Powered YouTube to 9:16 Vertical Video Engine</p>
@@ -1282,28 +1672,98 @@
             </div>
             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                 <button type="button" class="btn-clip-action" onclick="openAccountsModal()" title="Manage YouTube & Instagram accounts" style="font-size: 13px; padding: 9px 16px;">
-                    📡 Connected Accounts <span id="headerAccountCount" class="badge-mini">0</span>
+                    <i class="fa-solid fa-tower-broadcast"></i> Connected Accounts <span id="headerAccountCount" class="badge-mini">0</span>
                 </button>
                 <button type="button" class="btn-clip-action" onclick="openHistoryModal()" title="View past publishes" style="font-size: 13px; padding: 9px 16px;">
-                    📜 Publish History
+                    <i class="fa-solid fa-clock-rotate-left"></i> Publish History
+                </button>
+                <button type="button" class="btn-clip-action" onclick="openStorageModal()" title="Manage & delete downloaded videos and generated clips" style="font-size: 13px; padding: 9px 16px;">
+                    <i class="fa-solid fa-hard-drive"></i> Storage (<span id="headerStorageMb">0 MB</span>)
                 </button>
                 <div class="badge-status">FastAPI Active</div>
             </div>
         </header>
 
+        <!-- Interactive Pipeline Bar -->
+        <div class="pipeline-stepper-bar">
+            <div class="pipeline-step-item" id="pStep1" onclick="focusStage('downloads')">
+                <div class="step-num-badge">1</div>
+                <div class="step-text-wrap">
+                    <span class="step-super">STAGE 1</span>
+                    <span class="step-main-title"><i class="fa-solid fa-cloud-arrow-down"></i> Downloaded Sources (<span id="pipelineDlCount">0</span>)</span>
+                    <span class="step-sub-desc">Select to generate new clips</span>
+                </div>
+                <span class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+            </div>
+            <div class="pipeline-step-item active" id="pStep2" onclick="focusStage('generate')">
+                <div class="step-num-badge">2</div>
+                <div class="step-text-wrap">
+                    <span class="step-super">STAGE 2</span>
+                    <span class="step-main-title"><i class="fa-solid fa-scissors"></i> Generate 9:16 Clips</span>
+                    <span class="step-sub-desc">Timeline ranges & blur presets</span>
+                </div>
+                <span class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+            </div>
+            <div class="pipeline-step-item" id="pStep3" onclick="focusStage('publish')">
+                <div class="step-num-badge">3</div>
+                <div class="step-text-wrap">
+                    <span class="step-super">STAGE 3</span>
+                    <span class="step-main-title"><i class="fa-solid fa-rocket"></i> Publish (<span id="pipelineClCount">0</span> Clips)</span>
+                    <span class="step-sub-desc">One-click or batch to Shorts & Reels</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Main Workspace -->
         <div class="workspace-grid">
-            <!-- Left Column: Studio Controller -->
+            <!-- Left Column: Studio Controller & Downloaded Sources -->
             <div>
+                <!-- Downloaded Sources Card (Stage 1: Downloads -> Generate Clips) -->
+                <div class="card" id="downloadsCard">
+                    <div class="card-header">
+                        <h2 class="card-title">
+                            <span class="card-title-icon"><i class="fa-solid fa-cloud-arrow-down"></i></span> Downloaded Source Videos
+                        </h2>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
+                            <span id="downloadsCountBadge" class="badge-status" style="background: rgba(6, 182, 212, 0.15); color: #67e8f9; border-color: rgba(6, 182, 212, 0.3);">0 Sources</span>
+                            <button type="button" class="btn-clip-action" style="padding: 5px 10px; font-size: 11px;" onclick="loadAvailableDownloads(true)" title="Refresh downloads from disk">
+                                <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px;">
+                        Select any downloaded source video to generate fresh 9:16 vertical clips without downloading again!
+                    </p>
+                    <div id="downloadsGrid" class="downloads-grid">
+                        <div id="emptyDownloads" class="empty-state-box">
+                            <div style="font-size: 28px; margin-bottom: 6px;"><i class="fa-solid fa-cloud-arrow-down"></i></div>
+                            <div style="font-weight: 600; color: #fff;">No downloaded source videos yet</div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                                When you paste a YouTube URL below and generate clips, the full source video is saved here so you can generate new clips instantly anytime.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <form id="clipForm">
-                    <div class="card">
+                    <div class="card" id="sourceCard">
                         <div class="card-header">
-                            <h2 class="card-title"><span class="card-title-icon">📺</span> Source Video</h2>
+                            <h2 class="card-title"><span class="card-title-icon"><i class="fa-solid fa-tv"></i></span> Source Video</h2>
+                        </div>
+
+                        <!-- Active Local Source Notification Banner -->
+                        <div id="activeSourceBanner" class="active-source-banner" style="display: none;">
+                            <div class="active-source-info">
+                                <span class="active-source-badge"><i class="fa-solid fa-bolt"></i> LOCAL SOURCE SELECTED</span>
+                                <strong id="activeSourceTitle" class="active-source-title">Video Name</strong>
+                                <span id="activeSourceMeta" class="active-source-meta">Instant FFmpeg Slicing (no download needed)</span>
+                            </div>
+                            <button type="button" class="btn-clear-source" onclick="clearSelectedDownloadedSource()"><i class="fa-solid fa-xmark"></i> Clear & Enter URL</button>
                         </div>
 
                         <div class="form-group">
                             <label for="urlInput">YouTube Video URL</label>
-                            <input id="urlInput" type="url" required placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+                            <input id="urlInput" type="url" placeholder="https://www.youtube.com/watch?v=... (or select downloaded source above)" autocomplete="off">
 
                             <!-- Live URL Preview Card -->
                             <div id="previewCard" class="preview-card">
@@ -1328,7 +1788,7 @@
                     <!-- Time Scrubber & Clipping Controls -->
                     <div class="card">
                         <div class="card-header">
-                            <h2 class="card-title"><span class="card-title-icon">⏱</span> Slicing & Timeline Range</h2>
+                            <h2 class="card-title"><span class="card-title-icon"><i class="fa-solid fa-stopwatch"></i></span> Slicing & Timeline Range</h2>
                         </div>
 
                         <div class="form-group">
@@ -1368,18 +1828,18 @@
                     <!-- Styling & Aspect Presets -->
                     <div class="card">
                         <div class="card-header">
-                            <h2 class="card-title"><span class="card-title-icon">🎨</span> 9:16 Style & Overlays</h2>
+                            <h2 class="card-title"><span class="card-title-icon"><i class="fa-solid fa-palette"></i></span> 9:16 Style & Overlays</h2>
                         </div>
 
                         <div class="form-group">
                             <label>Background Style</label>
                             <div class="style-selector">
                                 <div id="styleBlur" class="style-option active" onclick="selectStyle('blur')">
-                                    <div class="style-option-title">🌟 Cinematic Blur</div>
+                                    <div class="style-option-title"><i class="fa-solid fa-wand-magic-sparkles"></i> Cinematic Blur</div>
                                     <div class="style-option-desc">Auto-blurred backdrop fills 9:16 screen</div>
                                 </div>
                                 <div id="styleBlack" class="style-option" onclick="selectStyle('black')">
-                                    <div class="style-option-title">⬛ Classic Black</div>
+                                    <div class="style-option-title"><i class="fa-solid fa-square"></i> Classic Black</div>
                                     <div class="style-option-desc">Traditional pillarbox bars with labels</div>
                                 </div>
                             </div>
@@ -1421,16 +1881,17 @@
                         <!-- Action Row -->
                         <div class="action-row">
                             <button id="previewBtn" type="button" class="btn-preview" onclick="submitJob(true)">
-                                🧪 Preview Clip 1
+                                <i class="fa-solid fa-flask"></i> Preview Clip 1
                             </button>
                             <button id="submitBtn" type="submit" class="btn-submit">
-                                ⚡ Generate All Clips
+                                <i class="fa-solid fa-bolt"></i> Generate All Clips
                             </button>
                         </div>
 
                         <!-- Cached source indicator -->
-                        <div id="cachePill" class="cache-pill">
-                            ⚡ Source cached · skipping download
+                        <div id="cachePill" class="cache-pill" style="justify-content: space-between;">
+                            <span><i class="fa-solid fa-bolt"></i> Source cached · skipping download</span>
+                            <button type="button" style="background: none; border: none; color: #fca5a5; font-size: 11px; font-weight: 600; cursor: pointer; text-decoration: underline;" onclick="deleteCurrentCachedSource(event)" title="Delete this downloaded source file">Delete Cache</button>
                         </div>
 
                         <!-- Post-preview prompt -->
@@ -1438,7 +1899,7 @@
                             <div class="preview-done-text">
                                 <strong>Preview looks good?</strong> Hit Generate All to render the full batch, or tweak settings and preview again.
                             </div>
-                            <button class="btn-generate-all" onclick="submitJob(false)">⚡ Generate All</button>
+                            <button class="btn-generate-all" onclick="submitJob(false)"><i class="fa-solid fa-bolt"></i> Generate All</button>
                         </div>
                     </div>
                 </form>
@@ -1449,7 +1910,7 @@
                 <!-- Live Job Monitor Card -->
                 <div class="card">
                     <div class="card-header">
-                        <h2 class="card-title"><span class="card-title-icon">📡</span> Processing Station</h2>
+                        <h2 class="card-title"><span class="card-title-icon"><i class="fa-solid fa-tower-broadcast"></i></span> Processing Station</h2>
                     </div>
 
                     <div class="progress-box">
@@ -1472,14 +1933,22 @@
                 <!-- Rendered Clips Showcase -->
                 <div class="card">
                     <div class="card-header">
-                        <h2 class="card-title"><span class="card-title-icon">🎬</span> Generated Clips</h2>
-                        <span id="clipCountBadge" class="badge-status" style="background: rgba(99, 102, 241, 0.15); color: #c7d2fe; border-color: rgba(99, 102, 241, 0.3);">0 Clips</span>
+                        <h2 class="card-title"><span class="card-title-icon"><i class="fa-solid fa-film"></i></span> Generated Clips</h2>
+                        <div style="display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap;">
+                            <span id="clipCountBadge" class="badge-status" style="background: rgba(99, 102, 241, 0.15); color: #c7d2fe; border-color: rgba(99, 102, 241, 0.3);">0 Clips</span>
+                            <button id="publishAllBtn" type="button" class="btn-clip-action btn-publish-full" style="display: none; padding: 7px 16px; font-size: 13px; font-weight: 700; width: auto; margin: 0; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.35); align-items: center; gap: 6px;" onclick="openBatchPublishModal()">
+                                <i class="fa-solid fa-rocket"></i> Publish All Clips (<span id="publishAllCount">0</span>)
+                            </button>
+                            <button id="clearAllClipsBtn" type="button" class="btn-clip-action" style="display: none; padding: 7px 14px; font-size: 13px; font-weight: 600; width: auto; margin: 0; color: #f87171; border-color: rgba(239, 68, 68, 0.35); align-items: center; gap: 6px;" onclick="confirmDeleteAllClips()" title="Delete all generated clips from my_clips">
+                                <i class="fa-solid fa-trash-can"></i> Clear All
+                            </button>
+                        </div>
                     </div>
 
                     <div id="clipsGrid" class="clips-grid">
                         <!-- Clips injected dynamically -->
                         <div id="emptyClips" style="grid-column: 1 / -1; text-align: center; padding: 40px 10px; color: var(--text-muted);">
-                            <div style="font-size: 32px; margin-bottom: 8px;">🎞️</div>
+                            <div style="font-size: 32px; margin-bottom: 8px;"><i class="fa-solid fa-film"></i></div>
                             No clips generated yet. Paste a YouTube URL and click Generate!
                         </div>
                     </div>
@@ -1490,16 +1959,17 @@
 
     <!-- 9:16 Smartphone Mockup Modal -->
     <div id="phoneModal" class="modal-overlay" onclick="closePhoneModal(event)">
-        <button class="modal-close-btn" onclick="forceClosePhoneModal()">✕</button>
+        <button class="modal-close-btn" onclick="forceClosePhoneModal()"><i class="fa-solid fa-xmark"></i></button>
         <div class="phone-frame" onclick="event.stopPropagation()">
             <div class="phone-notch">
                 <div class="phone-camera"></div>
             </div>
             <video id="modalVideo" class="phone-video" controls autoplay loop playsinline></video>
             <div class="phone-controls-overlay">
-                <a id="modalDownloadLink" class="btn-clip-action btn-clip-primary" style="flex: 1;" download>⬇ Download MP4</a>
-                <button class="btn-clip-action" style="flex: 1;" onclick="copyModalVideoLink()">📋 Copy Link</button>
-                <button class="btn-clip-action btn-publish-full" style="flex: 1.2;" onclick="openPublishFromModal()">🚀 Publish</button>
+                <a id="modalDownloadLink" class="btn-clip-action btn-clip-primary" style="flex: 1;" download><i class="fa-solid fa-download"></i> Save</a>
+                <button class="btn-clip-action" style="flex: 0.9;" onclick="copyModalVideoLink()"><i class="fa-solid fa-link"></i> Link</button>
+                <button class="btn-clip-action btn-publish-full" style="flex: 1.1;" onclick="openPublishFromModal()"><i class="fa-solid fa-rocket"></i> Publish</button>
+                <button class="btn-clip-action" style="flex: 0.8; color: #f87171; border-color: rgba(239,68,68,0.3);" onclick="deleteFromModal()"><i class="fa-solid fa-trash-can"></i> Delete</button>
             </div>
         </div>
     </div>
@@ -1509,28 +1979,28 @@
         <div class="app-modal-card" onclick="event.stopPropagation()">
             <div class="app-modal-header">
                 <div>
-                    <h3 class="app-modal-title"><span>📡</span> Connected Accounts</h3>
+                    <h3 class="app-modal-title"><span><i class="fa-solid fa-tower-broadcast"></i></span> Connected Accounts</h3>
                     <p class="app-modal-subtitle">Connect YouTube channels & Instagram accounts to publish clips directly.</p>
                 </div>
-                <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceCloseAccountsModal()">✕</button>
+                <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceCloseAccountsModal()"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="app-modal-body">
                 <!-- Action Connect Bar -->
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <button type="button" class="btn-social btn-social-yt" onclick="connectOAuth('youtube')">
-                        <span>▶</span> Connect YouTube
+                        <span><i class="fa-brands fa-youtube"></i></span> Connect YouTube
                     </button>
                     <button type="button" class="btn-social btn-social-ig" onclick="connectOAuth('instagram')">
-                        <span>📷</span> Connect Instagram
+                        <span><i class="fa-brands fa-instagram"></i></span> Connect Instagram
                     </button>
                     <button type="button" class="btn-social btn-social-manual" onclick="toggleManualAccountForm()">
-                        <span>🔑</span> Manual Token
+                        <span><i class="fa-solid fa-key"></i></span> Manual Token
                     </button>
                 </div>
 
                 <!-- Manual Connect Collapsible Form -->
                 <div id="manualAccountForm" style="display: none; background: #171c2e; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 18px; gap: 14px; flex-direction: column;">
-                    <div style="font-weight: 700; font-size: 14px; color: #fff;">🔑 Connect Account with Token Directly</div>
+                    <div style="font-weight: 700; font-size: 14px; color: #fff;"><i class="fa-solid fa-key"></i> Connect Account with Token Directly</div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
                         <div>
                             <label style="font-size: 11px;">Platform</label>
@@ -1582,18 +2052,24 @@
         <div class="app-modal-card wide" onclick="event.stopPropagation()">
             <div class="app-modal-header">
                 <div>
-                    <h3 class="app-modal-title"><span>🚀</span> One-Click Multi-Account Publish</h3>
-                    <p class="app-modal-subtitle">Publish this clip instantly to multiple YouTube and Instagram accounts.</p>
+                    <h3 class="app-modal-title"><span><i class="fa-solid fa-rocket"></i></span> <span id="publishModalTitleText">One-Click Multi-Account Publish</span></h3>
+                    <p class="app-modal-subtitle" id="publishModalSubtitleText">Publish this clip instantly to multiple YouTube and Instagram accounts.</p>
                 </div>
-                <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceClosePublishModal()">✕</button>
+                <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceClosePublishModal()"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="app-modal-body">
                 <!-- Top Section: Clip Preview and Target Accounts -->
                 <div style="display: grid; grid-template-columns: 160px 1fr; gap: 20px; align-items: start;">
-                    <!-- Video Preview Thumb -->
-                    <div style="border-radius: var(--radius-md); overflow: hidden; background: #000; border: 1px solid var(--border-subtle); aspect-ratio: 9/16; position: relative;">
+                    <!-- Video Preview Thumb (Single Mode) -->
+                    <div id="publishSinglePreviewWrap" style="border-radius: var(--radius-md); overflow: hidden; background: #000; border: 1px solid var(--border-subtle); aspect-ratio: 9/16; position: relative;">
                         <video id="publishModalVideo" src="" style="width: 100%; height: 100%; object-fit: cover;" preload="metadata" muted playsinline></video>
                         <div id="publishClipBadge" style="position: absolute; bottom: 8px; left: 8px; right: 8px; font-size: 11px; background: rgba(0,0,0,0.8); color: #fff; padding: 4px 8px; border-radius: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">clip.mp4</div>
+                    </div>
+
+                    <!-- Batch Preview List (Batch Mode) -->
+                    <div id="publishBatchPreviewWrap" style="display: none; border-radius: var(--radius-md); background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); padding: 12px; height: 100%; max-height: 280px; flex-direction: column; gap: 8px; overflow-y: auto;">
+                        <div style="font-size: 11px; font-weight: 700; color: var(--accent-pink); text-transform: uppercase; letter-spacing: 0.5px;">All Clips in Batch</div>
+                        <div id="publishBatchClipsList" style="display: flex; flex-direction: column; gap: 6px;"></div>
                     </div>
 
                     <!-- Targets Selection Section -->
@@ -1614,8 +2090,9 @@
                         <!-- Metadata Fields -->
                         <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 4px;">
                             <div>
-                                <label style="font-size: 11px;">Title Banner (YouTube Shorts)</label>
+                                <label id="publishTitleLabel" style="font-size: 11px;">Title Banner (YouTube Shorts)</label>
                                 <input id="publishTitleInput" type="text" placeholder="Title for YouTube..." style="padding: 10px;">
+                                <div id="publishTitleHint" style="display: none; font-size: 11px; color: var(--text-muted); margin-top: 4px;">Use <code>{part}</code> to automatically insert part numbers (e.g. <code>My Highlights - Part {part}</code>)</div>
                             </div>
                             <div>
                                 <label style="font-size: 11px;">Caption & Description (Instagram & YouTube)</label>
@@ -1645,7 +2122,10 @@
                         <span id="publishOverallStatus">Publishing to accounts...</span>
                         <span id="publishOverallPercent" style="color: var(--primary);">0%</span>
                     </div>
-                    <div id="publishTargetsProgressList" style="display: flex; flex-direction: column; gap: 10px;">
+                    <div class="progress-bar-wrap" style="height: 6px; background: rgba(255,255,255,0.06); border-radius: var(--radius-full); overflow: hidden;">
+                        <div id="publishProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent-pink)); transition: width 0.3s ease;"></div>
+                    </div>
+                    <div id="publishTargetsProgressList" style="display: flex; flex-direction: column; gap: 10px; max-height: 280px; overflow-y: auto;">
                         <!-- Injected live -->
                     </div>
                 </div>
@@ -1653,7 +2133,7 @@
             <div class="app-modal-footer">
                 <button type="button" class="btn-clip-action" onclick="forceClosePublishModal()">Cancel</button>
                 <button id="executePublishBtn" type="button" class="btn-publish-full" style="padding: 12px 28px; width: auto; font-size: 14px;" onclick="executePublish()">
-                    🚀 Publish to Selected (0 accounts)
+                    <i class="fa-solid fa-rocket"></i> Publish to Selected (0 accounts)
                 </button>
             </div>
         </div>
@@ -1664,12 +2144,12 @@
         <div class="app-modal-card wide" onclick="event.stopPropagation()">
             <div class="app-modal-header">
                 <div>
-                    <h3 class="app-modal-title"><span>📜</span> Publish History Log</h3>
+                    <h3 class="app-modal-title"><span><i class="fa-solid fa-clock-rotate-left"></i></span> Publish History Log</h3>
                     <p class="app-modal-subtitle">All past multi-account publish runs and published links.</p>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <button type="button" class="chip-btn" onclick="loadPublishHistory(true)">🔄 Refresh</button>
-                    <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceCloseHistoryModal()">✕</button>
+                    <button type="button" class="chip-btn" onclick="loadPublishHistory(true)"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                    <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceCloseHistoryModal()"><i class="fa-solid fa-xmark"></i></button>
                 </div>
             </div>
             <div class="app-modal-body">
@@ -1681,6 +2161,110 @@
             </div>
             <div class="app-modal-footer">
                 <button type="button" class="btn-clip-action" onclick="forceCloseHistoryModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Storage & Media Manager Modal -->
+    <div id="storageModal" class="app-modal-overlay" onclick="closeStorageModal(event)">
+        <div class="app-modal-card wide" onclick="event.stopPropagation()">
+            <div class="app-modal-header">
+                <div>
+                    <h3 class="app-modal-title"><span><i class="fa-solid fa-hard-drive"></i></span> Storage & Media Manager</h3>
+                    <p class="app-modal-subtitle">Manage and delete downloaded source videos and generated 9:16 vertical clips.</p>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <button type="button" class="chip-btn" onclick="loadStorageData(true)"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                    <button class="modal-close-btn" style="position: static; width: 36px; height: 36px; font-size: 18px;" onclick="forceCloseStorageModal()"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </div>
+            <div class="app-modal-body">
+                <!-- Storage Overview Cards -->
+                <div class="storage-stat-grid">
+                    <div class="storage-stat-card">
+                        <span class="storage-stat-label">Total Storage Used</span>
+                        <span id="storageTotalMb" class="storage-stat-value" style="color: #c7d2fe;">0 MB</span>
+                    </div>
+                    <div class="storage-stat-card">
+                        <span class="storage-stat-label">Downloads (Cache)</span>
+                        <span id="storageDownloadsMb" class="storage-stat-value" style="color: #60a5fa;">0 MB</span>
+                        <span id="storageDownloadsCount" style="font-size: 11px; color: var(--text-muted);">0 file(s)</span>
+                    </div>
+                    <div class="storage-stat-card">
+                        <span class="storage-stat-label">Generated Clips</span>
+                        <span id="storageClipsMb" class="storage-stat-value" style="color: #a78bfa;">0 MB</span>
+                        <span id="storageClipsCount" style="font-size: 11px; color: var(--text-muted);">0 clip(s)</span>
+                    </div>
+                </div>
+
+                <!-- Tab Controls -->
+                <div class="storage-tab-bar">
+                    <button id="tabDownloadsBtn" type="button" class="storage-tab-btn active" onclick="switchStorageTab('downloads')">
+                        <i class="fa-solid fa-cloud-arrow-down"></i> Downloaded Sources (<span id="tabDlCount">0</span>)
+                    </button>
+                    <button id="tabClipsBtn" type="button" class="storage-tab-btn" onclick="switchStorageTab('clips')">
+                        <i class="fa-solid fa-film"></i> Generated Clips (<span id="tabClCount">0</span>)
+                    </button>
+                </div>
+
+                <!-- Downloads View -->
+                <div id="storageDownloadsSection" style="display: flex; flex-direction: column; gap: 12px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                        <span style="font-size: 12px; color: var(--text-secondary);">Downloaded YouTube source videos stored in <code>data/downloads</code>:</span>
+                        <button type="button" class="btn-clip-action" style="color: #f87171; border-color: rgba(239,68,68,0.3); font-size: 12px; padding: 6px 14px;" onclick="confirmClearDownloads()">
+                            <i class="fa-solid fa-trash-can"></i> Clear All Downloads
+                        </button>
+                    </div>
+                    <div id="storageDownloadsList" style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto;">
+                        <div style="text-align: center; padding: 20px; color: var(--text-muted);">Loading downloads...</div>
+                    </div>
+                </div>
+
+                <!-- Clips View -->
+                <div id="storageClipsSection" style="display: none; flex-direction: column; gap: 12px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                        <span style="font-size: 12px; color: var(--text-secondary);">Generated 9:16 vertical clips stored in <code>data/clips</code>:</span>
+                        <button type="button" class="btn-clip-action" style="color: #f87171; border-color: rgba(239,68,68,0.3); font-size: 12px; padding: 6px 14px;" onclick="confirmDeleteAllClips()">
+                            <i class="fa-solid fa-trash-can"></i> Clear All Clips
+                        </button>
+                    </div>
+                    <div id="storageClipsList" style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto;">
+                        <div style="text-align: center; padding: 20px; color: var(--text-muted);">Loading clips...</div>
+                    </div>
+                </div>
+
+                <!-- Danger Zone: Purge All -->
+                <div class="danger-banner">
+                    <div>
+                        <div style="font-weight: 700; font-size: 13px; color: #fca5a5;"><i class="fa-solid fa-triangle-exclamation"></i> Purge All Media Files</div>
+                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                            Permanently delete all downloaded source videos and rendered clips at once.
+                        </div>
+                    </div>
+                    <button type="button" class="btn-clip-action" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.4); font-weight: 700; padding: 8px 16px; white-space: nowrap;" onclick="confirmPurgeAllMedia()">
+                        <i class="fa-solid fa-triangle-exclamation"></i> Purge Everything
+                    </button>
+                </div>
+            </div>
+            <div class="app-modal-footer">
+                <button type="button" class="btn-clip-action" onclick="forceCloseStorageModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Source Video Player Modal -->
+    <div id="sourcePlayerModal" class="app-modal-overlay" onclick="closeSourcePlayerModal(event)">
+        <div class="app-modal-card" style="max-width: 760px; padding: 0; overflow: hidden; background: #000;" onclick="event.stopPropagation()">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; background: rgba(17, 20, 32, 0.95); border-bottom: 1px solid var(--border-subtle);">
+                <div style="font-weight: 700; font-size: 14px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="sourcePlayerTitle">Source Video</div>
+                <button class="modal-close-btn" style="position: static; width: 32px; height: 32px; font-size: 16px;" onclick="forceCloseSourcePlayerModal()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <video id="sourcePlayerVideo" style="width: 100%; max-height: 460px; background: #000; outline: none;" controls playsinline></video>
+            <div style="padding: 12px 18px; background: var(--bg-surface); display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-subtle);">
+                <span id="sourcePlayerMeta" style="font-size: 12px; color: var(--text-muted);">Downloaded Source Video</span>
+                <button type="button" class="btn-clip-action btn-clip-primary" id="sourcePlayerUseBtn" style="padding: 7px 16px;">
+                    <i class="fa-solid fa-scissors"></i> Use for New Clips
+                </button>
             </div>
         </div>
     </div>
@@ -1697,6 +2281,214 @@
         // Track the last submitted URL for cache-pill display
         let lastSubmittedUrl = "";
         let lastJobWasPreview = false;
+        let availableDownloadsList = [];
+        let activeSourceFile = null;
+
+        // Stage Focus Navigation
+        function focusStage(stage) {
+            document.querySelectorAll(".pipeline-step-item").forEach(el => el.classList.remove("active"));
+            if (stage === "downloads") {
+                const s = $("pStep1"); if (s) s.classList.add("active");
+                const card = $("downloadsCard"); if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+            } else if (stage === "generate") {
+                const s = $("pStep2"); if (s) s.classList.add("active");
+                const card = $("clipForm"); if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+            } else if (stage === "publish") {
+                const s = $("pStep3"); if (s) s.classList.add("active");
+                const card = $("clipsGrid") ? $("clipsGrid").closest(".card") : null;
+                if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+        }
+
+        // Load & Render Downloaded Source Videos (Stage 1)
+        async function loadAvailableDownloads(showToastNotification = false) {
+            try {
+                const res = await fetch("/api/downloads");
+                if (!res.ok) return;
+                const data = await res.json();
+                availableDownloadsList = data.downloads || [];
+                renderDownloadsList(availableDownloadsList);
+                if (showToastNotification) {
+                    showToast(`Updated: ${availableDownloadsList.length} downloaded source(s) found.`);
+                }
+            } catch (err) {
+                console.error("Error loading downloads:", err);
+            }
+        }
+
+        function renderDownloadsList(downloads) {
+            const container = $("downloadsGrid");
+            if (!container) return;
+            container.innerHTML = "";
+
+            const countBadge = $("downloadsCountBadge");
+            if (countBadge) countBadge.textContent = `${downloads.length} Source${downloads.length !== 1 ? 's' : ''}`;
+
+            const pipelineDl = $("pipelineDlCount");
+            if (pipelineDl) pipelineDl.textContent = downloads.length;
+
+            if (!downloads || downloads.length === 0) {
+                container.innerHTML = `
+                    <div id="emptyDownloads" class="empty-state-box">
+                        <div style="font-size: 28px; margin-bottom: 6px;"><i class="fa-solid fa-cloud-arrow-down" style="color: #06b6d4;"></i></div>
+                        <div style="font-weight: 600; color: #fff;">No downloaded source videos yet</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                            When you paste a YouTube URL and generate clips, the source video will be saved and shown here for instant slicing.
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            downloads.forEach(dl => {
+                const card = document.createElement("div");
+                card.className = "download-card" + (activeSourceFile === dl.name ? " active-source-selected" : "");
+                const dateStr = dl.modified ? new Date(dl.modified * 1000).toLocaleDateString() : "";
+                const thumbSrc = dl.thumbnail || `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=320&auto=format&fit=crop&q=80`;
+
+                card.innerHTML = `
+                    <div class="download-thumb-wrap" onclick="openSourceVideoPlayer('${dl.url}', '${escapeHtml(dl.clean_title)}', '${escapeHtml(dl.name)}')">
+                        <img src="${thumbSrc}" class="download-thumb" alt="Thumbnail" onerror="this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=320&auto=format&fit=crop&q=80'">
+                        <span class="download-size-badge">${dl.size_mb} MB</span>
+                        <div class="download-play-overlay"><i class="fa-solid fa-play"></i></div>
+                    </div>
+                    <div class="download-info">
+                        <div class="download-title" title="${escapeHtml(dl.clean_title)}">${escapeHtml(dl.clean_title)}</div>
+                        <div class="download-meta">
+                            <span>${dl.video_id ? 'ID: ' + escapeHtml(dl.video_id) : 'Local MP4'}</span>
+                            <span>·</span>
+                            <span>${dateStr}</span>
+                            ${dl.duration_formatted ? `<span>·</span><span>${dl.duration_formatted}</span>` : ''}
+                        </div>
+                        <div class="download-actions">
+                            <button type="button" class="btn-clip-action btn-clip-primary" style="flex: 1; font-weight: 700; gap: 6px;" onclick="selectDownloadedSource('${escapeHtml(dl.name)}', '${escapeHtml(dl.clean_title)}', '${dl.video_id || ''}', ${dl.duration || 0})">
+                                <i class="fa-solid fa-scissors"></i> Generate Clips
+                            </button>
+                            <button type="button" class="btn-clip-action" style="padding: 6px 10px;" onclick="openSourceVideoPlayer('${dl.url}', '${escapeHtml(dl.clean_title)}', '${escapeHtml(dl.name)}')" title="Preview source video">
+                                <i class="fa-solid fa-play"></i>
+                            </button>
+                            <button type="button" class="btn-clip-action" style="padding: 6px 10px; color: #f87171; border-color: rgba(239,68,68,0.3);" onclick="confirmDeleteDownloadedSource('${escapeHtml(dl.name)}')" title="Delete from disk">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        async function selectDownloadedSource(filename, cleanTitle, videoId, duration) {
+            activeSourceFile = filename;
+
+            // Highlight in downloads grid
+            renderDownloadsList(availableDownloadsList);
+
+            // Update active source banner
+            const banner = $("activeSourceBanner");
+            if (banner) {
+                banner.style.display = "flex";
+                $("activeSourceTitle").textContent = cleanTitle || filename;
+                $("activeSourceMeta").textContent = `${filename} · Fast FFmpeg Slicing (no download needed)`;
+            }
+
+            // Fill title input
+            if (cleanTitle) {
+                $("titleInput").value = cleanTitle;
+            }
+
+            // If we have videoId, pre-fill YouTube URL
+            if (videoId) {
+                $("urlInput").value = `https://www.youtube.com/watch?v=${videoId}`;
+                $("previewThumb").src = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+                $("previewTitle").textContent = cleanTitle;
+                $("previewCard").classList.add("active");
+            } else {
+                $("urlInput").value = `local://${filename}`;
+                $("previewCard").classList.remove("active");
+            }
+
+            // Fetch duration & info
+            try {
+                const infoRes = await fetch(`/api/downloads/${encodeURIComponent(filename)}/info`);
+                if (infoRes.ok) {
+                    const info = await infoRes.json();
+                    if (info.duration && info.duration > 0) {
+                        const maxSec = Math.floor(info.duration);
+                        $("endTime").placeholder = `Max: ${maxSec}s`;
+                        if ($("previewDuration")) $("previewDuration").textContent = info.duration_formatted;
+                    }
+                }
+            } catch (_) {}
+
+            showToast(`Loaded source: "${cleanTitle || filename}". Ready to generate new clips!`);
+
+            // Scroll down smoothly to Timeline Range
+            const timeCard = $("startTime").closest(".card");
+            if (timeCard) {
+                timeCard.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
+        }
+
+        function clearSelectedDownloadedSource() {
+            activeSourceFile = null;
+            const banner = $("activeSourceBanner");
+            if (banner) banner.style.display = "none";
+            $("urlInput").value = "";
+            $("previewCard").classList.remove("active");
+            renderDownloadsList(availableDownloadsList);
+            showToast("Cleared downloaded source selection. Enter a YouTube URL to download a new video.");
+        }
+
+        async function confirmDeleteDownloadedSource(filename) {
+            if (!confirm(`Are you sure you want to delete "${filename}" from data/downloads?`)) return;
+            try {
+                const res = await fetch(`/api/media/downloads?filename=${encodeURIComponent(filename)}`, { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to delete file");
+                showToast(`Deleted ${filename} (${data.freed_mb} MB freed)`);
+                if (activeSourceFile === filename) {
+                    clearSelectedDownloadedSource();
+                }
+                loadAvailableDownloads();
+                loadStorageData();
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        function openSourceVideoPlayer(url, title, filename) {
+            const modal = $("sourcePlayerModal");
+            const video = $("sourcePlayerVideo");
+            const titleEl = $("sourcePlayerTitle");
+            const useBtn = $("sourcePlayerUseBtn");
+
+            titleEl.textContent = title || filename || "Source Video";
+            video.src = url;
+            video.play().catch(() => {});
+            useBtn.onclick = () => {
+                forceCloseSourcePlayerModal();
+                selectDownloadedSource(filename, title);
+            };
+
+            modal.classList.add("active");
+        }
+
+        function closeSourcePlayerModal(event) {
+            if (event.target === $("sourcePlayerModal")) {
+                forceCloseSourcePlayerModal();
+            }
+        }
+
+        function forceCloseSourcePlayerModal() {
+            const modal = $("sourcePlayerModal");
+            const video = $("sourcePlayerVideo");
+            if (video) {
+                video.pause();
+                video.removeAttribute("src");
+                video.load();
+            }
+            if (modal) modal.classList.remove("active");
+        }
 
         // Style Selector
         function selectStyle(style) {
@@ -1728,6 +2520,12 @@
         // Instant YouTube Metadata Preview
         $("urlInput").addEventListener("input", debounce(async () => {
             const url = $("urlInput").value.trim();
+            if (activeSourceFile && url && !url.includes(activeSourceFile)) {
+                activeSourceFile = null;
+                const banner = $("activeSourceBanner");
+                if (banner) banner.style.display = "none";
+                renderDownloadsList(availableDownloadsList);
+            }
             if (!url || !url.startsWith("http")) {
                 $("previewCard").classList.remove("active");
                 $("cachePill").classList.remove("active");
@@ -1752,9 +2550,9 @@
                 if (!res.ok) throw new Error(data.detail || "Preview unavailable");
 
                 $("previewTitle").textContent = data.title;
-                $("previewChannel").textContent = `👤 ${data.channel}`;
+                $("previewChannel").innerHTML = `<i class="fa-solid fa-user"></i> ${escapeHtml(data.channel)}`;
                 $("previewDuration").textContent = data.duration_formatted;
-                $("previewViews").textContent = data.view_count ? `👁 ${Number(data.view_count).toLocaleString()} views` : "YouTube Video";
+                $("previewViews").innerHTML = data.view_count ? `<i class="fa-solid fa-eye"></i> ${Number(data.view_count).toLocaleString()} views` : "YouTube Video";
                 if (data.thumbnail) $("previewThumb").src = data.thumbnail;
 
                 // Sync video title if still default
@@ -1773,7 +2571,7 @@
                 }
             } catch (err) {
                 if (err.name !== "AbortError") {
-                    $("previewTitle").textContent = "⚠️ Unable to preview URL";
+                    $("previewTitle").innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b;"></i> Unable to preview URL`;
                     $("previewChannel").textContent = err.message;
                     $("previewDuration").textContent = "--:--";
                     $("previewViews").textContent = "Verify YouTube URL or cookies";
@@ -1803,9 +2601,9 @@
             submitBtn.disabled  = true;
 
             if (isPreview) {
-                previewBtn.innerHTML = `⏳ Rendering…`;
+                previewBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Rendering…`;
             } else {
-                submitBtn.innerHTML = `<span>⏳ Processing…</span>`;
+                submitBtn.innerHTML = `<span><i class="fa-solid fa-spinner fa-spin"></i> Processing…</span>`;
             }
 
             $("progressMessage").textContent = isPreview ? "Generating preview clip…" : "Submitting job…";
@@ -1818,8 +2616,18 @@
             lastSubmittedUrl  = url;
             lastJobWasPreview = isPreview;
 
+            if (!activeSourceFile && (!url || url.startsWith("local://"))) {
+                showToast("Please enter a YouTube video URL or select a downloaded source video above.");
+                previewBtn.disabled = false;
+                submitBtn.disabled  = false;
+                previewBtn.innerHTML = `<i class="fa-solid fa-flask"></i> Preview Clip 1`;
+                submitBtn.innerHTML  = `<span><i class="fa-solid fa-bolt"></i> Generate All Clips</span>`;
+                return;
+            }
+
             const payload = {
-                url,
+                url: url.startsWith("local://") ? "" : url,
+                source_file: activeSourceFile || null,
                 title: $("titleInput").value.trim(),
                 clip_length: Number($("clipLength").value),
                 max_clips: Number($("maxClips").value),
@@ -1850,8 +2658,8 @@
                 showToast(`Error: ${err.message}`);
                 previewBtn.disabled = false;
                 submitBtn.disabled  = false;
-                previewBtn.innerHTML = `🧪 Preview Clip 1`;
-                submitBtn.innerHTML  = `<span>⚡ Generate All Clips</span>`;
+                previewBtn.innerHTML = `<i class="fa-solid fa-flask"></i> Preview Clip 1`;
+                submitBtn.innerHTML  = `<span><i class="fa-solid fa-bolt"></i> Generate All Clips</span>`;
             }
         }
 
@@ -1884,8 +2692,8 @@
                         clearInterval(pollTimer);
                         $("previewBtn").disabled = false;
                         $("submitBtn").disabled  = false;
-                        $("previewBtn").innerHTML = `🧪 Preview Clip 1`;
-                        $("submitBtn").innerHTML  = `<span>⚡ Generate All Clips</span>`;
+                        $("previewBtn").innerHTML = `<i class="fa-solid fa-flask"></i> Preview Clip 1`;
+                        $("submitBtn").innerHTML  = `<span><i class="fa-solid fa-bolt"></i> Generate All Clips</span>`;
 
                         // Refresh cache pill after any successful job
                         if (job.status === "completed" && lastSubmittedUrl) {
@@ -1895,10 +2703,12 @@
                         if (job.status === "completed") {
                             showToast(
                                 isPreview
-                                    ? "✅ Preview clip ready! Check it out below."
-                                    : `✅ Created ${job.files.length} vertical clip(s)!`
+                                    ? "Preview clip ready! Check it out below."
+                                    : `Created ${job.files.length} vertical clip(s)!`
                             );
                             renderClipsShowcase(jobId, job.files);
+                            loadAvailableDownloads();
+                            loadStorageData();
 
                             if (isPreview && job.files.length > 0) {
                                 // Auto-open the smartphone modal for the preview clip
@@ -1915,8 +2725,8 @@
                     $("progressMessage").textContent = `Error: ${err.message}`;
                     $("previewBtn").disabled = false;
                     $("submitBtn").disabled  = false;
-                    $("previewBtn").innerHTML = `🧪 Preview Clip 1`;
-                    $("submitBtn").innerHTML  = `<span>⚡ Generate All Clips</span>`;
+                    $("previewBtn").innerHTML = `<i class="fa-solid fa-flask"></i> Preview Clip 1`;
+                    $("submitBtn").innerHTML  = `<span><i class="fa-solid fa-bolt"></i> Generate All Clips</span>`;
                 }
             };
 
@@ -1926,16 +2736,32 @@
 
         // Render Clips Showcase
         function renderClipsShowcase(jobId, files) {
+            currentGeneratedJobId = jobId || "";
+            currentGeneratedFiles = files || [];
             const container = $("clipsGrid");
             container.replaceChildren();
+
+            const publishAllBtn = $("publishAllBtn");
+            const publishAllCount = $("publishAllCount");
+            const clearAllClipsBtn = $("clearAllClipsBtn");
 
             if (!files || files.length === 0) {
                 container.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; padding: 30px; color: var(--text-muted);">No clips returned.</div>`;
                 $("clipCountBadge").textContent = `0 Clips`;
+                if (publishAllBtn) publishAllBtn.style.display = "none";
+                if (clearAllClipsBtn) clearAllClipsBtn.style.display = "none";
                 return;
             }
 
             $("clipCountBadge").textContent = `${files.length} Clip${files.length > 1 ? 's' : ''}`;
+            if ($("pipelineClCount")) $("pipelineClCount").textContent = files.length;
+            if (publishAllBtn && publishAllCount) {
+                publishAllCount.textContent = files.length;
+                publishAllBtn.style.display = "inline-flex";
+            }
+            if (clearAllClipsBtn) {
+                clearAllClipsBtn.style.display = "inline-flex";
+            }
 
             files.forEach((file, index) => {
                 const card = document.createElement("div");
@@ -1943,20 +2769,23 @@
                 card.innerHTML = `
                     <div class="clip-thumb-box" onclick="openPhoneModal('${file.url}', '${escapeHtml(file.name)}')">
                         <video class="clip-thumb-video" src="${file.url}#t=0.5" preload="metadata"></video>
-                        <div class="clip-play-overlay">▶</div>
+                        <div class="clip-play-overlay"><i class="fa-solid fa-play"></i></div>
                         <span class="clip-badge">PART ${index + 1}</span>
                     </div>
                     <div class="clip-info">
                         <div class="clip-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
                         <div class="clip-actions">
                             <button class="btn-clip-action" onclick="openPhoneModal('${file.url}', '${escapeHtml(file.name)}')">
-                                📱 Preview
+                                <i class="fa-solid fa-mobile-screen-button"></i> Preview
                             </button>
                             <a class="btn-clip-action btn-clip-primary" href="${file.url}" download="${escapeHtml(file.name)}">
-                                ⬇ Save
+                                <i class="fa-solid fa-download"></i> Save
                             </a>
                             <button class="btn-clip-action btn-publish-full" onclick="openPublishModal('${jobId}', '${escapeHtml(file.name)}', '${file.url}')">
-                                🚀 One-Click Publish
+                                <i class="fa-solid fa-rocket"></i> Publish
+                            </button>
+                            <button class="btn-clip-action" style="color: #f87171; border-color: rgba(239,68,68,0.25);" onclick="confirmDeleteSingleClip('${escapeHtml(file.name)}')" title="Delete this clip">
+                                <i class="fa-solid fa-trash-can"></i> Delete
                             </button>
                         </div>
                     </div>
@@ -1983,6 +2812,13 @@
             const filename = currentModalFilename;
             forceClosePhoneModal();
             openPublishModal("", filename, url);
+        }
+
+        function deleteFromModal() {
+            if (!currentModalFilename) return;
+            const filename = currentModalFilename;
+            forceClosePhoneModal();
+            confirmDeleteSingleClip(filename);
         }
 
         function closePhoneModal(event) {
@@ -2047,6 +2883,9 @@
         let connectedAccounts = [];
         let selectedPublishAccountIds = new Set();
         let currentPublishTarget = { jobId: "", filename: "", url: "" };
+        let currentGeneratedFiles = [];
+        let currentGeneratedJobId = "";
+        let isBatchPublish = false;
         let publishPollInterval = null;
 
         // Load Accounts on Startup
@@ -2072,7 +2911,7 @@
             if (connectedAccounts.length === 0) {
                 container.innerHTML = `
                     <div style="text-align: center; padding: 32px 16px; color: var(--text-muted); background: var(--bg-surface-elevated); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md);">
-                        <div style="font-size: 32px; margin-bottom: 8px;">📡</div>
+                        <div style="font-size: 32px; margin-bottom: 8px;"><i class="fa-solid fa-tower-broadcast" style="color: #6366f1;"></i></div>
                         <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">No accounts connected yet</div>
                         <div style="font-size: 13px;">Connect your YouTube channels and Instagram accounts using the buttons above.</div>
                     </div>
@@ -2108,10 +2947,10 @@
                     </div>
                     <div style="display: flex; gap: 8px;">
                         <button type="button" class="btn-clip-action" style="padding: 6px 10px; font-size: 12px;" onclick="testAccountHealth('${acc.id}')" title="Test Token Health">
-                            🔄 Test
+                            <i class="fa-solid fa-arrows-rotate"></i> Test
                         </button>
                         <button type="button" class="btn-clip-action" style="padding: 6px 10px; font-size: 12px; color: #f87171;" onclick="disconnectAccount('${acc.id}', '${escapeHtml(acc.alias)}')" title="Disconnect">
-                            ✕ Disconnect
+                            <i class="fa-solid fa-trash-can"></i> Disconnect
                         </button>
                     </div>
                 `;
@@ -2155,10 +2994,10 @@
         window.addEventListener("message", event => {
             if (event.data && event.data.type === "account_connected") {
                 if (event.data.success) {
-                    showToast(`🎉 Connected ${event.data.platform} account successfully!`);
+                    showToast(`Connected ${event.data.platform} account successfully!`);
                     loadConnectedAccounts();
                 } else {
-                    showToast(`⚠️ Connection failed: ${event.data.error || 'Unknown error'}`);
+                    showToast(`Connection failed: ${event.data.error || 'Unknown error'}`);
                 }
             }
         });
@@ -2167,7 +3006,7 @@
         async function testAccountHealth(accountId) {
             const badge = $(`account-status-${accountId}`);
             if (badge) {
-                badge.textContent = "⏳ Testing...";
+                badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Testing...`;
                 badge.className = "badge-token-status";
             }
             try {
@@ -2178,13 +3017,13 @@
                         badge.textContent = "● Valid";
                         badge.className = "badge-token-status badge-token-valid";
                     }
-                    showToast(`✅ ${data.message || "Token is healthy and active"}`);
+                    showToast(data.message || "Token is healthy and active");
                 } else {
                     if (badge) {
                         badge.textContent = "● Invalid";
                         badge.className = "badge-token-status badge-token-invalid";
                     }
-                    showToast(`⚠️ ${data.message || "Token is invalid"}`);
+                    showToast(data.message || "Token is invalid");
                 }
             } catch (err) {
                 if (badge) {
@@ -2242,7 +3081,7 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || "Failed to add account");
 
-                showToast(`✅ Connected account: ${alias}`);
+                showToast(`Connected account: ${alias}`);
                 toggleManualAccountForm();
                 $("manualAlias").value = "";
                 $("manualToken").value = "";
@@ -2257,9 +3096,80 @@
         // ──────────────────────────────────────────────────────────────────────
         // One-Click Multi-Account Publish System
         // ──────────────────────────────────────────────────────────────────────
+        function openBatchPublishModal() {
+            if (!currentGeneratedFiles || currentGeneratedFiles.length === 0) {
+                showToast("No generated clips available to publish.");
+                return;
+            }
+
+            isBatchPublish = true;
+            clearInterval(publishPollInterval);
+
+            // Switch UI views to batch mode
+            $("publishSinglePreviewWrap").style.display = "none";
+            $("publishBatchPreviewWrap").style.display = "flex";
+
+            // Update modal title and subtitle
+            $("publishModalTitleText").textContent = `Publish All Generated Clips (${currentGeneratedFiles.length} clips)`;
+            $("publishModalSubtitleText").textContent = `Automatically publish all ${currentGeneratedFiles.length} clips sequentially across your selected channels.`;
+            $("publishTitleLabel").textContent = "Title Template (YouTube Shorts)";
+            $("publishTitleHint").style.display = "block";
+
+            // Render batch list preview
+            const list = $("publishBatchClipsList");
+            list.innerHTML = "";
+            currentGeneratedFiles.forEach((f, idx) => {
+                const item = document.createElement("div");
+                item.style.cssText = "display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(0,0,0,0.3); padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);";
+                item.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                        <span style="font-weight: 700; color: #a855f7; font-size: 11px; background: rgba(168, 85, 247, 0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(168, 85, 247, 0.3);">PART ${idx + 1}</span>
+                        <span style="font-size: 12px; font-weight: 500; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+                    </div>
+                    <span style="font-size: 10px; color: var(--text-muted); background: rgba(255,255,255,0.05); padding: 2px 5px; border-radius: 3px;">9:16</span>
+                `;
+                list.appendChild(item);
+            });
+
+            // Set suggested default title template
+            const baseVideoTitle = ($("titleInput").value.trim() && $("titleInput").value.trim() !== "My Best Highlights") 
+                ? $("titleInput").value.trim() 
+                : "Highlights";
+            $("publishTitleInput").value = `${baseVideoTitle} - Part {part}`;
+            $("publishCaptionInput").value = `${baseVideoTitle} #Shorts #Reels`;
+
+            // Load saved account selections from localStorage
+            try {
+                const saved = JSON.parse(localStorage.getItem("clipforge_selected_accounts") || "[]");
+                selectedPublishAccountIds = new Set(saved);
+            } catch (_) {
+                selectedPublishAccountIds = new Set();
+            }
+
+            // Render Account Checkboxes
+            renderPublishAccountCheckboxes();
+
+            // Reset progress view
+            $("publishProgressContainer").style.display = "none";
+            $("publishProgressBar").style.width = "0%";
+            $("executePublishBtn").disabled = false;
+
+            $("publishModal").classList.add("active");
+        }
+
         function openPublishModal(jobId, filename, url) {
+            isBatchPublish = false;
             currentPublishTarget = { jobId, filename, url };
             clearInterval(publishPollInterval);
+
+            // Switch UI views to single mode
+            $("publishSinglePreviewWrap").style.display = "block";
+            $("publishBatchPreviewWrap").style.display = "none";
+
+            $("publishModalTitleText").textContent = "One-Click Multi-Account Publish";
+            $("publishModalSubtitleText").textContent = "Publish this clip instantly to multiple YouTube and Instagram accounts.";
+            $("publishTitleLabel").textContent = "Title Banner (YouTube Shorts)";
+            $("publishTitleHint").style.display = "none";
 
             // Populate Video and Badge
             const video = $("publishModalVideo");
@@ -2284,6 +3194,7 @@
 
             // Reset progress view
             $("publishProgressContainer").style.display = "none";
+            $("publishProgressBar").style.width = "0%";
             $("executePublishBtn").disabled = false;
 
             $("publishModal").classList.add("active");
@@ -2328,8 +3239,8 @@
                 card.id = `pub-card-${acc.id}`;
                 card.onclick = () => togglePublishAccount(acc.id);
                 card.innerHTML = `
-                    <div class="custom-checkbox">${isSelected ? '✓' : ''}</div>
-                    <div style="font-size: 16px;">${isYt ? '▶' : '📷'}</div>
+                    <div class="custom-checkbox">${isSelected ? '<i class="fa-solid fa-check"></i>' : ''}</div>
+                    <div style="font-size: 16px;">${isYt ? '<i class="fa-brands fa-youtube" style="color: #ef4444;"></i>' : '<i class="fa-brands fa-instagram" style="color: #ec4899;"></i>'}</div>
                     <div style="flex: 1; min-width: 0;">
                         <div style="font-weight: 600; font-size: 13px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                             ${escapeHtml(acc.alias)}
@@ -2372,7 +3283,12 @@
         function updateExecutePublishBtn() {
             const count = selectedPublishAccountIds.size;
             const btn = $("executePublishBtn");
-            btn.textContent = `🚀 Publish to Selected (${count} account${count === 1 ? '' : 's'})`;
+            if (isBatchPublish) {
+                const clipCount = currentGeneratedFiles.length;
+                btn.innerHTML = `<span><i class="fa-solid fa-rocket"></i> Publish All ${clipCount} Clips to Selected (${count} account${count === 1 ? '' : 's'})</span>`;
+            } else {
+                btn.innerHTML = `<span><i class="fa-solid fa-rocket"></i> Publish to Selected (${count} account${count === 1 ? '' : 's'})</span>`;
+            }
             btn.disabled = count === 0;
         }
 
@@ -2402,53 +3318,86 @@
                 }
             });
 
-            const payload = {
-                clip_path: currentPublishTarget.filename,
-                title: $("publishTitleInput").value.trim(),
-                caption: $("publishCaptionInput").value.trim(),
-                privacy: $("publishPrivacySelect").value,
-                targets: targets
-            };
-
             const btn = $("executePublishBtn");
             btn.disabled = true;
-            btn.innerHTML = `<span>⏳ Initiating...</span>`;
 
-            // Display progress container
             const progContainer = $("publishProgressContainer");
             progContainer.style.display = "flex";
-            $("publishOverallStatus").textContent = "Dispatching upload jobs...";
-            $("publishOverallPercent").textContent = "0%";
+            $("publishProgressBar").style.width = "0%";
 
-            renderLiveTargetsProgress(targets.map(t => {
-                const acc = connectedAccounts.find(a => a.id === t.account_id);
-                return {
-                    account_id: t.account_id,
-                    account_alias: acc ? acc.alias : t.platform,
-                    platform: t.platform,
-                    status: "queued",
-                    progress: 0,
-                    url: null,
-                    error: null
+            if (isBatchPublish) {
+                btn.innerHTML = `<span><i class="fa-solid fa-spinner fa-spin"></i> Initiating Batch Publish (${currentGeneratedFiles.length} clips)...</span>`;
+                $("publishOverallStatus").textContent = `Starting batch upload for ${currentGeneratedFiles.length} clips...`;
+                $("publishOverallPercent").textContent = "0%";
+
+                const payload = {
+                    clip_paths: currentGeneratedFiles.map(f => f.name || f.url),
+                    targets: targets,
+                    title_prefix: $("publishTitleInput").value.trim(),
+                    caption: $("publishCaptionInput").value.trim(),
+                    privacy: $("publishPrivacySelect").value
                 };
-            }));
 
-            try {
-                const res = await fetch("/publish", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                const job = await res.json();
-                if (!res.ok) throw new Error(job.detail || "Publish request failed");
+                try {
+                    const res = await fetch("/publish/batch", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    });
+                    const batch = await res.json();
+                    if (!res.ok) throw new Error(batch.detail || "Batch publish failed");
 
-                showToast("🚀 Publishing initiated! Tracking real-time status...");
-                startPublishJobPolling(job.job_id);
-            } catch (err) {
-                btn.disabled = false;
-                updateExecutePublishBtn();
-                $("publishOverallStatus").textContent = `Error: ${err.message}`;
-                showToast(`Publish error: ${err.message}`);
+                    showToast(`Publishing all ${currentGeneratedFiles.length} clips in sequence...`);
+                    startBatchPublishJobPolling(batch.batch_id);
+                } catch (err) {
+                    btn.disabled = false;
+                    updateExecutePublishBtn();
+                    $("publishOverallStatus").textContent = `Error: ${err.message}`;
+                    showToast(`Batch publish error: ${err.message}`);
+                }
+            } else {
+                btn.innerHTML = `<span><i class="fa-solid fa-spinner fa-spin"></i> Initiating...</span>`;
+                $("publishOverallStatus").textContent = "Dispatching upload jobs...";
+                $("publishOverallPercent").textContent = "0%";
+
+                renderLiveTargetsProgress(targets.map(t => {
+                    const acc = connectedAccounts.find(a => a.id === t.account_id);
+                    return {
+                        account_id: t.account_id,
+                        account_alias: acc ? acc.alias : t.platform,
+                        platform: t.platform,
+                        status: "queued",
+                        progress: 0,
+                        url: null,
+                        error: null
+                    };
+                }));
+
+                const payload = {
+                    clip_path: currentPublishTarget.filename,
+                    title: $("publishTitleInput").value.trim(),
+                    caption: $("publishCaptionInput").value.trim(),
+                    privacy: $("publishPrivacySelect").value,
+                    targets: targets
+                };
+
+                try {
+                    const res = await fetch("/publish", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    });
+                    const job = await res.json();
+                    if (!res.ok) throw new Error(job.detail || "Publish request failed");
+
+                    showToast("Publishing initiated! Tracking real-time status...");
+                    startPublishJobPolling(job.job_id);
+                } catch (err) {
+                    btn.disabled = false;
+                    updateExecutePublishBtn();
+                    $("publishOverallStatus").textContent = `Error: ${err.message}`;
+                    showToast(`Publish error: ${err.message}`);
+                }
             }
         }
 
@@ -2462,18 +3411,18 @@
                 const isFailed = t.status === "failed";
                 const isUploading = t.status === "uploading" || t.status === "processing";
 
-                let statusBadge = `<span style="font-size: 12px; color: var(--text-muted);">⏳ Queued</span>`;
+                let statusBadge = `<span style="font-size: 12px; color: var(--text-muted);"><i class="fa-regular fa-clock"></i> Queued</span>`;
                 if (isUploading) {
-                    statusBadge = `<span style="font-size: 12px; color: var(--primary);">🔄 Uploading (${t.progress || 0}%)</span>`;
+                    statusBadge = `<span style="font-size: 12px; color: var(--primary);"><i class="fa-solid fa-arrows-rotate fa-spin"></i> Uploading (${t.progress || 0}%)</span>`;
                 } else if (isSuccess) {
-                    statusBadge = `<span style="font-size: 12px; color: var(--success); font-weight: 700;">✅ Published</span>`;
+                    statusBadge = `<span style="font-size: 12px; color: var(--success); font-weight: 700;"><i class="fa-solid fa-circle-check"></i> Published</span>`;
                 } else if (isFailed) {
-                    statusBadge = `<span style="font-size: 12px; color: var(--danger); font-weight: 700;">❌ Failed</span>`;
+                    statusBadge = `<span style="font-size: 12px; color: var(--danger); font-weight: 700;"><i class="fa-solid fa-circle-xmark"></i> Failed</span>`;
                 }
 
                 let linkHtml = "";
                 if (isSuccess && t.url) {
-                    linkHtml = `<a class="target-status-link" href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer">🔗 View ${isYt ? 'Short' : 'Reel'}</a>`;
+                    linkHtml = `<a class="target-status-link" href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square"></i> View ${isYt ? 'Short' : 'Reel'}</a>`;
                 } else if (isFailed && t.error) {
                     linkHtml = `<span style="font-size: 11px; color: #f87171;" title="${escapeHtml(t.error)}">${escapeHtml(t.error.slice(0, 75))}</span>`;
                 }
@@ -2483,7 +3432,7 @@
                 item.innerHTML = `
                     <div class="target-status-top">
                         <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 15px;">${isYt ? '▶' : '📷'}</span>
+                            <span style="font-size: 15px;">${isYt ? '<i class="fa-brands fa-youtube" style="color: #ef4444;"></i>' : '<i class="fa-brands fa-instagram" style="color: #ec4899;"></i>'}</span>
                             <span style="font-weight: 600; font-size: 13px; color: #fff;">${escapeHtml(t.account_alias || t.platform)}</span>
                         </div>
                         <div>${statusBadge}</div>
@@ -2492,6 +3441,128 @@
                 `;
                 list.appendChild(item);
             });
+        }
+
+        function renderLiveBatchProgress(batch) {
+            const list = $("publishTargetsProgressList");
+            list.innerHTML = "";
+
+            if (!batch || !batch.clips) return;
+
+            batch.clips.forEach((clip, clipIdx) => {
+                const clipCard = document.createElement("div");
+                clipCard.style.cssText = "background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px; display: flex; flex-direction: column; gap: 8px;";
+
+                // Clip header with Part badge and filename
+                const clipHeader = document.createElement("div");
+                clipHeader.style.cssText = "display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px;";
+                clipHeader.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--accent-pink); background: rgba(236,72,153,0.15); padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(236,72,153,0.3);">PART ${clipIdx + 1}</span>
+                        <span style="font-size: 13px; font-weight: 600; color: #fff;">${escapeHtml(clip.clip_name)}</span>
+                    </div>
+                `;
+                clipCard.appendChild(clipHeader);
+
+                // Targets under this clip
+                const targetsContainer = document.createElement("div");
+                targetsContainer.style.cssText = "display: flex; flex-direction: column; gap: 6px;";
+
+                (clip.targets || []).forEach(t => {
+                    const isYt = t.platform === "youtube";
+                    const isSuccess = t.status === "success";
+                    const isFailed = t.status === "failed";
+                    const isUploading = t.status === "uploading" || t.status === "processing";
+
+                    let statusBadge = `<span style="font-size: 11px; color: var(--text-muted);"><i class="fa-regular fa-clock"></i> Queued</span>`;
+                    if (isUploading) {
+                        statusBadge = `<span style="font-size: 11px; color: var(--primary); font-weight: 600;"><i class="fa-solid fa-arrows-rotate fa-spin"></i> Uploading (${t.progress || 0}%)</span>`;
+                    } else if (isSuccess) {
+                        statusBadge = `<span style="font-size: 11px; color: var(--success); font-weight: 700;"><i class="fa-solid fa-circle-check"></i> Published</span>`;
+                    } else if (isFailed) {
+                        statusBadge = `<span style="font-size: 11px; color: var(--danger); font-weight: 700;"><i class="fa-solid fa-circle-xmark"></i> Failed</span>`;
+                    }
+
+                    let linkHtml = "";
+                    if (isSuccess && t.url) {
+                        linkHtml = `<a class="target-status-link" style="padding: 2px 8px; font-size: 11px;" href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square"></i> View ${isYt ? 'Short' : 'Reel'}</a>`;
+                    } else if (isFailed && t.error) {
+                        linkHtml = `<span style="font-size: 11px; color: #f87171;" title="${escapeHtml(t.error)}">${escapeHtml(t.error.slice(0, 60))}</span>`;
+                    }
+
+                    const tRow = document.createElement("div");
+                    tRow.style.cssText = `display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; border-radius: 6px; background: ${isSuccess ? 'rgba(16,185,129,0.08)' : isFailed ? 'rgba(239,68,68,0.08)' : 'rgba(0,0,0,0.2)'}; border: 1px solid ${isSuccess ? 'rgba(16,185,129,0.2)' : isFailed ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.04)'};`;
+                    tRow.innerHTML = `
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 13px;">${isYt ? '<i class="fa-brands fa-youtube" style="color: #ef4444;"></i>' : '<i class="fa-brands fa-instagram" style="color: #ec4899;"></i>'}</span>
+                            <span style="font-size: 12px; color: #e5e7eb; font-weight: 500;">${escapeHtml(t.account_alias || t.platform)}</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            ${linkHtml}
+                            ${statusBadge}
+                        </div>
+                    `;
+                    targetsContainer.appendChild(tRow);
+                });
+
+                clipCard.appendChild(targetsContainer);
+                list.appendChild(clipCard);
+            });
+        }
+
+        function startBatchPublishJobPolling(batchId) {
+            clearInterval(publishPollInterval);
+
+            const check = async () => {
+                try {
+                    const res = await fetch(`/publish/batch/${batchId}/status`);
+                    const batch = await res.json();
+                    if (!res.ok) throw new Error(batch.detail || "Batch status fetch failed");
+
+                    renderLiveBatchProgress(batch);
+
+                    // Compute total target actions
+                    let totalTargets = 0;
+                    let finishedTargets = 0;
+                    let successTargets = 0;
+                    let currentUploadingClip = "";
+
+                    (batch.clips || []).forEach(c => {
+                        (c.targets || []).forEach(t => {
+                            totalTargets++;
+                            if (t.status === "success" || t.status === "failed") {
+                                finishedTargets++;
+                                if (t.status === "success") successTargets++;
+                            } else if (t.status === "uploading" && !currentUploadingClip) {
+                                currentUploadingClip = c.clip_name;
+                            }
+                        });
+                    });
+
+                    const pct = totalTargets > 0 ? Math.floor((finishedTargets / totalTargets) * 100) : 0;
+                    $("publishOverallPercent").textContent = `${pct}%`;
+                    $("publishProgressBar").style.width = `${pct}%`;
+
+                    if (batch.all_done) {
+                        clearInterval(publishPollInterval);
+                        $("publishOverallStatus").textContent = `All ${batch.total_clips} clips published! (${successTargets}/${totalTargets} successful)`;
+                        $("publishOverallPercent").textContent = "100%";
+                        $("publishProgressBar").style.width = "100%";
+                        $("executePublishBtn").disabled = false;
+                        $("executePublishBtn").innerHTML = `<span><i class="fa-solid fa-rocket"></i> Publish Again</span>`;
+                        showToast(`Batch publishing completed! ${successTargets} target(s) published successfully.`);
+                    } else if (currentUploadingClip) {
+                        $("publishOverallStatus").textContent = `Publishing ${currentUploadingClip}... (${finishedTargets}/${totalTargets} done)`;
+                    } else {
+                        $("publishOverallStatus").textContent = `Processing batch (${finishedTargets}/${totalTargets} done)...`;
+                    }
+                } catch (err) {
+                    console.error("Batch publish polling error:", err);
+                }
+            };
+
+            check();
+            publishPollInterval = setInterval(check, 2500);
         }
 
         function startPublishJobPolling(jobId) {
@@ -2509,15 +3580,16 @@
                     const finished = job.targets ? job.targets.filter(t => t.status === "success" || t.status === "failed").length : 0;
                     const pct = Math.floor((finished / total) * 100);
                     $("publishOverallPercent").textContent = `${pct}%`;
+                    $("publishProgressBar").style.width = `${pct}%`;
 
                     if (job.all_done) {
                         clearInterval(publishPollInterval);
                         $("publishOverallStatus").textContent = "All publish targets completed!";
                         $("executePublishBtn").disabled = false;
-                        $("executePublishBtn").innerHTML = `<span>🚀 Publish Again</span>`;
+                        $("executePublishBtn").innerHTML = `<span><i class="fa-solid fa-rocket"></i> Publish Again</span>`;
 
                         const successCount = job.targets.filter(t => t.status === "success").length;
-                        showToast(`🎉 Published to ${successCount} of ${total} account(s)!`);
+                        showToast(`Published to ${successCount} of ${total} account(s)!`);
                     }
                 } catch (err) {
                     console.error("Publish polling error:", err);
@@ -2556,7 +3628,7 @@
                 if (records.length === 0) {
                     container.innerHTML = `
                         <div style="text-align: center; padding: 36px 16px; color: var(--text-muted); background: var(--bg-surface-elevated); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md);">
-                            <div style="font-size: 32px; margin-bottom: 8px;">📜</div>
+                            <div style="font-size: 32px; margin-bottom: 8px;"><i class="fa-solid fa-clock-rotate-left" style="color: #a855f7;"></i></div>
                             <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">No publish history yet</div>
                             <div style="font-size: 13px;">Generate vertical clips and use One-Click Publish to publish to YouTube and Instagram!</div>
                         </div>
@@ -2575,16 +3647,16 @@
                         const isYt = t.platform === "youtube";
                         const isSuccess = t.status === "success";
                         const badge = isSuccess
-                            ? `<span style="color: #34d399; font-size: 11px; font-weight: 700;">✅ Success</span>`
-                            : `<span style="color: #f87171; font-size: 11px; font-weight: 700;">❌ Failed</span>`;
+                            ? `<span style="color: #34d399; font-size: 11px; font-weight: 700;"><i class="fa-solid fa-circle-check"></i> Success</span>`
+                            : `<span style="color: #f87171; font-size: 11px; font-weight: 700;"><i class="fa-solid fa-circle-xmark"></i> Failed</span>`;
                         const link = (isSuccess && t.url)
-                            ? `<a class="target-status-link" href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer">🔗 View Link</a>`
+                            ? `<a class="target-status-link" href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square"></i> View Link</a>`
                             : (t.error ? `<span style="font-size: 11px; color: #f87171;" title="${escapeHtml(t.error)}">${escapeHtml(t.error.slice(0, 45))}</span>` : '');
 
                         targetsHtml += `
                             <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
                                 <div style="display: flex; align-items: center; gap: 8px;">
-                                    <span>${isYt ? '▶' : '📷'}</span>
+                                    <span>${isYt ? '<i class="fa-brands fa-youtube" style="color: #ef4444;"></i>' : '<i class="fa-brands fa-instagram" style="color: #ec4899;"></i>'}</span>
                                     <span style="font-weight: 600; font-size: 13px; color: #fff;">${escapeHtml(t.account_alias || t.platform)}</span>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 12px;">
@@ -2598,11 +3670,11 @@
                     card.innerHTML = `
                         <div class="history-card-header">
                             <div>
-                                <div style="font-weight: 700; font-size: 14px; color: #fff;">🎬 ${escapeHtml(rec.clip_name || 'Clip')}</div>
+                                <div style="font-weight: 700; font-size: 14px; color: #fff;"><i class="fa-solid fa-film" style="color: #a855f7;"></i> ${escapeHtml(rec.clip_name || 'Clip')}</div>
                                 <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${dateStr} · Job ${escapeHtml((rec.job_id || '').slice(0, 8))}</div>
                             </div>
                             <button type="button" class="btn-clip-action" style="padding: 4px 8px; font-size: 11px; color: #f87171;" onclick="deleteHistoryRecord('${rec.job_id}')" title="Delete Log">
-                                🗑 Delete
+                                <i class="fa-solid fa-trash-can"></i> Delete
                             </button>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 6px;">
@@ -2618,6 +3690,245 @@
             }
         }
 
+        // ──────────────────────────────────────────────────────────────────────
+        // Storage & Media Manager System
+        // ──────────────────────────────────────────────────────────────────────
+        function openStorageModal() {
+            $("storageModal").classList.add("active");
+            loadStorageData();
+        }
+
+        function closeStorageModal(event) {
+            if (event.target === $("storageModal")) forceCloseStorageModal();
+        }
+
+        function forceCloseStorageModal() {
+            $("storageModal").classList.remove("active");
+        }
+
+        function switchStorageTab(tab) {
+            const dlBtn = $("tabDownloadsBtn");
+            const clBtn = $("tabClipsBtn");
+            const dlSec = $("storageDownloadsSection");
+            const clSec = $("storageClipsSection");
+
+            if (tab === "downloads") {
+                dlBtn.classList.add("active");
+                clBtn.classList.remove("active");
+                dlSec.style.display = "flex";
+                clSec.style.display = "none";
+            } else {
+                clBtn.classList.add("active");
+                dlBtn.classList.remove("active");
+                clSec.style.display = "flex";
+                dlSec.style.display = "none";
+            }
+        }
+
+        async function loadStorageData(showToastNotification = false) {
+            try {
+                const res = await fetch("/api/media/storage");
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // Update Stats Badges
+                if ($("headerStorageMb")) $("headerStorageMb").textContent = `${data.total_storage_mb || 0} MB`;
+                $("storageTotalMb").textContent = `${data.total_storage_mb || 0} MB`;
+                $("storageDownloadsMb").textContent = `${data.total_downloads_mb || 0} MB`;
+                $("storageDownloadsCount").textContent = `${(data.downloads || []).length} file(s)`;
+                $("storageClipsMb").textContent = `${data.total_clips_mb || 0} MB`;
+                $("storageClipsCount").textContent = `${(data.clips || []).length} clip(s)`;
+                $("tabDlCount").textContent = (data.downloads || []).length;
+                $("tabClCount").textContent = (data.clips || []).length;
+
+                // Render Downloads List
+                const dlContainer = $("storageDownloadsList");
+                dlContainer.innerHTML = "";
+                if (!data.downloads || data.downloads.length === 0) {
+                    dlContainer.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border-subtle); border-radius: var(--radius-sm);">No downloaded source files found in data/downloads.</div>`;
+                } else {
+                    data.downloads.forEach(dl => {
+                        const item = document.createElement("div");
+                        item.className = "storage-file-item";
+                        const dateStr = dl.modified ? new Date(dl.modified * 1000).toLocaleString() : "";
+                        item.innerHTML = `
+                            <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+                                <span style="font-size: 18px;"><i class="fa-solid fa-cloud-arrow-down" style="color: #06b6d4;"></i></span>
+                                <div style="min-width: 0;">
+                                    <div style="font-size: 13px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(dl.name)}">
+                                        ${escapeHtml(dl.name)}
+                                    </div>
+                                    <div style="font-size: 11px; color: var(--text-muted);">
+                                        ${dl.size_mb} MB · ${escapeHtml(dl.relative_path || '')} · ${dateStr}
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="button" class="btn-clip-action" style="padding: 6px 12px; font-size: 11px; color: #f87171; border-color: rgba(239,68,68,0.3); white-space: nowrap;" onclick="deleteSpecificDownload('${escapeHtml(dl.name)}')">
+                                <i class="fa-solid fa-trash-can"></i> Delete
+                            </button>
+                        `;
+                        dlContainer.appendChild(item);
+                    });
+                }
+
+                // Render Clips List
+                const clContainer = $("storageClipsList");
+                clContainer.innerHTML = "";
+                if (!data.clips || data.clips.length === 0) {
+                    clContainer.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border-subtle); border-radius: var(--radius-sm);">No vertical clips found in data/clips.</div>`;
+                } else {
+                    data.clips.forEach(cl => {
+                        const item = document.createElement("div");
+                        item.className = "storage-file-item";
+                        const dateStr = cl.modified ? new Date(cl.modified * 1000).toLocaleString() : "";
+                        item.innerHTML = `
+                            <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+                                <span style="font-size: 18px;"><i class="fa-solid fa-film" style="color: #a855f7;"></i></span>
+                                <div style="min-width: 0;">
+                                    <div style="font-size: 13px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(cl.name)}">
+                                        ${escapeHtml(cl.name)}
+                                    </div>
+                                    <div style="font-size: 11px; color: var(--text-muted);">
+                                        ${cl.size_mb} MB · ${escapeHtml(cl.relative_path || '')} · ${dateStr}
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <button type="button" class="btn-clip-action" style="padding: 6px 10px; font-size: 11px;" onclick="openPhoneModal('/media/clips/${escapeHtml(cl.name)}', '${escapeHtml(cl.name)}')">
+                                    <i class="fa-solid fa-mobile-screen-button"></i> Preview
+                                </button>
+                                <button type="button" class="btn-clip-action" style="padding: 6px 12px; font-size: 11px; color: #f87171; border-color: rgba(239,68,68,0.3); white-space: nowrap;" onclick="confirmDeleteSingleClip('${escapeHtml(cl.name)}')">
+                                    <i class="fa-solid fa-trash-can"></i> Delete
+                                </button>
+                            </div>
+                        `;
+                        clContainer.appendChild(item);
+                    });
+                }
+
+                if (showToastNotification) showToast("Storage data refreshed");
+            } catch (err) {
+                console.error("Failed to load storage metrics:", err);
+            }
+        }
+
+        async function deleteSpecificDownload(filename) {
+            if (!confirm(`Delete downloaded source file "${filename}"?`)) return;
+            try {
+                const res = await fetch(`/api/media/downloads?filename=${encodeURIComponent(filename)}`, { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to delete file");
+                showToast(`Deleted ${filename} (${data.freed_mb} MB freed)`);
+                if (activeSourceFile === filename) {
+                    clearSelectedDownloadedSource();
+                }
+                loadAvailableDownloads();
+                loadStorageData();
+                if (lastSubmittedUrl) checkCacheStatus(lastSubmittedUrl);
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        async function confirmClearDownloads() {
+            if (!confirm("Are you sure you want to delete ALL downloaded source videos from data/downloads? This will clear download caches and free up disk space.")) return;
+            try {
+                const res = await fetch("/api/media/downloads", { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to clear downloads");
+                showToast(`Cleared ${data.deleted_count} download file(s) (${data.freed_mb} MB freed)`);
+                clearSelectedDownloadedSource();
+                loadAvailableDownloads();
+                loadStorageData();
+                if (lastSubmittedUrl) checkCacheStatus(lastSubmittedUrl);
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        async function confirmDeleteSingleClip(filename) {
+            if (!confirm(`Permanently delete generated clip "${filename}"?`)) return;
+            try {
+                const res = await fetch(`/api/media/clips?filename=${encodeURIComponent(filename)}`, { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to delete clip");
+                showToast(`Deleted clip ${filename} (${data.freed_mb} MB freed)`);
+
+                // Remove from in-memory clips list
+                currentGeneratedFiles = currentGeneratedFiles.filter(f => f.name !== filename && f.url !== `/media/clips/${filename}`);
+                renderClipsShowcase(currentGeneratedJobId, currentGeneratedFiles);
+
+                loadStorageData();
+                loadExistingClips();
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        async function confirmDeleteAllClips() {
+            if (!confirm("Are you sure you want to delete ALL generated clips from data/clips? This action cannot be undone.")) return;
+            try {
+                const res = await fetch("/api/media/clips", { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to clear clips");
+                showToast(`Cleared ${data.deleted_count} clip(s) (${data.freed_mb} MB freed)`);
+
+                currentGeneratedFiles = [];
+                renderClipsShowcase("", []);
+
+                loadStorageData();
+                loadExistingClips();
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        async function confirmPurgeAllMedia() {
+            if (!confirm("DANGER: Are you sure you want to delete ALL downloaded source videos AND ALL generated vertical clips? This will completely wipe all local media.")) return;
+            try {
+                const res = await fetch("/api/media/all", { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Failed to purge media");
+                showToast(`Purged all media: ${data.deleted_count} files (${data.freed_mb} MB freed)`);
+
+                clearSelectedDownloadedSource();
+                loadAvailableDownloads();
+
+                currentGeneratedFiles = [];
+                renderClipsShowcase("", []);
+
+                if (lastSubmittedUrl) checkCacheStatus(lastSubmittedUrl);
+                loadStorageData();
+                loadExistingClips();
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
+        async function deleteCurrentCachedSource(event) {
+            if (event) event.stopPropagation();
+            const url = $("urlInput").value.trim();
+            if (!url) return;
+            try {
+                const checkRes = await fetch(`/api/cache-check?url=${encodeURIComponent(url)}`);
+                if (!checkRes.ok) return;
+                const checkData = await checkRes.json();
+                if (!checkData.file) {
+                    showToast("No cached file found for this URL.");
+                    return;
+                }
+                if (!confirm(`Delete cached source video "${checkData.file}"?`)) return;
+                const delRes = await fetch(`/api/media/downloads?filename=${encodeURIComponent(checkData.file)}`, { method: "DELETE" });
+                const delData = await delRes.json();
+                if (!delRes.ok) throw new Error(delData.detail || "Failed to delete cache");
+                showToast(`Deleted cached file (${delData.freed_mb} MB freed)`);
+                $("cachePill").classList.remove("active");
+                loadStorageData();
+            } catch (err) {
+                showToast(`Error: ${err.message}`);
+            }
+        }
+
         // Keyboard ESC handler
         document.addEventListener("keydown", event => {
             if (event.key === "Escape") {
@@ -2625,11 +3936,28 @@
                 forceCloseAccountsModal();
                 forceClosePublishModal();
                 forceCloseHistoryModal();
+                forceCloseStorageModal();
+                forceCloseSourcePlayerModal();
             }
         });
 
-        // Initialize Accounts on Page Load
+        // Check and load existing clips from previous generation runs
+        async function loadExistingClips() {
+            try {
+                const res = await fetch("/api/clips");
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.clips && data.clips.length > 0 && currentGeneratedFiles.length === 0) {
+                    renderClipsShowcase("", data.clips);
+                }
+            } catch (_) {}
+        }
+
+        // Initialize Accounts, Clips, Downloads, and Storage on Page Load
         loadConnectedAccounts();
+        loadExistingClips();
+        loadAvailableDownloads();
+        loadStorageData();
     </script>
 </body>
 

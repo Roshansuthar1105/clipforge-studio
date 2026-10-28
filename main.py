@@ -56,8 +56,10 @@ job_output_dirs = {}
 # --------------------------------------------------
 
 class ClipRequest(BaseModel):
-    url: str
+    url: str = ""
     title: str = "My Video"
+    source_file: str | None = None
+
 
     clip_length: int = Field(default=30, ge=1, le=600)
     max_clips: int = Field(default=5, ge=1, le=100)
@@ -181,13 +183,27 @@ def extract_video_id(url: str) -> str | None:
     return None
 
 
+def find_file_in_dir(directory: Path, filename: str) -> Path | None:
+    """Find a file by exact name in directory or subdirectories without glob bracket issues."""
+    if not directory.exists():
+        return None
+    safe_name = Path(filename).name
+    direct = directory / safe_name
+    if direct.is_file():
+        return direct
+    for p in directory.rglob("*"):
+        if p.is_file() and p.name == safe_name:
+            return p
+    return None
+
+
 def find_cached_source(download_folder: Path, video_id: str) -> Path | None:
     """
     Search *download_folder* for a previously downloaded file whose name
     contains *[video_id]* and whose size is greater than zero.
     Returns the Path if found, else None.
     """
-    pattern = f"*\[{video_id}\]*"
+    pattern = rf"*\[{video_id}\]*"
     for p in download_folder.glob(f"*{video_id}*"):
         if p.is_file() and p.stat().st_size > 0 and p.suffix.lower() in (".mp4", ".mkv", ".webm"):
             return p
@@ -347,34 +363,44 @@ def process_job(job_id: str, request: ClipRequest):
         job_output_dirs[job_id] = output_folder
 
         # --------------------------------------------------
-        # Derive a stable, video-unique filename
+        # Derive a stable, video-unique filename or reuse existing source
         # --------------------------------------------------
-        video_id = extract_video_id(request.url)
-
-        # Check if we already have this exact video on disk
-        cached = find_cached_source(download_folder, video_id) if video_id else None
-
-        if cached:
-            source_path = cached
+        if request.source_file:
+            source_path = find_file_in_dir(DOWNLOAD_DIR, request.source_file)
+            if not source_path:
+                raise RuntimeError(f"Source file '{Path(request.source_file).name}' not found in downloads folder.")
             update_job(
                 job_id,
                 progress=18,
-                message=f"Reusing cached source: {cached.name}",
+                message=f"Using downloaded source: {source_path.name}",
             )
         else:
-            # Build a filename: "<safe-title> [<video_id>]" or fall back to source_name
-            if video_id:
-                # We'll let yt-dlp fill in the real title; use a placeholder outtmpl
-                # that guarantees the video_id is always in the filename.
-                outtmpl_name = f"%(title).80s [{video_id}].%(ext)s"
-            else:
-                outtmpl_name = f"{safe_name(request.source_name or 'source')}.%(ext)s"
+            video_id = extract_video_id(request.url)
 
-            update_job(
-                job_id,
-                progress=10,
-                message="Downloading source video",
-            )
+            # Check if we already have this exact video on disk
+            cached = find_cached_source(download_folder, video_id) if video_id else None
+
+            if cached:
+                source_path = cached
+                update_job(
+                    job_id,
+                    progress=18,
+                    message=f"Reusing cached source: {cached.name}",
+                )
+            else:
+                # Build a filename: "<safe-title> [<video_id>]" or fall back to source_name
+                if video_id:
+                    # We'll let yt-dlp fill in the real title; use a placeholder outtmpl
+                    # that guarantees the video_id is always in the filename.
+                    outtmpl_name = f"%(title).80s [{video_id}].%(ext)s"
+                else:
+                    outtmpl_name = f"{safe_name(request.source_name or 'source')}.%(ext)s"
+
+                update_job(
+                    job_id,
+                    progress=10,
+                    message="Downloading source video",
+                )
 
             base_dl_opts = {
                 "format": (
@@ -811,7 +837,15 @@ def preview_video(url: str):
 
 @app.post("/api/jobs")
 def create_job(request: ClipRequest):
-    check_url(request.url)
+    if request.source_file:
+        source_path = find_file_in_dir(DOWNLOAD_DIR, request.source_file)
+        if not source_path:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Source file '{Path(request.source_file).name}' not found in downloads folder.",
+            )
+    else:
+        check_url(request.url)
 
     job_id = uuid.uuid4().hex
 
@@ -898,16 +932,251 @@ def download_clip(job_id: str, filename: str):
 @app.get("/media/clips/{filename}")
 def serve_clip_media(filename: str):
     """Serve generated clip video directly by filename for preview or social publishing."""
-    safe_filename = Path(filename).name
-    matches = list(CLIPS_DIR.glob(f"**/{safe_filename}"))
-    if not matches:
+    clip_path = find_file_in_dir(CLIPS_DIR, filename)
+    if not clip_path:
         raise HTTPException(
             status_code=404,
-            detail=f"Clip '{safe_filename}' not found",
+            detail=f"Clip '{Path(filename).name}' not found",
         )
     return FileResponse(
-        matches[0],
+        clip_path,
         media_type="video/mp4",
-        filename=safe_filename,
+        filename=clip_path.name,
     )
+
+
+@app.get("/api/clips")
+def list_available_clips():
+    """List all available generated clips found in the clips directory."""
+    clips = []
+    if CLIPS_DIR.exists():
+        for file in sorted(CLIPS_DIR.glob("**/*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
+            clips.append({
+                "name": file.name,
+                "url": f"/media/clips/{file.name}",
+                "size_mb": round(file.stat().st_size / (1024 * 1024), 2),
+            })
+    return {"clips": clips}
+
+
+@app.get("/media/downloads/{filename}")
+def serve_download_media(filename: str):
+    """Serve downloaded source video directly by filename."""
+    dl_path = find_file_in_dir(DOWNLOAD_DIR, filename)
+    if not dl_path:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Downloaded video '{Path(filename).name}' not found",
+        )
+    return FileResponse(
+        dl_path,
+        media_type="video/mp4",
+        filename=dl_path.name,
+    )
+
+
+@app.get("/api/downloads")
+def list_available_downloads():
+    """List all available downloaded source videos in data/downloads."""
+    files, total_bytes = _scan_directory_files(DOWNLOAD_DIR, allowed_extensions={".mp4", ".mkv", ".webm"})
+    for f in files:
+        f["url"] = f"/media/downloads/{f['name']}"
+    return {
+        "downloads": files,
+        "count": len(files),
+        "total_mb": round(total_bytes / (1024 * 1024), 2),
+    }
+
+
+@app.get("/api/downloads/{filename}/info")
+def get_download_file_info(filename: str):
+    """Get metadata, thumbnail, and probed duration of a downloaded video."""
+    source_path = find_file_in_dir(DOWNLOAD_DIR, filename)
+    if not source_path:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Downloaded video '{Path(filename).name}' not found",
+        )
+
+    vid_match = re.search(r"\[([a-zA-Z0-9_-]{11})\]", source_path.stem)
+    video_id = vid_match.group(1) if vid_match else None
+    clean_title = re.sub(r"\s*\[[a-zA-Z0-9_-]{11}\]", "", source_path.stem).replace("_", " ").strip()
+
+    duration = 0.0
+    try:
+        duration = probe_duration(source_path)
+    except Exception:
+        pass
+
+    mins = int(duration // 60)
+    secs = int(duration % 60)
+    hours = mins // 60
+    mins = mins % 60
+    duration_str = f"{hours}:{mins:02d}:{secs:02d}" if hours > 0 else f"{mins:02d}:{secs:02d}"
+
+    return {
+        "filename": source_path.name,
+        "clean_title": clean_title or source_path.stem,
+        "video_id": video_id,
+        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if video_id else None,
+        "youtube_url": f"https://www.youtube.com/watch?v={video_id}" if video_id else None,
+        "duration": duration,
+        "duration_formatted": duration_str,
+        "size_mb": round(source_path.stat().st_size / (1024 * 1024), 2),
+        "url": f"/media/downloads/{source_path.name}",
+    }
+
+
+def _scan_directory_files(directory: Path, allowed_extensions: set[str] | None = None):
+    files = []
+    total_bytes = 0
+    if directory.exists():
+        for path in sorted(directory.glob("**/*"), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
+            if path.is_file():
+                if allowed_extensions and path.suffix.lower() not in allowed_extensions:
+                    continue
+                try:
+                    stat = path.stat()
+                    size_bytes = stat.st_size
+                    total_bytes += size_bytes
+                    rel = str(path.relative_to(directory)).replace("\\", "/")
+                    vid_match = re.search(r"\[([a-zA-Z0-9_-]{11})\]", path.stem)
+                    video_id = vid_match.group(1) if vid_match else None
+                    clean_title = re.sub(r"\s*\[[a-zA-Z0-9_-]{11}\]", "", path.stem).replace("_", " ").strip()
+                    files.append({
+                        "name": path.name,
+                        "relative_path": rel,
+                        "size_mb": round(size_bytes / (1024 * 1024), 2),
+                        "size_bytes": size_bytes,
+                        "modified": stat.st_mtime,
+                        "video_id": video_id,
+                        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if video_id else None,
+                        "clean_title": clean_title or path.stem,
+                        "youtube_url": f"https://www.youtube.com/watch?v={video_id}" if video_id else None,
+                    })
+                except Exception:
+                    pass
+    return files, total_bytes
+
+
+@app.get("/api/media/storage")
+def get_media_storage():
+    """Return storage metrics and list of all downloaded videos and generated clips."""
+    downloads, dl_bytes = _scan_directory_files(DOWNLOAD_DIR)
+    clips, clip_bytes = _scan_directory_files(CLIPS_DIR, allowed_extensions={".mp4", ".mkv", ".webm"})
+
+    return {
+        "downloads": downloads,
+        "clips": clips,
+        "total_downloads_mb": round(dl_bytes / (1024 * 1024), 2),
+        "total_clips_mb": round(clip_bytes / (1024 * 1024), 2),
+        "total_storage_mb": round((dl_bytes + clip_bytes) / (1024 * 1024), 2),
+    }
+
+
+@app.delete("/api/media/downloads")
+def delete_downloads(filename: str | None = None):
+    """Delete a specific file from data/downloads or clear all downloads."""
+    if not DOWNLOAD_DIR.exists():
+        return {"success": True, "deleted_count": 0, "freed_mb": 0.0, "message": "No downloads directory found"}
+
+    deleted_count = 0
+    freed_bytes = 0
+
+    if filename:
+        p = find_file_in_dir(DOWNLOAD_DIR, filename)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Download file '{Path(filename).name}' not found")
+        try:
+            size = p.stat().st_size
+            p.unlink()
+            freed_bytes += size
+            deleted_count += 1
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to delete {p.name}: {exc}")
+    else:
+        for p in list(DOWNLOAD_DIR.glob("**/*")):
+            if p.is_file():
+                try:
+                    size = p.stat().st_size
+                    p.unlink()
+                    freed_bytes += size
+                    deleted_count += 1
+                except Exception:
+                    pass
+        for d in list(DOWNLOAD_DIR.glob("**/*")):
+            if d.is_dir() and not any(d.iterdir()):
+                try:
+                    d.rmdir()
+                except Exception:
+                    pass
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "freed_mb": round(freed_bytes / (1024 * 1024), 2),
+        "message": f"Deleted {deleted_count} download file(s) ({round(freed_bytes / (1024 * 1024), 2)} MB freed)",
+    }
+
+
+@app.delete("/api/media/clips")
+def delete_clips(filename: str | None = None):
+    """Delete a specific clip from data/clips or clear all generated clips."""
+    if not CLIPS_DIR.exists():
+        return {"success": True, "deleted_count": 0, "freed_mb": 0.0, "message": "No clips directory found"}
+
+    deleted_count = 0
+    freed_bytes = 0
+
+    if filename:
+        p = find_file_in_dir(CLIPS_DIR, filename)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Clip '{Path(filename).name}' not found")
+        try:
+            size = p.stat().st_size
+            p.unlink()
+            freed_bytes += size
+            deleted_count += 1
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to delete {p.name}: {exc}")
+    else:
+        for p in list(CLIPS_DIR.glob("**/*")):
+            if p.is_file():
+                try:
+                    size = p.stat().st_size
+                    p.unlink()
+                    freed_bytes += size
+                    deleted_count += 1
+                except Exception:
+                    pass
+        for d in list(CLIPS_DIR.glob("**/*")):
+            if d.is_dir() and not any(d.iterdir()):
+                try:
+                    d.rmdir()
+                except Exception:
+                    pass
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "freed_mb": round(freed_bytes / (1024 * 1024), 2),
+        "message": f"Deleted {deleted_count} clip(s) ({round(freed_bytes / (1024 * 1024), 2)} MB freed)",
+    }
+
+
+@app.delete("/api/media/all")
+def delete_all_media():
+    """Purge all downloaded source videos and generated clips to free up storage."""
+    res_dl = delete_downloads()
+    res_cl = delete_clips()
+    total_freed = round(res_dl["freed_mb"] + res_cl["freed_mb"], 2)
+    total_count = res_dl["deleted_count"] + res_cl["deleted_count"]
+    return {
+        "success": True,
+        "deleted_count": total_count,
+        "freed_mb": total_freed,
+        "message": f"Purged all media: {total_count} files ({total_freed} MB freed)",
+    }
+
+
 

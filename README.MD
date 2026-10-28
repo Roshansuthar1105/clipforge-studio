@@ -13,6 +13,7 @@ A fast, lightweight studio application for automatically downloading YouTube vid
 - **🚀 One-Click Multi-Account Publishing**: Connect multiple YouTube channels and Instagram accounts. Select targets with checkboxes, customize title/caption, and publish directly to YouTube Shorts and Instagram Reels with a single click.
 - **📡 OAuth 2.0 & Token Health Checking**: Built-in Google and Meta OAuth popup authentication, automatic token refresh for YouTube Data API v3, 60-day long-lived token exchange for Instagram Graph API, and live token validity checks (`🔄 Test`).
 - **📜 Publish History Audit Log**: Automatic persistent tracking of all published clips, target platforms, timestamps, and clickable direct links to published YouTube Shorts and Instagram Reels.
+- **🗑 Media Storage & Cleanup Manager**: Built-in disk space management with one-click deletion of cached downloaded YouTube source videos (`data/downloads`) and rendered 9:16 vertical clips (`data/clips`), individual clip deletion, and storage metrics inspection.
 - **💾 Zero-Database Local Storage**: All account tokens and publishing history are saved locally in clean JSON flat files (`data/accounts.json`, `data/publish_history.json`).
 - **Dynamic Text Overlays**: Title banners and "Part 1, Part 2..." badges rendered directly onto video segments using FFmpeg's `drawtext`.
 - **🎨 Premium Dark Studio UI**: High-end glassmorphic dark interface with real-time multi-stage progress tracking (Queue ➔ Download ➔ Slice ➔ Ready).
@@ -32,6 +33,7 @@ clipforge-studio/
 ├── .env.example               # Template for API keys & OAuth secrets
 ├── .env                       # Local environment variables (kept out of git)
 ├── YOUTUBE_OAUTH_SETUP.md     # Dedicated YouTube / Google OAuth step-by-step guide
+├── INSTAGRAM_OAUTH_SETUP.md   # Dedicated Instagram / Meta Graph API step-by-step guide
 ├── Dockerfile                 # Production container configuration
 │
 ├── accounts/                  # YouTube & Instagram account management
@@ -190,6 +192,10 @@ To enable direct publishing to YouTube Shorts:
 ---
 
 ### Step 4: Getting Your Meta / Instagram Graph API Credentials
+
+> [!TIP]
+> **Detailed Guide Available**: For a comprehensive walkthrough on creating your Meta Business App, linking Instagram to a Facebook Page, setting up ngrok for Reels, and using the Graph API Explorer, see the dedicated guide:  
+> 📖 **[INSTAGRAM_OAUTH_SETUP.md](file:///d:/Projects/clipforge-studio/INSTAGRAM_OAUTH_SETUP.md)**
 
 To enable direct publishing to Instagram Reels:
 
@@ -391,5 +397,5 @@ By default, persistent files are saved in the `data/` directory:
 | **YouTube "Sign in to confirm you’re not a bot"** | ClipForge Studio automatically uses mobile API clients (`android`, `ios`, `mweb`) to bypass bot detection. For age-restricted or private videos, export your YouTube cookies into a `cookies.txt` file (e.g. using the "Get cookies.txt LOCALLY" browser extension) and place it in the project root directory. |
 | **Google OAuth: "Redirect URI mismatch"** | Ensure the redirect URI in your Google Cloud Console exactly matches `http://localhost:8000/accounts/youtube/callback` and `http://127.0.0.1:8000/accounts/youtube/callback`. See detailed fix in [YOUTUBE_OAUTH_SETUP.md](file:///d:/Projects/clipforge-studio/YOUTUBE_OAUTH_SETUP.md#1-error-400-redirect_uri_mismatch). |
 | **Google OAuth: "Access blocked: App has not completed verification"** | When in Testing mode, Google requires adding your Gmail as a **Test User** in Google Cloud Console. See detailed fix in [YOUTUBE_OAUTH_SETUP.md](file:///d:/Projects/clipforge-studio/YOUTUBE_OAUTH_SETUP.md#2-access-blocked-clipforge-studio-has-not-completed-the-google-verification-process-error-403). |
-| **Instagram: "Failed to create container"** | Ensure `PUBLIC_BASE_URL` in `.env` is a publicly accessible HTTPS URL (e.g. using `ngrok http 8000`). Meta cannot download videos from `localhost`. |
-| **Instagram: "No accounts found"** | Verify that your Instagram account is an **Instagram Business or Creator** account and is linked to a **Facebook Page** that you manage. |
+| **Instagram: "Failed to create container"** | Ensure `PUBLIC_BASE_URL` in `.env` is a publicly accessible HTTPS URL (e.g. using `ngrok http 8000`). Meta cannot download videos from `localhost`. See [INSTAGRAM_OAUTH_SETUP.md](file:///d:/Projects/clipforge-studio/INSTAGRAM_OAUTH_SETUP.md#2-instagram-requires-a-publicly-accessible-video-url-but-got-httplocalhost8000). |
+| **Instagram: "No accounts found"** | Verify that your Instagram account is an **Instagram Business or Creator** account and is linked to a **Facebook Page** that you manage. See [INSTAGRAM_OAUTH_SETUP.md](file:///d:/Projects/clipforge-studio/INSTAGRAM_OAUTH_SETUP.md#1-no-instagram-business-or-creator-accounts-linked-to-your-facebook-pages-were-found). |

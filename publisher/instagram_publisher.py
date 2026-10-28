@@ -10,7 +10,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-META_GRAPH_URL = "https://graph.facebook.com/v19.0"
+DEFAULT_META_GRAPH_URL = "https://graph.facebook.com/v19.0"
+INSTAGRAM_GRAPH_URL = "https://graph.instagram.com/v26.0"
+
+
+def get_graph_api_base(token: str) -> str:
+    """
+    Select appropriate Graph API base URL based on token prefix.
+    Instagram direct user tokens (IGAA...) use https://graph.instagram.com/v26.0
+    Facebook page tokens (EAA...) use https://graph.facebook.com/v19.0
+    """
+    if token and token.startswith("IG"):
+        return INSTAGRAM_GRAPH_URL
+    return DEFAULT_META_GRAPH_URL
 
 
 def publish_to_instagram_reel(
@@ -34,6 +46,8 @@ def publish_to_instagram_reel(
     if not ig_user_id or not token:
         raise ValueError("Instagram account is missing channel_id or access_token")
 
+    api_base = get_graph_api_base(token)
+
     if "localhost" in video_public_url or "127.0.0.1" in video_public_url:
         raise ValueError(
             f"Instagram requires a publicly accessible video URL, but got: {video_public_url}. "
@@ -44,7 +58,7 @@ def publish_to_instagram_reel(
     if progress_callback:
         progress_callback(10, "Creating reel container...")
 
-    container_endpoint = f"{META_GRAPH_URL}/{ig_user_id}/media"
+    container_endpoint = f"{api_base}/{ig_user_id}/media"
     container_params = {
         "media_type": "REELS",
         "video_url": video_public_url,
@@ -71,7 +85,7 @@ def publish_to_instagram_reel(
     if progress_callback:
         progress_callback(30, "Waiting for Instagram to process video...")
 
-    poll_url = f"{META_GRAPH_URL}/{container_id}"
+    poll_url = f"{api_base}/{container_id}"
     max_wait_seconds = 180
     start_time = time.time()
     status_code = "IN_PROGRESS"
@@ -107,7 +121,7 @@ def publish_to_instagram_reel(
     if progress_callback:
         progress_callback(90, "Publishing Reel...")
 
-    publish_endpoint = f"{META_GRAPH_URL}/{ig_user_id}/media_publish"
+    publish_endpoint = f"{api_base}/{ig_user_id}/media_publish"
     publish_params = {
         "creation_id": container_id,
         "access_token": token,
@@ -122,7 +136,7 @@ def publish_to_instagram_reel(
     permalink = None
     try:
         media_info = requests.get(
-            f"{META_GRAPH_URL}/{media_id}",
+            f"{api_base}/{media_id}",
             params={"fields": "permalink,id", "access_token": token},
             timeout=10,
         ).json()

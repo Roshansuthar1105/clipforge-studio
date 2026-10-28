@@ -132,8 +132,12 @@ def fetch_instagram_accounts(user_access_token: str) -> list[dict]:
 def check_instagram_token_validity(access_token: str) -> bool:
     """Quick check if token is valid by querying /me."""
     try:
-        url = f"{META_GRAPH_URL}/me"
-        resp = requests.get(url, params={"access_token": access_token}, timeout=10)
+        if access_token.startswith("IG"):
+            url = "https://graph.instagram.com/v26.0/me"
+            resp = requests.get(url, params={"fields": "user_id,username", "access_token": access_token}, timeout=10)
+        else:
+            url = f"{META_GRAPH_URL}/me"
+            resp = requests.get(url, params={"access_token": access_token}, timeout=10)
         return resp.status_code == 200
     except Exception:
         return False

@@ -37,6 +37,15 @@ class PublishRequest(BaseModel):
     privacy: Optional[str] = "public"
 
 
+class BatchPublishRequest(BaseModel):
+    clip_paths: List[str]
+    targets: List[PublishTarget]
+    title_prefix: Optional[str] = None
+    caption: Optional[str] = None
+    privacy: Optional[str] = "public"
+
+
+
 class TargetStatus(BaseModel):
     account_id: str
     account_alias: str
