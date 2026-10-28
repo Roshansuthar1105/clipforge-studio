@@ -65,6 +65,14 @@ def list_history():
     return {"records": records}
 
 
+@router.delete("/history")
+def clear_all_history():
+    """Clear all publish history records."""
+    from storage import save_history
+    save_history([])
+    return {"success": True, "message": "All publish history records cleared"}
+
+
 @router.delete("/history/{job_id}")
 def delete_history_item(job_id: str):
     """Remove a specific publish record from history."""

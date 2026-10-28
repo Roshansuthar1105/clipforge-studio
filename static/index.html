@@ -81,7 +81,10 @@
                                 <i class="fa-solid fa-tower-broadcast"></i> Connected Accounts
                             </button>
                             <button type="button" class="user-dropdown-item" onclick="switchView('jobs')">
-                                <i class="fa-solid fa-clock-rotate-left"></i> My Job Requests
+                                <i class="fa-solid fa-clock-rotate-left"></i> Slicing Requests
+                            </button>
+                            <button type="button" class="user-dropdown-item" onclick="openPublishHistory()">
+                                <i class="fa-solid fa-paper-plane"></i> Social Publishing Activity
                             </button>
                             <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
                             <button type="button" class="user-dropdown-item danger" onclick="handleLogout()">
@@ -269,118 +272,243 @@
              VIEW 2: JOB QUEUE & ACTIVITY TRACKER
              ================================================================== -->
         <section id="view_jobs" class="view-section">
-            <!-- Job Statistics Counters -->
-            <div class="stats-row">
-                <div class="stat-card">
-                    <div class="stat-icon" style="color: var(--primary);"><i class="fa-solid fa-list-check"></i></div>
-                    <div>
-                        <div id="statTotalJobs" class="stat-number">0</div>
-                        <div class="stat-label">Total Requests</div>
+            <!-- Sub-Tabs: Clip Slicing Queue vs Social Publishing Activity -->
+            <div class="library-tabs-bar" style="margin-top: 0; margin-bottom: 24px; border-top: none; padding-top: 0;">
+                <button type="button" id="tabBtnSlicingJobs" class="library-tab-btn active" onclick="switchJobTrackerTab('slicing')">
+                    <i class="fa-solid fa-scissors"></i> Clip Slicing Requests
+                    <span id="jobsCountBadgeTab" class="badge-pill">0</span>
+                </button>
+                <button type="button" id="tabBtnPublishingJobs" class="library-tab-btn" onclick="switchJobTrackerTab('publishing')">
+                    <i class="fa-solid fa-paper-plane"></i> Social Publishing Activity
+                    <span id="publishCountBadgeTab" class="badge-pill">0</span>
+                </button>
+            </div>
+
+            <!-- PANEL 1: CLIP SLICING QUEUE -->
+            <div id="panelSlicingJobs">
+                <!-- Job Statistics Counters -->
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--primary);"><i class="fa-solid fa-list-check"></i></div>
+                        <div>
+                            <div id="statTotalJobs" class="stat-number">0</div>
+                            <div class="stat-label">Total Requests</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--accent-amber);"><i class="fa-solid fa-spinner fa-spin"></i></div>
+                        <div>
+                            <div id="statActiveJobs" class="stat-number">0</div>
+                            <div class="stat-label">In Progress</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--accent-emerald);"><i class="fa-solid fa-circle-check"></i></div>
+                        <div>
+                            <div id="statCompletedJobs" class="stat-number">0</div>
+                            <div class="stat-label">Completed</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--accent-rose);"><i class="fa-solid fa-ban"></i></div>
+                        <div>
+                            <div id="statCancelledJobs" class="stat-number">0</div>
+                            <div class="stat-label">Cancelled / Failed</div>
+                        </div>
                     </div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-icon" style="color: var(--accent-amber);"><i class="fa-solid fa-spinner fa-spin"></i></div>
-                    <div>
-                        <div id="statActiveJobs" class="stat-number">0</div>
-                        <div class="stat-label">In Progress</div>
+
+                <!-- Job Queue Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <h2 class="card-title"><i class="fa-solid fa-list-check" style="color: var(--accent-cyan);"></i> Server Requests & Activity History</h2>
+                            <p class="card-subtitle">All requests are processed continuously in the background on the server. Refreshing or navigating pages will never cancel active tasks.</p>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button type="button" class="btn-secondary" style="padding: 6px 14px; font-size: 12.5px;" onclick="loadJobsList()">
+                                <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                            </button>
+                            <button type="button" class="btn-secondary danger" style="padding: 6px 14px; font-size: 12.5px;" onclick="clearCompletedJobs()">
+                                <i class="fa-solid fa-trash-can"></i> Clear Completed
+                            </button>
+                        </div>
                     </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon" style="color: var(--accent-emerald);"><i class="fa-solid fa-circle-check"></i></div>
-                    <div>
-                        <div id="statCompletedJobs" class="stat-number">0</div>
-                        <div class="stat-label">Completed</div>
+
+                    <!-- Filter & Search Toolbar -->
+                    <div class="jobs-toolbar">
+                        <div class="jobs-filter-tabs">
+                            <button type="button" class="filter-tab-btn active" data-filter="all" onclick="setJobFilter('all')">All (<span id="countFilterAll">0</span>)</button>
+                            <button type="button" class="filter-tab-btn" data-filter="active" onclick="setJobFilter('active')">Active (<span id="countFilterActive">0</span>)</button>
+                            <button type="button" class="filter-tab-btn" data-filter="completed" onclick="setJobFilter('completed')">Completed (<span id="countFilterCompleted">0</span>)</button>
+                            <button type="button" class="filter-tab-btn" data-filter="cancelled" onclick="setJobFilter('cancelled')">Cancelled (<span id="countFilterCancelled">0</span>)</button>
+                        </div>
+                        <div class="jobs-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                            <input id="jobSearchInput" class="form-input search-input" type="text" placeholder="Search requests..." oninput="filterJobsList()">
+                        </div>
                     </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon" style="color: var(--accent-rose);"><i class="fa-solid fa-ban"></i></div>
-                    <div>
-                        <div id="statCancelledJobs" class="stat-number">0</div>
-                        <div class="stat-label">Cancelled / Failed</div>
+
+                    <!-- Jobs Table -->
+                    <div class="jobs-table-wrap">
+                        <table class="jobs-table">
+                            <thead>
+                                <tr>
+                                    <th>Job Title / Source</th>
+                                    <th>Status</th>
+                                    <th>Live Progress</th>
+                                    <th>Clips</th>
+                                    <th>Requested</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jobsTableBody">
+                                <tr>
+                                    <td colspan="6" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                                        <i class="fa-solid fa-spinner fa-spin"></i> Loading job activity...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
 
-            <!-- Job Queue Card -->
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <h2 class="card-title"><i class="fa-solid fa-list-check" style="color: var(--accent-cyan);"></i> Server Requests & Activity History</h2>
-                        <p class="card-subtitle">All requests are processed continuously in the background on the server. Refreshing or navigating pages will never cancel active tasks.</p>
+            <!-- PANEL 2: SOCIAL PUBLISHING ACTIVITY & PROCESS TRACKER -->
+            <div id="panelPublishingJobs" style="display: none;">
+                <!-- Publishing Statistics Counters -->
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--accent-pink);"><i class="fa-solid fa-paper-plane"></i></div>
+                        <div>
+                            <div id="statTotalPublishes" class="stat-number">0</div>
+                            <div class="stat-label">Total Publishes</div>
+                        </div>
                     </div>
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <button type="button" class="btn-secondary" style="padding: 6px 14px; font-size: 12.5px;" onclick="loadJobsList()">
-                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
-                        </button>
-                        <button type="button" class="btn-secondary danger" style="padding: 6px 14px; font-size: 12.5px;" onclick="clearCompletedJobs()">
-                            <i class="fa-solid fa-trash-can"></i> Clear Completed
-                        </button>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--accent-amber);"><i class="fa-solid fa-cloud-arrow-up fa-bounce"></i></div>
+                        <div>
+                            <div id="statActivePublishes" class="stat-number">0</div>
+                            <div class="stat-label">In Progress</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--accent-emerald);"><i class="fa-solid fa-circle-check"></i></div>
+                        <div>
+                            <div id="statSuccessPublishes" class="stat-number">0</div>
+                            <div class="stat-label">Published Successfully</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="color: var(--accent-rose);"><i class="fa-solid fa-circle-exclamation"></i></div>
+                        <div>
+                            <div id="statFailedPublishes" class="stat-number">0</div>
+                            <div class="stat-label">Failed / Quota Limit</div>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Filter & Search Toolbar -->
-                <div class="jobs-toolbar">
-                    <div class="jobs-filter-tabs">
-                        <button type="button" class="filter-tab-btn active" data-filter="all" onclick="setJobFilter('all')">All (<span id="countFilterAll">0</span>)</button>
-                        <button type="button" class="filter-tab-btn" data-filter="active" onclick="setJobFilter('active')">Active (<span id="countFilterActive">0</span>)</button>
-                        <button type="button" class="filter-tab-btn" data-filter="completed" onclick="setJobFilter('completed')">Completed (<span id="countFilterCompleted">0</span>)</button>
-                        <button type="button" class="filter-tab-btn" data-filter="cancelled" onclick="setJobFilter('cancelled')">Cancelled (<span id="countFilterCancelled">0</span>)</button>
+                <!-- Publishing Activity Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <h2 class="card-title"><i class="fa-solid fa-tower-broadcast" style="color: var(--accent-pink);"></i> Social Publishing Activity & History</h2>
+                            <p class="card-subtitle">Real-time status of video uploads to YouTube Shorts, Instagram Reels, and Facebook Pages with direct live post links.</p>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button type="button" class="btn-secondary" style="padding: 6px 14px; font-size: 12.5px;" onclick="loadPublishHistory()">
+                                <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                            </button>
+                            <button type="button" class="btn-secondary danger" style="padding: 6px 14px; font-size: 12.5px;" onclick="clearAllPublishHistory()">
+                                <i class="fa-solid fa-trash-can"></i> Clear History
+                            </button>
+                        </div>
                     </div>
-                    <div class="jobs-search-wrap">
-                        <i class="fa-solid fa-magnifying-glass search-icon"></i>
-                        <input id="jobSearchInput" class="form-input search-input" type="text" placeholder="Search requests..." oninput="filterJobsList()">
-                    </div>
-                </div>
 
-                <!-- Jobs Table -->
-                <div class="jobs-table-wrap">
-                    <table class="jobs-table">
-                        <thead>
-                            <tr>
-                                <th>Job Title / Source</th>
-                                <th>Status</th>
-                                <th>Live Progress</th>
-                                <th>Clips</th>
-                                <th>Requested</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="jobsTableBody">
-                            <tr>
-                                <td colspan="6" style="text-align: center; padding: 40px; color: var(--text-muted);">
-                                    <i class="fa-solid fa-spinner fa-spin"></i> Loading job activity...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <!-- Filter & Search Toolbar -->
+                    <div class="jobs-toolbar">
+                        <div class="jobs-filter-tabs">
+                            <button type="button" class="filter-tab-btn active" data-pubfilter="all" onclick="setPublishFilter('all')">All (<span id="countPubFilterAll">0</span>)</button>
+                            <button type="button" class="filter-tab-btn" data-pubfilter="active" onclick="setPublishFilter('active')">In Progress (<span id="countPubFilterActive">0</span>)</button>
+                            <button type="button" class="filter-tab-btn" data-pubfilter="success" onclick="setPublishFilter('success')">Success (<span id="countPubFilterSuccess">0</span>)</button>
+                            <button type="button" class="filter-tab-btn" data-pubfilter="failed" onclick="setPublishFilter('failed')">Failed (<span id="countPubFilterFailed">0</span>)</button>
+                        </div>
+                        <div class="jobs-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                            <input id="publishSearchInput" class="form-input search-input" type="text" placeholder="Search clip or account..." oninput="filterPublishHistoryList()">
+                        </div>
+                    </div>
+
+                    <!-- Publishing History Table -->
+                    <div class="jobs-table-wrap">
+                        <table class="jobs-table">
+                            <thead>
+                                <tr>
+                                    <th>Clip Name</th>
+                                    <th>Target Channels & Platforms</th>
+                                    <th>Overall Status</th>
+                                    <th>Live Post Links & Diagnostics</th>
+                                    <th>Timestamp</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="publishHistoryTableBody">
+                                <tr>
+                                    <td colspan="6" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                                        <i class="fa-solid fa-spinner fa-spin"></i> Loading publishing activity...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </section>
 
         <!-- ==================================================================
-             VIEW 3: CLIPS LIBRARY
+             VIEW 3: CLIPS & DOWNLOADS LIBRARY
              ================================================================== -->
         <section id="view_library" class="view-section">
             <div class="card" style="margin-bottom: 24px;">
                 <div class="card-header" style="margin-bottom: 0;">
                     <div>
-                        <h2 class="card-title"><i class="fa-solid fa-film" style="color: var(--primary);"></i> Generated Clips Library</h2>
-                        <p class="card-subtitle">Preview, download, or publish your vertical 9:16 reels to YouTube Shorts, Instagram Reels, and Facebook Pages.</p>
+                        <h2 class="card-title"><i class="fa-solid fa-photo-film" style="color: var(--primary);"></i> Media Library</h2>
+                        <p class="card-subtitle">Manage generated vertical 9:16 reels and downloaded source YouTube videos.</p>
                     </div>
-                    <div style="display: flex; gap: 10px;">
-                        <button id="publishAllBtn" type="button" class="btn-primary" style="display: none;" onclick="openSinglePublishModal(state.clips[0]?.name || 'clip.mp4', state.clips[0]?.url || '')">
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <button type="button" class="btn-secondary" style="padding: 6px 14px; font-size: 12.5px;" onclick="openPublishHistory()">
+                            <i class="fa-solid fa-clock-rotate-left"></i> Publish History
+                        </button>
+                        <button id="publishAllBtn" type="button" class="btn-primary" style="display: none;" onclick="openFirstClipPublishModal()">
                             <i class="fa-solid fa-rocket"></i> Publish Clips (<span id="publishAllCount">0</span>)
                         </button>
-                        <button type="button" class="btn-secondary" style="padding: 6px 14px; font-size: 12.5px;" onclick="loadClips()">
+                        <button type="button" class="btn-secondary" style="padding: 6px 14px; font-size: 12.5px;" onclick="refreshActiveLibraryTab()">
                             <i class="fa-solid fa-arrows-rotate"></i> Refresh
                         </button>
                     </div>
                 </div>
+
+                <!-- Sub-Tabs Switcher: Clips vs Source Downloads -->
+                <div class="library-tabs-bar">
+                    <button type="button" id="tabBtnClips" class="library-tab-btn active" onclick="switchLibraryTab('clips')">
+                        <i class="fa-solid fa-film"></i> Generated 9:16 Clips
+                        <span id="clipCountBadge" class="badge-pill">0</span>
+                    </button>
+                    <button type="button" id="tabBtnDownloads" class="library-tab-btn" onclick="switchLibraryTab('downloads')">
+                        <i class="fa-solid fa-cloud-arrow-down"></i> Downloaded Source Videos
+                        <span id="downloadCountBadge" class="badge-pill">0</span>
+                    </button>
+                </div>
             </div>
 
-            <!-- Clips Grid -->
+            <!-- Panel 1: Generated 9:16 Clips Grid -->
             <div id="clipsGrid" class="clips-grid">
-                <!-- Dynamically rendered by app.js -->
+                <!-- Dynamically rendered by app.js loadClips() -->
+            </div>
+
+            <!-- Panel 2: Downloaded Source Videos Grid -->
+            <div id="downloadsGrid" class="clips-grid" style="display: none;">
+                <!-- Dynamically rendered by app.js loadDownloads() -->
             </div>
         </section>
 
@@ -562,45 +690,73 @@
         <div class="modal-card wide" onclick="event.stopPropagation()">
             <button class="modal-close-btn" onclick="closePublishModal()"><i class="fa-solid fa-xmark"></i></button>
 
-            <div class="card-header" style="margin-bottom: 16px;">
-                <div>
-                    <h3 id="publishModalTitleText" class="card-title"><i class="fa-solid fa-rocket" style="color: var(--accent-pink);"></i> Publish Clip to Socials</h3>
-                    <p class="card-subtitle">Direct publishing to connected YouTube Shorts, Instagram Reels, and Facebook Pages.</p>
+            <!-- State 1: Configuration Form -->
+            <div id="publishFormState">
+                <div class="card-header" style="margin-bottom: 16px;">
+                    <div>
+                        <h3 id="publishModalTitleText" class="card-title"><i class="fa-solid fa-rocket" style="color: var(--accent-pink);"></i> Publish Clip to Socials</h3>
+                        <p class="card-subtitle">Direct publishing to connected YouTube Shorts, Instagram Reels, and Facebook Pages.</p>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 160px 1fr; gap: 20px; align-items: start;">
+                    <div style="aspect-ratio: 9/16; background: #000; border-radius: var(--radius-md); overflow: hidden; position: relative;">
+                        <video id="publishModalVideo" style="width: 100%; height: 100%; object-fit: cover;" preload="metadata" muted playsinline></video>
+                        <span id="publishClipBadge" style="position: absolute; bottom: 6px; left: 6px; right: 6px; background: rgba(0,0,0,0.8); color: #fff; font-size: 11px; padding: 3px 6px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;">clip.mp4</span>
+                    </div>
+
+                    <div>
+                        <div class="form-group">
+                            <label class="form-label">Select Target Channels / Accounts</label>
+                            <div id="publishAccountsList" style="max-height: 180px; overflow-y: auto;">
+                                <!-- Dynamically loaded -->
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Caption / Description</label>
+                            <textarea id="publishCaptionInput" class="form-input" rows="3" style="resize: vertical;"></textarea>
+                            <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;">
+                                <button type="button" class="preset-chip" onclick="appendHashtag('#viral')">#viral</button>
+                                <button type="button" class="preset-chip" onclick="appendHashtag('#reels')">#reels</button>
+                                <button type="button" class="preset-chip" onclick="appendHashtag('#shorts')">#shorts</button>
+                                <button type="button" class="preset-chip" onclick="appendHashtag('#trending')">#trending</button>
+                                <button type="button" class="preset-chip" onclick="appendHashtag('#fyp')">#fyp</button>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px;">
+                            <button type="button" class="btn-secondary" onclick="closePublishModal()">Cancel</button>
+                            <button id="publishExecuteBtn" type="button" class="btn-primary" onclick="executePublish()">
+                                <i class="fa-solid fa-paper-plane"></i> Publish Now
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div style="display: grid; grid-template-columns: 160px 1fr; gap: 20px; align-items: start;">
-                <div style="aspect-ratio: 9/16; background: #000; border-radius: var(--radius-md); overflow: hidden; position: relative;">
-                    <video id="publishModalVideo" style="width: 100%; height: 100%; object-fit: cover;" preload="metadata" muted playsinline></video>
-                    <span id="publishClipBadge" style="position: absolute; bottom: 6px; left: 6px; right: 6px; background: rgba(0,0,0,0.8); color: #fff; font-size: 11px; padding: 3px 6px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;">clip.mp4</span>
+            <!-- State 2: Live Publishing Progress & Process Tracker -->
+            <div id="publishProgressState" style="display: none;">
+                <div class="card-header" style="margin-bottom: 16px;">
+                    <div>
+                        <h3 class="card-title"><i class="fa-solid fa-tower-broadcast" style="color: var(--accent-pink);"></i> Social Publishing In Progress</h3>
+                        <p id="publishLiveClipTitle" class="card-subtitle">Dispatching uploads to connected channels...</p>
+                    </div>
+                    <span id="publishOverallBadge" class="progress-status-badge processing">Uploading</span>
                 </div>
 
-                <div>
-                    <div class="form-group">
-                        <label class="form-label">Select Target Channels / Accounts</label>
-                        <div id="publishAccountsList" style="max-height: 180px; overflow-y: auto;">
-                            <!-- Dynamically loaded -->
-                        </div>
-                    </div>
+                <!-- Targets Live Progress Container -->
+                <div id="publishTargetsProgressList" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px;">
+                    <!-- Dynamically rendered and updated by live polling -->
+                </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Caption / Description</label>
-                        <textarea id="publishCaptionInput" class="form-input" rows="3" style="resize: vertical;"></textarea>
-                        <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;">
-                            <button type="button" class="preset-chip" onclick="appendHashtag('#viral')">#viral</button>
-                            <button type="button" class="preset-chip" onclick="appendHashtag('#reels')">#reels</button>
-                            <button type="button" class="preset-chip" onclick="appendHashtag('#shorts')">#shorts</button>
-                            <button type="button" class="preset-chip" onclick="appendHashtag('#trending')">#trending</button>
-                            <button type="button" class="preset-chip" onclick="appendHashtag('#fyp')">#fyp</button>
-                        </div>
-                    </div>
-
-                    <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px;">
-                        <button type="button" class="btn-secondary" onclick="closePublishModal()">Cancel</button>
-                        <button id="publishExecuteBtn" type="button" class="btn-primary" onclick="executePublish()">
-                            <i class="fa-solid fa-paper-plane"></i> Publish Now
-                        </button>
-                    </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 16px; flex-wrap: wrap; gap: 10px;">
+                    <button type="button" class="btn-secondary" onclick="closePublishModal()">
+                        <i class="fa-solid fa-arrow-down-left-and-up-right-to-center"></i> Run in Background
+                    </button>
+                    <button type="button" class="btn-primary" onclick="closePublishModal(); openPublishHistory();">
+                        <i class="fa-solid fa-clock-rotate-left"></i> View Full Publish Activity
+                    </button>
                 </div>
             </div>
         </div>

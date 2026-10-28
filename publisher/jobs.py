@@ -24,30 +24,36 @@ _jobs_lock = threading.Lock()
 
 def resolve_clip_file(clip_path_str: str) -> Path:
     """Find the clip file on disk given a relative or absolute path, or filename."""
-    path = Path(clip_path_str)
+    import urllib.parse
+    unquoted = urllib.parse.unquote(clip_path_str)
+    
+    path = Path(unquoted)
     if path.is_file():
         return path.resolve()
 
+    raw_path = Path(clip_path_str)
+    if raw_path.is_file():
+        return raw_path.resolve()
+
     # Try relative to project root
     project_root = Path(__file__).resolve().parent.parent
-    candidate = project_root / clip_path_str
-    if candidate.is_file():
-        return candidate.resolve()
+    for candidate in [project_root / unquoted, project_root / clip_path_str]:
+        if candidate.is_file():
+            return candidate.resolve()
 
     # Try searching within data/clips
     clips_dir = project_root / "data" / "clips"
     if clips_dir.exists():
-        # Match by name
-        matches = list(clips_dir.glob(f"**/{path.name}"))
-        if matches:
-            return matches[0].resolve()
+        for p in clips_dir.rglob("*"):
+            if p.is_file() and (p.name == path.name or p.name == raw_path.name):
+                return p.resolve()
 
     # Try searching anywhere in data/
     data_dir = project_root / "data"
     if data_dir.exists():
-        matches = list(data_dir.glob(f"**/{path.name}"))
-        if matches:
-            return matches[0].resolve()
+        for p in data_dir.rglob("*"):
+            if p.is_file() and (p.name == path.name or p.name == raw_path.name):
+                return p.resolve()
 
     raise FileNotFoundError(f"Clip file could not be found: '{clip_path_str}'")
 
@@ -253,7 +259,14 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                         job["targets"][i]["status"] = "success"
                         job["targets"][i]["progress"] = 100
                         vid = res.media_id
-                        job["targets"][i]["url"] = f"https://www.facebook.com/{vid}" if vid else f"https://www.facebook.com/{page_id}"
+                        permalink = res.details.get("permalink_url") if res.details else None
+                        if permalink:
+                            fb_url = f"https://www.facebook.com{permalink}" if permalink.startswith("/") else permalink
+                        elif as_reel:
+                            fb_url = f"https://www.facebook.com/reel/{vid}/" if vid else f"https://www.facebook.com/{page_id}"
+                        else:
+                            fb_url = f"https://www.facebook.com/watch/?v={vid}" if vid else f"https://www.facebook.com/{page_id}"
+                        job["targets"][i]["url"] = fb_url
                         job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 else:
                     raise Exception(res.error_message or "Facebook publish failed")

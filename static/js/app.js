@@ -51,8 +51,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Load initial data
     loadClips();
+    loadDownloads();
     loadAccounts();
     loadJobsList();
+    loadPublishHistory();
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -119,9 +121,18 @@ function switchView(viewName, updateHash = true) {
 
     // Trigger data refresh depending on view
     if (viewName === "jobs") {
-        loadJobsList();
+        if (state.activeJobTrackerTab === "publishing") {
+            loadPublishHistory();
+        } else {
+            loadJobsList();
+        }
+        loadPublishHistory();
     } else if (viewName === "library") {
-        loadClips();
+        if (state.activeLibraryTab === "downloads") {
+            loadDownloads();
+        } else {
+            loadClips();
+        }
     } else if (viewName === "accounts") {
         loadAccounts();
     }
@@ -397,6 +408,8 @@ function pollJob(jobId) {
                 clearActiveJob();
                 showToast("Clips ready! " + (job.message || ""), "success");
                 loadClips();
+                loadDownloads();
+                initStoragePill();
                 loadJobsList();
                 if (job.files && job.files.length > 0) {
                     setTimeout(() => switchView("library"), 800);
@@ -511,13 +524,13 @@ function updateProgressUI(pct, status, msg) {
         pQueue.className = pct >= 5 ? "step-pill done" : "step-pill active";
     }
     if (pDownload) {
-        if (pct >= 20) pDownload.className = "step-pill done";
-        else if (pct >= 10) pDownload.className = "step-pill active";
+        if (pct >= 36) pDownload.className = "step-pill done";
+        else if (pct >= 8) pDownload.className = "step-pill active";
         else pDownload.className = "step-pill";
     }
     if (pSlice) {
-        if (pct >= 95) pSlice.className = "step-pill done";
-        else if (pct >= 20) pSlice.className = "step-pill active";
+        if (pct >= 98) pSlice.className = "step-pill done";
+        else if (pct >= 36) pSlice.className = "step-pill active";
         else pSlice.className = "step-pill";
     }
     if (pDone) {
@@ -542,6 +555,8 @@ async function loadJobsList() {
         state.jobsList = jobs;
 
         if (countBadge) countBadge.textContent = jobs.length;
+        const tabBadge = document.getElementById("jobsCountBadgeTab");
+        if (tabBadge) tabBadge.textContent = jobs.length;
 
         // Auto-recover active background job if not currently tracked
         if (!state.activeJobId) {
@@ -705,8 +720,294 @@ function filterJobsList() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Clips Library
+// Social Publishing Activity & Tracker (YouTube, Instagram, Facebook)
 // ──────────────────────────────────────────────────────────────────────────────
+
+state.activeJobTrackerTab = "slicing";
+state.publishHistory = [];
+state.currentPubFilter = "all";
+state.pubSearchQuery = "";
+state.publishPollerTimer = null;
+
+function switchJobTrackerTab(tab) {
+    state.activeJobTrackerTab = tab;
+    const btnSlicing = document.getElementById("tabBtnSlicingJobs");
+    const btnPublishing = document.getElementById("tabBtnPublishingJobs");
+    const panelSlicing = document.getElementById("panelSlicingJobs");
+    const panelPublishing = document.getElementById("panelPublishingJobs");
+
+    if (tab === "slicing") {
+        if (btnSlicing) btnSlicing.classList.add("active");
+        if (btnPublishing) btnPublishing.classList.remove("active");
+        if (panelSlicing) panelSlicing.style.display = "block";
+        if (panelPublishing) panelPublishing.style.display = "none";
+        loadJobsList();
+    } else {
+        if (btnPublishing) btnPublishing.classList.add("active");
+        if (btnSlicing) btnSlicing.classList.remove("active");
+        if (panelPublishing) panelPublishing.style.display = "block";
+        if (panelSlicing) panelSlicing.style.display = "none";
+        loadPublishHistory();
+    }
+}
+
+function openPublishHistory() {
+    switchView("jobs");
+    switchJobTrackerTab("publishing");
+}
+
+async function loadPublishHistory() {
+    const tbody = document.getElementById("publishHistoryTableBody");
+    const countBadge = document.getElementById("publishCountBadgeTab");
+
+    try {
+        const res = await apiRequest("/publish/history");
+        if (!res.ok) return;
+        const data = await res.json();
+        const records = data.records || [];
+        state.publishHistory = records;
+
+        if (countBadge) countBadge.textContent = records.length;
+
+        if (tbody) renderPublishHistory();
+    } catch (err) {
+        console.error("Failed to load publish history:", err);
+    }
+}
+
+function renderPublishHistory() {
+    const tbody = document.getElementById("publishHistoryTableBody");
+    if (!tbody) return;
+
+    const allRecords = state.publishHistory || [];
+
+    // Calculate Statistics
+    const totalCount = allRecords.length;
+    const activeCount = allRecords.filter(r => !r.all_done && (r.targets || []).some(t => ["queued", "uploading"].includes(t.status))).length;
+    const successCount = allRecords.filter(r => (r.targets || []).some(t => t.status === "success")).length;
+    const failedCount = allRecords.filter(r => (r.targets || []).length > 0 && (r.targets || []).every(t => t.status === "failed")).length;
+
+    const sTotal = document.getElementById("statTotalPublishes");
+    const sActive = document.getElementById("statActivePublishes");
+    const sSuccess = document.getElementById("statSuccessPublishes");
+    const sFailed = document.getElementById("statFailedPublishes");
+
+    if (sTotal) sTotal.textContent = totalCount;
+    if (sActive) sActive.textContent = activeCount;
+    if (sSuccess) sSuccess.textContent = successCount;
+    if (sFailed) sFailed.textContent = failedCount;
+
+    // Filter count badges
+    const fAll = document.getElementById("countPubFilterAll");
+    const fActive = document.getElementById("countPubFilterActive");
+    const fSuccess = document.getElementById("countPubFilterSuccess");
+    const fFailed = document.getElementById("countPubFilterFailed");
+
+    if (fAll) fAll.textContent = totalCount;
+    if (fActive) fActive.textContent = activeCount;
+    if (fSuccess) fSuccess.textContent = successCount;
+    if (fFailed) fFailed.textContent = failedCount;
+
+    // Filter list
+    let filtered = allRecords;
+    if (state.currentPubFilter === "active") {
+        filtered = filtered.filter(r => !r.all_done && (r.targets || []).some(t => ["queued", "uploading"].includes(t.status)));
+    } else if (state.currentPubFilter === "success") {
+        filtered = filtered.filter(r => (r.targets || []).some(t => t.status === "success"));
+    } else if (state.currentPubFilter === "failed") {
+        filtered = filtered.filter(r => (r.targets || []).every(t => t.status === "failed"));
+    }
+
+    if (state.pubSearchQuery) {
+        const q = state.pubSearchQuery.toLowerCase();
+        filtered = filtered.filter(r => {
+            const clipName = (r.clip_name || "").toLowerCase();
+            const targetsMatch = (r.targets || []).some(t => 
+                (t.account_alias || "").toLowerCase().includes(q) || 
+                (t.platform || "").toLowerCase().includes(q)
+            );
+            return clipName.includes(q) || targetsMatch;
+        });
+    }
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                    No social publishing activity matches your filter.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(r => {
+        const clipName = r.clip_name || "clip.mp4";
+        const started = r.started_at ? new Date(r.started_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : "Recently";
+        const targets = r.targets || [];
+
+        // Targets badges
+        const targetBadges = targets.map(t => {
+            const p = (t.platform || "youtube").toLowerCase();
+            const icon = p === "youtube" ? "fa-brands fa-youtube" : p === "instagram" ? "fa-brands fa-instagram" : "fa-brands fa-facebook";
+            return `
+                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                    <span class="platform-badge ${p}"><i class="${icon}"></i> ${escapeHtml(t.account_alias || p)}</span>
+                </div>
+            `;
+        }).join("");
+
+        // Status determination
+        const hasUploading = targets.some(t => ["uploading", "queued"].includes(t.status));
+        const allSuccess = targets.length > 0 && targets.every(t => t.status === "success");
+        const allFailed = targets.length > 0 && targets.every(t => t.status === "failed");
+        const someSuccess = targets.some(t => t.status === "success");
+
+        let statusBadge = "";
+        if (hasUploading) {
+            statusBadge = `<span class="progress-status-badge processing"><i class="fa-solid fa-cloud-arrow-up fa-bounce"></i> Uploading</span>`;
+        } else if (allSuccess) {
+            statusBadge = `<span class="progress-status-badge completed"><i class="fa-solid fa-circle-check"></i> Published</span>`;
+        } else if (someSuccess) {
+            statusBadge = `<span class="progress-status-badge processing" style="background: rgba(16, 185, 129, 0.2);"><i class="fa-solid fa-check-double"></i> Partial (${targets.filter(t => t.status === 'success').length}/${targets.length})</span>`;
+        } else if (allFailed) {
+            statusBadge = `<span class="progress-status-badge cancelled"><i class="fa-solid fa-circle-xmark"></i> Failed</span>`;
+        } else {
+            statusBadge = `<span class="progress-status-badge queued">Queued</span>`;
+        }
+
+        // Live links and errors
+        const linksAndErrors = targets.map(t => {
+            const p = (t.platform || "").toUpperCase();
+            if (t.status === "success" && t.url) {
+                return `
+                    <div style="margin-bottom: 4px;">
+                        <a href="${t.url}" target="_blank" rel="noopener noreferrer" class="publish-live-link">
+                            <i class="fa-solid fa-arrow-up-right-from-square"></i> Open on ${p}
+                        </a>
+                    </div>
+                `;
+            } else if (t.status === "failed") {
+                return `
+                    <div class="publish-err-msg" title="${escapeHtml(t.error || 'Upload error')}">
+                        <strong>${p}:</strong> ${escapeHtml(t.error || "Failed")}
+                    </div>
+                `;
+            } else {
+                return `
+                    <div style="font-size: 11.5px; color: var(--accent-amber); margin-bottom: 3px;">
+                        <i class="fa-solid fa-spinner fa-spin"></i> ${p}: ${t.status} (${t.progress || 0}%)
+                    </div>
+                `;
+            }
+        }).join("");
+
+        return `
+            <tr>
+                <td>
+                    <div style="font-weight: 700; color: #fff; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(clipName)}">
+                        <i class="fa-solid fa-film" style="color: var(--primary); margin-right: 6px;"></i>
+                        ${escapeHtml(clipName)}
+                    </div>
+                </td>
+                <td>${targetBadges}</td>
+                <td>${statusBadge}</td>
+                <td style="min-width: 180px;">${linksAndErrors || '<span style="color: var(--text-dim); font-size: 11px;">None</span>'}</td>
+                <td style="font-size: 12px; color: var(--text-muted);">${started}</td>
+                <td>
+                    <button type="button" class="btn-secondary danger" style="padding: 5px 9px; font-size: 11px;" onclick="deletePublishRecord('${r.job_id}')" title="Delete record">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join("");
+}
+
+function setPublishFilter(filter) {
+    state.currentPubFilter = filter;
+    document.querySelectorAll("[data-pubfilter]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.pubfilter === filter);
+    });
+    renderPublishHistory();
+}
+
+function filterPublishHistoryList() {
+    const input = document.getElementById("publishSearchInput");
+    state.pubSearchQuery = input ? input.value.trim() : "";
+    renderPublishHistory();
+}
+
+async function deletePublishRecord(jobId) {
+    if (!confirm("Delete this publish history entry?")) return;
+    try {
+        const res = await apiRequest(`/publish/history/${jobId}`, { method: "DELETE" });
+        if (res.ok) {
+            showToast("Publish record deleted");
+            loadPublishHistory();
+        } else {
+            showToast("Failed to delete record", "error");
+        }
+    } catch (err) {
+        showToast("Error: " + err.message, "error");
+    }
+}
+
+async function clearAllPublishHistory() {
+    if (!confirm("Clear all social publishing history records?")) return;
+    try {
+        const res = await apiRequest("/publish/history", { method: "DELETE" });
+        if (res.ok) {
+            showToast("All publish history cleared");
+            loadPublishHistory();
+        }
+    } catch (err) {
+        showToast("Error: " + err.message, "error");
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Media Library (Clips & Downloaded Source Videos)
+// ──────────────────────────────────────────────────────────────────────────────
+
+state.activeLibraryTab = "clips";
+
+function switchLibraryTab(tab) {
+    state.activeLibraryTab = tab;
+    const btnClips = document.getElementById("tabBtnClips");
+    const btnDownloads = document.getElementById("tabBtnDownloads");
+    const gridClips = document.getElementById("clipsGrid");
+    const gridDownloads = document.getElementById("downloadsGrid");
+
+    if (tab === "clips") {
+        if (btnClips) btnClips.classList.add("active");
+        if (btnDownloads) btnDownloads.classList.remove("active");
+        if (gridClips) gridClips.style.display = "grid";
+        if (gridDownloads) gridDownloads.style.display = "none";
+        loadClips();
+    } else {
+        if (btnDownloads) btnDownloads.classList.add("active");
+        if (btnClips) btnClips.classList.remove("active");
+        if (gridDownloads) gridDownloads.style.display = "grid";
+        if (gridClips) gridClips.style.display = "none";
+        loadDownloads();
+    }
+}
+
+function refreshActiveLibraryTab() {
+    loadClips();
+    loadDownloads();
+}
+
+function openFirstClipPublishModal() {
+    if (!state.clips || state.clips.length === 0) {
+        showToast("No clips available to publish", "warning");
+        return;
+    }
+    const clip = state.clips[0];
+    const url = clip.url || `/media/clips/${encodeURIComponent(clip.name)}`;
+    openSinglePublishModal(clip.name, url);
+}
 
 async function loadClips() {
     const grid = document.getElementById("clipsGrid");
@@ -739,13 +1040,13 @@ async function loadClips() {
             return;
         }
 
-        grid.innerHTML = clips.map((clip) => {
+        grid.innerHTML = clips.map((clip, index) => {
             const url = clip.url || `/media/clips/${encodeURIComponent(clip.name)}`;
-            const sizeMb = clip.size_bytes ? (clip.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "";
+            const sizeMb = clip.size_mb ? `${clip.size_mb} MB` : (clip.size_bytes ? (clip.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "");
 
             return `
-                <div class="clip-card">
-                    <div class="clip-thumb-wrap" onclick="openPhoneModal('${url}', '${escapeHtml(clip.name)}')">
+                <div class="clip-card" data-index="${index}" data-name="${escapeHtml(clip.name)}" data-url="${url}">
+                    <div class="clip-thumb-wrap" onclick="previewClipCard(this)">
                         <video src="${url}" preload="metadata" muted playsinline></video>
                         <div style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff;">
                             9:16 Reel
@@ -763,11 +1064,14 @@ async function loadClips() {
                             <span style="color: var(--accent-emerald); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Ready</span>
                         </div>
                         <div class="clip-actions-row">
-                            <a href="${url}" download="${clip.name}" class="btn-secondary" style="flex: 1; padding: 7px 10px; font-size: 12px;">
+                            <a href="${url}" download="${escapeHtml(clip.name)}" class="btn-secondary" style="flex: 1; padding: 7px 10px; font-size: 12px; text-align: center;">
                                 <i class="fa-solid fa-download"></i> Save
                             </a>
-                            <button type="button" class="btn-primary" style="flex: 1.2; padding: 7px 12px; font-size: 12px;" onclick="openSinglePublishModal('${escapeHtml(clip.name)}', '${url}')">
+                            <button type="button" class="btn-primary" style="flex: 1.2; padding: 7px 12px; font-size: 12px;" onclick="publishClipCard(this)">
                                 <i class="fa-solid fa-rocket"></i> Publish
+                            </button>
+                            <button type="button" class="btn-secondary danger" style="padding: 7px 10px; font-size: 12px;" onclick="deleteClipCard(this)" title="Delete Clip">
+                                <i class="fa-solid fa-trash-can"></i>
                             </button>
                         </div>
                     </div>
@@ -777,6 +1081,162 @@ async function loadClips() {
 
     } catch (err) {
         console.error("Failed to load clips:", err);
+    }
+}
+
+function previewClipCard(el) {
+    const card = el.closest(".clip-card");
+    if (!card) return;
+    openPhoneModal(card.dataset.url, card.dataset.name);
+}
+
+function publishClipCard(el) {
+    const card = el.closest(".clip-card");
+    if (!card) return;
+    openSinglePublishModal(card.dataset.name, card.dataset.url);
+}
+
+async function deleteClipCard(el) {
+    const card = el.closest(".clip-card");
+    if (!card) return;
+    const filename = card.dataset.name;
+    if (!confirm(`Delete clip "${filename}"?`)) return;
+
+    try {
+        const res = await apiRequest(`/api/media/clips?filename=${encodeURIComponent(filename)}`, { method: "DELETE" });
+        if (res.ok) {
+            showToast("Clip deleted successfully", "success");
+            loadClips();
+            initStoragePill();
+        } else {
+            const err = await res.json();
+            showToast("Delete failed: " + (err.detail || "Server error"), "error");
+        }
+    } catch (err) {
+        showToast("Network error deleting clip", "error");
+    }
+}
+
+async function loadDownloads() {
+    const grid = document.getElementById("downloadsGrid");
+    const countBadge = document.getElementById("downloadCountBadge");
+
+    if (!grid) return;
+
+    try {
+        const res = await apiRequest("/api/downloads");
+        if (!res.ok) return;
+        const data = await res.json();
+        const downloads = data.downloads || [];
+        state.downloads = downloads;
+
+        if (countBadge) countBadge.textContent = downloads.length;
+
+        if (downloads.length === 0) {
+            grid.innerHTML = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: var(--text-muted);">
+                    <div style="font-size: 42px; margin-bottom: 12px; opacity: 0.5;"><i class="fa-solid fa-cloud-arrow-down"></i></div>
+                    <h3 style="color: #fff; margin-bottom: 6px;">No Downloaded Source Videos</h3>
+                    <p style="font-size: 13.5px; margin-bottom: 18px;">When you submit a video URL in Studio, the downloaded source is saved here for instant re-slicing without re-downloading.</p>
+                    <button class="btn-primary" onclick="switchView('studio')"><i class="fa-solid fa-wand-magic-sparkles"></i> Open Studio</button>
+                </div>
+            `;
+            return;
+        }
+
+        grid.innerHTML = downloads.map((dl, index) => {
+            const url = dl.url || `/media/downloads/${encodeURIComponent(dl.name)}`;
+            const sizeMb = dl.size_mb ? `${dl.size_mb} MB` : (dl.size_bytes ? (dl.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "");
+            const title = dl.clean_title || dl.name;
+            const thumbUrl = dl.thumbnail || "";
+
+            return `
+                <div class="download-card" data-index="${index}" data-name="${escapeHtml(dl.name)}" data-url="${url}" data-yturl="${escapeHtml(dl.youtube_url || '')}" data-title="${escapeHtml(title)}">
+                    <div class="download-thumb-wrap" onclick="previewDownloadCard(this)">
+                        ${thumbUrl ? `<img src="${thumbUrl}" alt="Thumbnail" onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='block';">` : ''}
+                        <video src="${url}" preload="metadata" muted playsinline style="${thumbUrl ? 'display: none;' : 'display: block;'}"></video>
+                        <div style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff;">
+                            ${dl.video_id ? 'YouTube Source' : 'Downloaded Source'}
+                        </div>
+                        <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.2s;" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=0">
+                            <div style="width: 48px; height: 48px; border-radius: 50%; background: var(--accent-cyan); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+                                <i class="fa-solid fa-play" style="margin-left: 3px;"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="clip-info">
+                        <div class="clip-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+                        <div class="clip-meta-row">
+                            <span><i class="fa-regular fa-hard-drive"></i> ${sizeMb}</span>
+                            <span style="color: var(--accent-cyan); font-weight: 600;"><i class="fa-solid fa-bolt"></i> Cached</span>
+                        </div>
+                        <div class="clip-actions-row">
+                            <button type="button" class="btn-primary" style="flex: 1.4; padding: 7px 12px; font-size: 12px; background: linear-gradient(135deg, #0284c7, #06b6d4);" onclick="sliceSourceInStudio(this)">
+                                <i class="fa-solid fa-scissors"></i> Slice in Studio
+                            </button>
+                            <a href="${url}" download="${escapeHtml(dl.name)}" class="btn-secondary" style="padding: 7px 10px; font-size: 12px; text-align: center;" title="Download Video File">
+                                <i class="fa-solid fa-download"></i>
+                            </a>
+                            <button type="button" class="btn-secondary danger" style="padding: 7px 10px; font-size: 12px;" onclick="deleteDownloadCard(this)" title="Delete Downloaded Video">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join("");
+
+    } catch (err) {
+        console.error("Failed to load downloads:", err);
+    }
+}
+
+function previewDownloadCard(el) {
+    const card = el.closest(".download-card");
+    if (!card) return;
+    openPhoneModal(card.dataset.url, card.dataset.title);
+}
+
+function sliceSourceInStudio(el) {
+    const card = el.closest(".download-card");
+    if (!card) return;
+    const ytUrl = card.dataset.yturl;
+    const title = card.dataset.title;
+
+    switchView("studio");
+
+    const urlInput = document.getElementById("urlInput");
+    const titleInput = document.getElementById("titleInput");
+
+    if (ytUrl && urlInput) {
+        urlInput.value = ytUrl;
+        handleUrlChange();
+    }
+    if (title && titleInput) {
+        titleInput.value = title;
+    }
+
+    showToast("Source video loaded in Studio! Adjust clipping settings and click Generate.", "success");
+}
+
+async function deleteDownloadCard(el) {
+    const card = el.closest(".download-card");
+    if (!card) return;
+    const filename = card.dataset.name;
+    if (!confirm(`Delete downloaded source "${filename}"?`)) return;
+
+    try {
+        const res = await apiRequest(`/api/media/downloads?filename=${encodeURIComponent(filename)}`, { method: "DELETE" });
+        if (res.ok) {
+            showToast("Downloaded video deleted", "success");
+            loadDownloads();
+            initStoragePill();
+        } else {
+            const err = await res.json();
+            showToast("Delete failed: " + (err.detail || "Server error"), "error");
+        }
+    } catch (err) {
+        showToast("Network error deleting download", "error");
     }
 }
 
@@ -974,9 +1434,19 @@ function openSinglePublishModal(clipName, clipUrl) {
     const video = document.getElementById("publishModalVideo");
     const badge = document.getElementById("publishClipBadge");
     const captionInput = document.getElementById("publishCaptionInput");
+    const formState = document.getElementById("publishFormState");
+    const progressState = document.getElementById("publishProgressState");
 
     state.modalVideoName = clipName;
     state.modalVideoUrl = clipUrl;
+
+    if (state.publishPollerTimer) {
+        clearInterval(state.publishPollerTimer);
+        state.publishPollerTimer = null;
+    }
+
+    if (formState) formState.style.display = "block";
+    if (progressState) progressState.style.display = "none";
 
     if (title) title.textContent = "Publish Clip to Social Media";
     if (video) video.src = clipUrl;
@@ -989,6 +1459,15 @@ function openSinglePublishModal(clipName, clipUrl) {
 
 function closePublishModal() {
     const modal = document.getElementById("publishModal");
+    const video = document.getElementById("publishModalVideo");
+    if (state.publishPollerTimer) {
+        clearInterval(state.publishPollerTimer);
+        state.publishPollerTimer = null;
+    }
+    if (video) {
+        video.pause();
+        video.src = "";
+    }
     if (modal) modal.classList.remove("active");
 }
 
@@ -1035,7 +1514,7 @@ async function executePublish() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                clip_path: `data/clips/my_clips/${state.modalVideoName}`,
+                clip_path: state.modalVideoName,
                 caption: caption,
                 targets: targets
             })
@@ -1044,13 +1523,126 @@ async function executePublish() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Publish request failed");
 
-        closePublishModal();
-        showToast("Publishing dispatched! Check your social channels shortly.", "success");
+        // Transition modal to State 2: Live Publishing Progress
+        const formState = document.getElementById("publishFormState");
+        const progressState = document.getElementById("publishProgressState");
+        const liveTitle = document.getElementById("publishLiveClipTitle");
+        const overallBadge = document.getElementById("publishOverallBadge");
+
+        if (formState) formState.style.display = "none";
+        if (progressState) progressState.style.display = "block";
+        if (liveTitle) liveTitle.textContent = `Publishing "${state.modalVideoName}"`;
+        if (overallBadge) {
+            overallBadge.className = "progress-status-badge processing";
+            overallBadge.textContent = "Uploading...";
+        }
+
+        renderPublishTargetsProgress(data.targets || []);
+        startPublishPoller(data.job_id);
+
+        showToast("Publishing dispatched! Tracking live progress...", "success");
     } catch (err) {
         showToast("Publishing failed: " + err.message, "error");
     } finally {
         if (btn) btn.disabled = false;
     }
+}
+
+function startPublishPoller(jobId) {
+    if (state.publishPollerTimer) {
+        clearInterval(state.publishPollerTimer);
+    }
+
+    state.publishPollerTimer = setInterval(async () => {
+        try {
+            const res = await apiRequest(`/publish/${jobId}/status`);
+            if (!res.ok) return;
+            const job = await res.json();
+
+            renderPublishTargetsProgress(job.targets || []);
+
+            if (job.all_done) {
+                clearInterval(state.publishPollerTimer);
+                state.publishPollerTimer = null;
+
+                const hasFailure = (job.targets || []).some(t => t.status === "failed");
+                const hasSuccess = (job.targets || []).some(t => t.status === "success");
+
+                const overallBadge = document.getElementById("publishOverallBadge");
+                if (overallBadge) {
+                    if (hasSuccess && !hasFailure) {
+                        overallBadge.className = "progress-status-badge completed";
+                        overallBadge.textContent = "Published ✅";
+                    } else if (hasSuccess && hasFailure) {
+                        overallBadge.className = "progress-status-badge processing";
+                        overallBadge.textContent = "Partial Success";
+                    } else {
+                        overallBadge.className = "progress-status-badge cancelled";
+                        overallBadge.textContent = "Failed ❌";
+                    }
+                }
+
+                showToast(hasFailure ? "Publishing finished with some issues" : "Published successfully to all channels!", hasFailure ? "warning" : "success");
+                loadPublishHistory();
+            }
+        } catch (e) {
+            console.error("Publish poll error:", e);
+        }
+    }, 1200);
+}
+
+function renderPublishTargetsProgress(targets) {
+    const list = document.getElementById("publishTargetsProgressList");
+    if (!list) return;
+
+    list.innerHTML = targets.map(t => {
+        const p = (t.platform || "youtube").toLowerCase();
+        const icon = p === "youtube" ? "fa-brands fa-youtube" : p === "instagram" ? "fa-brands fa-instagram" : "fa-brands fa-facebook";
+        const status = t.status || "queued";
+        const progress = t.progress || 0;
+
+        let statusPill = "";
+        if (status === "uploading") {
+            statusPill = `<span class="progress-status-badge processing"><i class="fa-solid fa-cloud-arrow-up fa-bounce"></i> Uploading ${progress}%</span>`;
+        } else if (status === "success") {
+            statusPill = `<span class="progress-status-badge completed"><i class="fa-solid fa-circle-check"></i> Published</span>`;
+        } else if (status === "failed") {
+            statusPill = `<span class="progress-status-badge cancelled"><i class="fa-solid fa-circle-xmark"></i> Failed</span>`;
+        } else {
+            statusPill = `<span class="progress-status-badge queued">Queued</span>`;
+        }
+
+        const linkHtml = t.url ? `
+            <div style="margin-top: 8px;">
+                <a href="${t.url}" target="_blank" rel="noopener noreferrer" class="publish-live-link">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Live on ${p.toUpperCase()}
+                </a>
+            </div>
+        ` : "";
+
+        const errHtml = t.error ? `
+            <div class="publish-err-msg">
+                <i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(t.error)}
+            </div>
+        ` : "";
+
+        return `
+            <div class="target-progress-card ${status}">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="platform-badge ${p}"><i class="${icon}"></i> ${escapeHtml(t.account_alias || p)}</span>
+                        <span style="font-size: 11px; color: var(--text-muted); text-transform: capitalize;">${p}</span>
+                    </div>
+                    ${statusPill}
+                </div>
+                <div class="progress-track" style="height: 6px; margin: 4px 0;">
+                    <div class="progress-bar-fill" style="width: ${progress}%;"></div>
+                </div>
+                ${linkHtml}
+                ${errHtml}
+            </div>
+        `;
+    }).join("");
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1194,7 +1786,8 @@ async function initStoragePill() {
         const data = await res.json();
         const storageText = document.getElementById("headerStorageMb");
         if (storageText) {
-            storageText.textContent = `${data.total_mb || 0} MB`;
+            const mb = data.total_storage_mb ?? data.total_mb ?? 0;
+            storageText.textContent = `${mb} MB`;
         }
     } catch (e) {}
 }

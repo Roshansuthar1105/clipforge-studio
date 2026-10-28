@@ -152,13 +152,14 @@ async def _fb_reel_finish(
         "upload_phase": "finish",
         "video_id": video_id,
         "access_token": token,
+        "video_state": "PUBLISHED",
     }
     if title:
         data["title"] = title
     if description:
         data["description"] = description
 
-    logger.info("[FB Reels] Phase 3 – Finishing upload for video_id=%s", video_id)
+    logger.info("[FB Reels] Phase 3 – Finishing upload for video_id=%s with video_state=PUBLISHED", video_id)
     resp = await client.post(url, data=data)
     resp.raise_for_status()
     body = resp.json()
@@ -235,16 +236,32 @@ async def publish_facebook_reel(
     # Execute 3-phase upload                                               #
     # ------------------------------------------------------------------ #
     try:
+        permalink_url = ""
         async with httpx.AsyncClient(timeout=300) as client:
             video_id, upload_url = await _fb_reel_start(client, pid, token)
             await _fb_reel_upload(client, upload_url, video_path, token)
             await _fb_reel_finish(client, pid, video_id, token, title=title, description=caption)
 
+            try:
+                p_resp = await client.get(
+                    f"{settings.graph_url}/{video_id}",
+                    params={"fields": "permalink_url,status", "access_token": token},
+                    timeout=10,
+                )
+                if p_resp.status_code == 200:
+                    p_data = p_resp.json()
+                    permalink_url = p_data.get("permalink_url") or ""
+            except Exception:
+                pass
+
+        if not permalink_url:
+            permalink_url = f"/reel/{video_id}/"
+
         return PublishResult(
             platform=PublishPlatform.facebook_reels,
             status=PublishStatus.published,
             media_id=video_id,
-            details={"page_id": pid},
+            details={"page_id": pid, "permalink_url": permalink_url},
         )
 
     except FacebookPublishError as exc:

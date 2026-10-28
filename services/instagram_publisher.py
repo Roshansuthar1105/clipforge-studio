@@ -138,16 +138,17 @@ async def _upload_video(
                 "Authorization": f"OAuth {token}",
                 "offset": str(offset),
                 "file_size": str(total_bytes),
+                "Content-Type": "video/mp4",
             }
 
             resp = await client.post(upload_uri, content=chunk, headers=headers)
             resp.raise_for_status()
             body = resp.json()
 
-            # On success the response contains an "h" key (upload handle)
-            if "h" not in body and offset + len(chunk) >= total_bytes:
+            # On success the response contains "success": true or an "h" key (upload handle)
+            if not body.get("success") and "h" not in body and offset + len(chunk) >= total_bytes:
                 logger.warning(
-                    "[IG Reels] Step 2 – Final chunk response missing 'h' key: %s", body
+                    "[IG Reels] Step 2 – Final chunk response unexpected: %s", body
                 )
 
             offset += len(chunk)

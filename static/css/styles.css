@@ -760,6 +760,183 @@ button, input, select, textarea {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
+   Library Sub-Tabs & Download Cards
+   ────────────────────────────────────────────────────────────────────────── */
+
+.library-tabs-bar {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.library-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.library-tab-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--border-hover);
+}
+
+.library-tab-btn.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(79, 70, 229, 0.15));
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #fff;
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.2);
+}
+
+.library-tab-btn .badge-pill {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-weight: 700;
+}
+
+.library-tab-btn.active .badge-pill {
+  background: var(--primary);
+  color: #fff;
+}
+
+.download-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: var(--transition);
+  display: flex;
+  flex-direction: column;
+}
+
+.download-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(6, 182, 212, 0.45);
+  box-shadow: 0 20px 35px -10px rgba(0, 0, 0, 0.8), 0 0 20px rgba(6, 182, 212, 0.2);
+}
+
+.download-thumb-wrap {
+  aspect-ratio: 16/9;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.download-thumb-wrap img,
+.download-thumb-wrap video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Social Platform Badges & Publishing Process Cards
+   ────────────────────────────────────────────────────────────────────────── */
+
+.platform-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  line-height: 1.2;
+}
+
+.platform-badge.youtube {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.platform-badge.instagram {
+  background: rgba(225, 48, 108, 0.15);
+  color: #f43f5e;
+  border: 1px solid rgba(225, 48, 108, 0.35);
+}
+
+.platform-badge.facebook {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.target-progress-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  transition: var(--transition);
+}
+
+.target-progress-card.success {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.04);
+}
+
+.target-progress-card.failed {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.target-progress-card.uploading {
+  border-color: rgba(99, 102, 241, 0.5);
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.publish-live-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  transition: var(--transition);
+}
+
+.publish-live-link:hover {
+  background: rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+  transform: translateY(-1px);
+}
+
+.publish-err-msg {
+  display: block;
+  font-size: 11.5px;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.12);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  margin-top: 6px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
    Modal Overlays & Cards
    ────────────────────────────────────────────────────────────────────────── */
 

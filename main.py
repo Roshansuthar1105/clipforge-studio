@@ -9,10 +9,11 @@ import logging
 import threading
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, urlunparse
+from urllib.parse import urlparse, parse_qs, urlunparse, quote, unquote
+import urllib.parse
 
 import yt_dlp
-from typing import Optional
+from typing import Optional, Any, Callable
 import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -229,15 +230,23 @@ def extract_video_id(url: str) -> str | None:
 
 
 def find_file_in_dir(directory: Path, filename: str) -> Path | None:
-    """Find a file by exact name in directory or subdirectories without glob bracket issues."""
+    """Find a file by exact or URL-unquoted name in directory or subdirectories."""
     if not directory.exists():
         return None
-    safe_name = Path(filename).name
-    direct = directory / safe_name
+    import urllib.parse
+    clean_name = urllib.parse.unquote(filename)
+    safe_target = Path(clean_name).name
+    raw_target = Path(filename).name
+
+    direct = directory / safe_target
     if direct.is_file():
         return direct
+    direct_raw = directory / raw_target
+    if direct_raw.is_file():
+        return direct_raw
+
     for p in directory.rglob("*"):
-        if p.is_file() and p.name == safe_name:
+        if p.is_file() and (p.name == safe_target or p.name == raw_target):
             return p
     return None
 
@@ -295,7 +304,7 @@ def run_command(command: list[str], cancel_event: Optional[threading.Event] = No
             "ffprobe.exe are available in PATH."
         ) from error
 
-    # Responsive polling loop checking for user cancellation
+    stdout, stderr = "", ""
     while proc.poll() is None:
         if cancel_event and cancel_event.is_set():
             try:
@@ -307,14 +316,107 @@ def run_command(command: list[str], cancel_event: Optional[threading.Event] = No
                 except Exception:
                     pass
             raise RuntimeError("Process cancelled by user")
-        time.sleep(0.1)
+        try:
+            out, err = proc.communicate(timeout=0.2)
+            stdout += out or ""
+            stderr += err or ""
+            break
+        except subprocess.TimeoutExpired:
+            pass
 
-    stdout, stderr = proc.communicate()
-    if proc.returncode != 0:
+    if proc.returncode is None:
+        proc.poll()
+    if proc.returncode is not None and proc.returncode != 0:
         message = (stderr or stdout or "Command failed").strip()
         raise RuntimeError(message[-4000:])
 
     return (stdout or "").strip()
+
+
+def run_ffmpeg_with_progress(
+    command: list[str],
+    total_duration: float,
+    on_progress: Optional[Any] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> str:
+    """Run FFmpeg with real-time second-by-second progress tracking and cancel support."""
+    # Ensure -nostats, -loglevel error, and -progress pipe:1 are inserted before input args
+    full_cmd = [command[0], "-nostats", "-loglevel", "error", "-progress", "pipe:1", *command[1:]]
+    try:
+        proc = subprocess.Popen(
+            full_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError(
+            f"Required program was not found: {command[0]}. "
+            "Install FFmpeg and make sure ffmpeg.exe and "
+            "ffprobe.exe are available in PATH."
+        ) from error
+
+    stderr_lines = []
+
+    def _drain_stderr():
+        try:
+            for l in proc.stderr:
+                stderr_lines.append(l)
+        except Exception:
+            pass
+
+    t_err = threading.Thread(target=_drain_stderr, daemon=True)
+    t_err.start()
+
+    last_update = 0.0
+
+    while True:
+        if cancel_event and cancel_event.is_set():
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            raise RuntimeError("Process cancelled by user")
+
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.01)
+            continue
+
+        line = line.strip()
+        if line.startswith("out_time_us="):
+            try:
+                us = int(line.split("=")[1])
+                secs = us / 1_000_000.0
+                now = time.time()
+                if on_progress and (now - last_update >= 0.25 or secs >= total_duration):
+                    last_update = now
+                    on_progress(secs, total_duration)
+            except Exception:
+                pass
+        elif line == "progress=end":
+            if on_progress:
+                on_progress(total_duration, total_duration)
+            break
+
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+    t_err.join(timeout=1)
+
+    if proc.returncode != 0:
+        message = "".join(stderr_lines).strip() or "FFmpeg encoding failed"
+        raise RuntimeError(message[-4000:])
+
+    return ""
 
 
 def probe_duration(video_path: Path) -> float:
@@ -448,7 +550,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 source_path = cached
                 update_job(
                     job_id,
-                    progress=18,
+                    progress=35,
                     message=f"Reusing cached source: {cached.name}",
                 )
             else:
@@ -466,99 +568,101 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     message="Downloading source video",
                 )
 
-            def dl_progress_hook(d):
-                if cancel_event and cancel_event.is_set():
-                    raise RuntimeError("Download cancelled by user")
-                if d.get("status") == "downloading":
-                    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                    downloaded = d.get("downloaded_bytes") or 0
-                    if total > 0:
-                        pct = min(18, int(10 + (downloaded / total) * 8))
-                        mb_down = downloaded / (1024 * 1024)
-                        mb_tot = total / (1024 * 1024)
-                        update_job(
-                            job_id,
-                            progress=pct,
-                            message=f"Downloading source: {mb_down:.1f}/{mb_tot:.1f} MB",
-                        )
+                def dl_progress_hook(d):
+                    if cancel_event and cancel_event.is_set():
+                        raise RuntimeError("Download cancelled by user")
+                    if d.get("status") == "downloading":
+                        total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                        downloaded = d.get("downloaded_bytes") or 0
+                        if total > 0:
+                            pct = int(10 + (downloaded / total) * 25)
+                            mb_down = downloaded / (1024 * 1024)
+                            mb_tot = total / (1024 * 1024)
+                            pct_dl = int((downloaded / total) * 100)
+                            update_job(
+                                job_id,
+                                progress=min(35, pct),
+                                message=f"Downloading source: {mb_down:.1f}/{mb_tot:.1f} MB ({pct_dl}%)",
+                            )
 
-            base_dl_opts = {
-                "format": (
-                    "bestvideo[height<=1080]+bestaudio/"
-                    "best[height<=1080]/best"
-                ),
-                "merge_output_format": "mp4",
-                "outtmpl": str(download_folder / outtmpl_name),
-                "noplaylist": True,
-                "restrictfilenames": True,
-                "windowsfilenames": True,
-                "progress_hooks": [dl_progress_hook],
-            }
+                base_dl_opts = {
+                    "format": (
+                        "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
+                        "bestvideo[height<=1080]+bestaudio/"
+                        "best[height<=1080]/best"
+                    ),
+                    "merge_output_format": "mp4",
+                    "outtmpl": str(download_folder / outtmpl_name),
+                    "noplaylist": True,
+                    "restrictfilenames": True,
+                    "windowsfilenames": True,
+                    "progress_hooks": [dl_progress_hook],
+                }
 
-            download_success = False
-            last_dl_error = None
-            prepared_name = None
-            client_candidates = [
-                ["android", "ios"],
-                ["android"],
-                ["ios"],
-                ["tv", "mweb"],
-                None,
-            ]
-
-            for dl_clients in client_candidates:
-                try:
-                    current_opts = get_yt_dlp_options(
-                        extra_opts=base_dl_opts,
-                        player_clients=dl_clients,
-                    )
-                    with yt_dlp.YoutubeDL(current_opts) as downloader:
-                        info = downloader.extract_info(
-                            request.url.strip(),
-                            download=True,
-                        )
-                        prepared_name = downloader.prepare_filename(info)
-                        download_success = True
-                        break
-                except Exception as dl_err:
-                    last_dl_error = dl_err
-                    continue
-
-            if not download_success or not prepared_name:
-                err_msg = clean_error_message(str(last_dl_error or "Unknown download failure"))
-                if "bot" in err_msg.lower() or "sign in" in err_msg.lower():
-                    err_msg = (
-                        f"{err_msg} (YouTube bot check triggered. "
-                        "Place a 'cookies.txt' file in the ClipForge folder or set COOKIES_FILE to authenticate.)"
-                    )
-                raise RuntimeError(f"Download failed: {err_msg}")
-
-            # yt-dlp may change the extension after merging streams.
-            guessed = Path(prepared_name)
-            possible_paths: list[Path] = [guessed, guessed.with_suffix(".mp4")]
-
-            if not any(p.exists() for p in possible_paths):
-                # Fall back: scan the folder for any file containing the video ID
-                if video_id:
-                    possible_paths += [
-                        p for p in download_folder.glob(f"*{video_id}*") if p.is_file()
-                    ]
-                possible_paths += [
-                    p for p in download_folder.glob("*") if p.is_file()
-                    and p.suffix.lower() in (".mp4", ".mkv", ".webm")
+                download_success = False
+                last_dl_error = None
+                prepared_name = None
+                client_candidates = [
+                    ["android", "ios"],
+                    ["android"],
+                    ["ios"],
+                    ["tv", "mweb"],
+                    None,
                 ]
 
-            source_path = next(
-                (p for p in possible_paths if p.exists() and p.stat().st_size > 0),
-                None,
-            )
+                for dl_clients in client_candidates:
+                    try:
+                        current_opts = get_yt_dlp_options(
+                            extra_opts=base_dl_opts,
+                            player_clients=dl_clients,
+                        )
+                        with yt_dlp.YoutubeDL(current_opts) as downloader:
+                            info = downloader.extract_info(
+                                request.url.strip(),
+                                download=True,
+                            )
+                            prepared_name = downloader.prepare_filename(info)
+                            download_success = True
+                            break
+                    except Exception as dl_err:
+                        last_dl_error = dl_err
+                        continue
 
-            if source_path is None:
-                raise RuntimeError(
-                    "Download finished, but the source video file could not be found."
+                if not download_success or not prepared_name:
+                    err_msg = clean_error_message(str(last_dl_error or "Unknown download failure"))
+                    if "bot" in err_msg.lower() or "sign in" in err_msg.lower():
+                        err_msg = (
+                            f"{err_msg} (YouTube bot check triggered. "
+                            "Place a 'cookies.txt' file in the ClipForge folder or set COOKIES_FILE to authenticate.)"
+                        )
+                    raise RuntimeError(f"Download failed: {err_msg}")
+
+                # yt-dlp may change the extension after merging streams.
+                guessed = Path(prepared_name)
+                possible_paths: list[Path] = [guessed, guessed.with_suffix(".mp4")]
+
+                if not any(p.exists() for p in possible_paths):
+                    # Fall back: scan the folder for any file containing the video ID
+                    if video_id:
+                        possible_paths += [
+                            p for p in download_folder.glob(f"*{video_id}*") if p.is_file()
+                        ]
+                    possible_paths += [
+                        p for p in download_folder.glob("*") if p.is_file()
+                        and p.suffix.lower() in (".mp4", ".mkv", ".webm")
+                    ]
+
+                source_path = next(
+                    (p for p in possible_paths if p.exists() and p.stat().st_size > 0),
+                    None,
                 )
 
-            downloaded_by_job = True
+                if source_path is None:
+                    raise RuntimeError(
+                        "Download finished, but the source video file could not be found."
+                    )
+
+                downloaded_by_job = True
 
         update_job(
             job_id,
@@ -601,8 +705,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
         update_job(
             job_id,
             status="processing",
-            progress=20,
-            message="Rendering preview clip" if request.is_preview else "Generating vertical clips",
+            progress=38,
+            message="Rendering preview clip" if request.is_preview else f"Generating {count} vertical clip(s)",
             files=[],
         )
 
@@ -646,11 +750,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
 
             # Fit the video into a 9:16 frame.
             if request.background_style == "blur":
-                # Dual-stream: scale & heavily blur background (1080x1920) and overlay sharp centered foreground
+                # High-speed cinematic blur: downscale background to 180x320, apply light blur, and upscale to 1080x1920
                 filter_script = (
                     "[0:v:0]split=2[bg][fg];"
-                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                    "crop=1080:1920,boxblur=25:5[blurred];"
+                    "[bg]scale=180:320:force_original_aspect_ratio=increase,"
+                    "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[blurred];"
                     "[fg]scale=1080:1440:force_original_aspect_ratio=decrease[fg_scaled];"
                     "[blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[base]"
                 )
@@ -720,19 +824,24 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
 
                 filter_args = ["-vf", filters, "-map", "0:v:0"]
 
-            update_job(
-                job_id,
-                progress=min(
-                    94,
-                    20 + int(74 * index / max(count, 1)),
-                ),
-                message=f"Creating clip {index + 1} of {count}",
-            )
+            clip_start_pct = 38 + (index / max(count, 1)) * 58
+            clip_range_pct = 58 / max(count, 1)
+
+            def on_clip_progress(processed_secs: float, total_clip_secs: float):
+                if total_clip_secs > 0:
+                    sub_pct = min(1.0, processed_secs / total_clip_secs)
+                    overall_pct = int(clip_start_pct + sub_pct * clip_range_pct)
+                    update_job(
+                        job_id,
+                        progress=min(96, max(38, overall_pct)),
+                        message=f"Creating clip {index + 1}/{count}: {int(processed_secs)}s/{int(total_clip_secs)}s ({int(sub_pct * 100)}%)",
+                    )
 
             command = [
                 "ffmpeg",
                 "-hide_banner",
                 "-y",
+                "-threads", "0",
                 "-ss", str(clip_start),
                 "-i", str(source_path),
                 "-t", str(clip_duration),
@@ -741,7 +850,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 "-c:v", "libx264",
                 "-profile:v", "main",
                 "-level", "4.0",
-                "-preset", "veryfast",
+                "-preset", "superfast",
                 "-crf", "23",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
@@ -751,25 +860,23 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 str(output_path),
             ]
 
-            run_command(command, cancel_event=cancel_event)
+            run_ffmpeg_with_progress(command, clip_duration, on_progress=on_clip_progress, cancel_event=cancel_event)
 
             if not output_path.exists() or output_path.stat().st_size == 0:
                 raise RuntimeError(
                     f"FFmpeg did not create a valid clip: {filename}"
                 )
 
+            import urllib.parse
             created_files.append({
                 "name": filename,
-                "url": f"/api/jobs/{job_id}/files/{filename}",
+                "url": f"/media/clips/{urllib.parse.quote(filename)}",
             })
 
             update_job(
                 job_id,
                 files=list(created_files),
-                progress=min(
-                    95,
-                    20 + int(75 * len(created_files) / count),
-                ),
+                progress=min(96, int(clip_start_pct + clip_range_pct)),
                 message=f"Created clip {index + 1} of {count}",
             )
 
@@ -1108,9 +1215,10 @@ def clear_jobs_endpoint(authorization: Optional[str] = Header(None)):
     return {"success": True, "message": f"Cleared {count} completed job record(s)"}
 
 
-@app.get("/api/jobs/{job_id}/files/{filename}")
+@app.get("/api/jobs/{job_id}/files/{filename:path}")
 def download_clip(job_id: str, filename: str):
-    safe_filename = Path(filename).name
+    unquoted = urllib.parse.unquote(filename)
+    safe_filename = Path(unquoted).name
 
     with jobs_lock:
         job = jobs.get(job_id)
@@ -1123,7 +1231,7 @@ def download_clip(job_id: str, filename: str):
             )
 
         matching = any(
-            item["name"] == safe_filename
+            item["name"] == safe_filename or item["name"] == filename or item["name"] == Path(filename).name
             for item in job["files"]
         )
 
@@ -1140,8 +1248,10 @@ def download_clip(job_id: str, filename: str):
         )
 
     clip_path = output_folder / safe_filename
-
     if not clip_path.is_file():
+        clip_path = find_file_in_dir(output_folder, safe_filename)
+
+    if not clip_path or not clip_path.is_file():
         raise HTTPException(
             status_code=404,
             detail="The generated clip no longer exists.",
@@ -1150,23 +1260,26 @@ def download_clip(job_id: str, filename: str):
     return FileResponse(
         clip_path,
         media_type="video/mp4",
-        filename=safe_filename,
+        filename=clip_path.name,
+        headers={"Accept-Ranges": "bytes"},
     )
 
 
-@app.get("/media/clips/{filename}")
+@app.get("/media/clips/{filename:path}")
 def serve_clip_media(filename: str):
     """Serve generated clip video directly by filename for preview or social publishing."""
-    clip_path = find_file_in_dir(CLIPS_DIR, filename)
+    unquoted = urllib.parse.unquote(filename)
+    clip_path = find_file_in_dir(CLIPS_DIR, unquoted)
     if not clip_path:
         raise HTTPException(
             status_code=404,
-            detail=f"Clip '{Path(filename).name}' not found",
+            detail=f"Clip '{Path(unquoted).name}' not found",
         )
     return FileResponse(
         clip_path,
         media_type="video/mp4",
         filename=clip_path.name,
+        headers={"Accept-Ranges": "bytes"},
     )
 
 
@@ -1176,27 +1289,33 @@ def list_available_clips():
     clips = []
     if CLIPS_DIR.exists():
         for file in sorted(CLIPS_DIR.glob("**/*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
+            encoded_name = urllib.parse.quote(file.name)
+            stat = file.stat()
             clips.append({
                 "name": file.name,
-                "url": f"/media/clips/{file.name}",
-                "size_mb": round(file.stat().st_size / (1024 * 1024), 2),
+                "url": f"/media/clips/{encoded_name}",
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "size_bytes": stat.st_size,
+                "modified": stat.st_mtime,
             })
     return {"clips": clips}
 
 
-@app.get("/media/downloads/{filename}")
+@app.get("/media/downloads/{filename:path}")
 def serve_download_media(filename: str):
     """Serve downloaded source video directly by filename."""
-    dl_path = find_file_in_dir(DOWNLOAD_DIR, filename)
+    unquoted = urllib.parse.unquote(filename)
+    dl_path = find_file_in_dir(DOWNLOAD_DIR, unquoted)
     if not dl_path:
         raise HTTPException(
             status_code=404,
-            detail=f"Downloaded video '{Path(filename).name}' not found",
+            detail=f"Downloaded video '{Path(unquoted).name}' not found",
         )
     return FileResponse(
         dl_path,
         media_type="video/mp4",
         filename=dl_path.name,
+        headers={"Accept-Ranges": "bytes"},
     )
 
 
@@ -1205,7 +1324,7 @@ def list_available_downloads():
     """List all available downloaded source videos in data/downloads."""
     files, total_bytes = _scan_directory_files(DOWNLOAD_DIR, allowed_extensions={".mp4", ".mkv", ".webm"})
     for f in files:
-        f["url"] = f"/media/downloads/{f['name']}"
+        f["url"] = f"/media/downloads/{urllib.parse.quote(f['name'])}"
     return {
         "downloads": files,
         "count": len(files),
@@ -1213,14 +1332,15 @@ def list_available_downloads():
     }
 
 
-@app.get("/api/downloads/{filename}/info")
+@app.get("/api/downloads/{filename:path}/info")
 def get_download_file_info(filename: str):
     """Get metadata, thumbnail, and probed duration of a downloaded video."""
-    source_path = find_file_in_dir(DOWNLOAD_DIR, filename)
+    unquoted = urllib.parse.unquote(filename)
+    source_path = find_file_in_dir(DOWNLOAD_DIR, unquoted)
     if not source_path:
         raise HTTPException(
             status_code=404,
-            detail=f"Downloaded video '{Path(filename).name}' not found",
+            detail=f"Downloaded video '{Path(unquoted).name}' not found",
         )
 
     vid_match = re.search(r"\[([a-zA-Z0-9_-]{11})\]", source_path.stem)
@@ -1248,7 +1368,7 @@ def get_download_file_info(filename: str):
         "duration": duration,
         "duration_formatted": duration_str,
         "size_mb": round(source_path.stat().st_size / (1024 * 1024), 2),
-        "url": f"/media/downloads/{source_path.name}",
+        "url": f"/media/downloads/{urllib.parse.quote(source_path.name)}",
     }
 
 
@@ -1289,6 +1409,10 @@ def get_media_storage():
     """Return storage metrics and list of all downloaded videos and generated clips."""
     downloads, dl_bytes = _scan_directory_files(DOWNLOAD_DIR)
     clips, clip_bytes = _scan_directory_files(CLIPS_DIR, allowed_extensions={".mp4", ".mkv", ".webm"})
+    for d in downloads:
+        d["url"] = f"/media/downloads/{urllib.parse.quote(d['name'])}"
+    for c in clips:
+        c["url"] = f"/media/clips/{urllib.parse.quote(c['name'])}"
 
     return {
         "downloads": downloads,
