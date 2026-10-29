@@ -528,7 +528,14 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest) -> None:
                             batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
                             batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
                             vid = res.media_id
-                            batch["clips"][clip_idx]["targets"][target_idx]["url"] = f"https://www.facebook.com/{vid}" if vid else f"https://www.facebook.com/{page_id}"
+                            permalink = res.details.get("permalink_url") if res.details else None
+                            if permalink:
+                                fb_url = f"https://www.facebook.com{permalink}" if permalink.startswith("/") else permalink
+                            elif as_reel:
+                                fb_url = f"https://www.facebook.com/reel/{vid}/" if vid else f"https://www.facebook.com/{page_id}"
+                            else:
+                                fb_url = f"https://www.facebook.com/watch/?v={vid}" if vid else f"https://www.facebook.com/{page_id}"
+                            batch["clips"][clip_idx]["targets"][target_idx]["url"] = fb_url
                             batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
                     else:
                         raise Exception(res.error_message or "Facebook publish failed")

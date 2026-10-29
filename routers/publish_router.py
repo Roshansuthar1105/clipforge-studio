@@ -49,6 +49,7 @@ def publish_batch_clips(request: BatchPublishRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/batch/{batch_id}")
 @router.get("/batch/{batch_id}/status")
 def get_batch_status(batch_id: str):
     """Get live progress for a batch publish job."""

@@ -21,6 +21,8 @@ const state = {
     modalVideoUrl: null,
     modalVideoName: null,
     selectedPublishAccounts: new Set(),
+    selectedClips: new Set(),
+    isBatchPublish: false,
 };
 
 // Helper: HTTP request with auth header
@@ -990,6 +992,10 @@ function switchLibraryTab(tab) {
         if (btnClips) btnClips.classList.remove("active");
         if (gridDownloads) gridDownloads.style.display = "grid";
         if (gridClips) gridClips.style.display = "none";
+        const selBar = document.getElementById("clipsSelectionBar");
+        const headerBtn = document.getElementById("publishSelectedHeaderBtn");
+        if (selBar) selBar.style.display = "none";
+        if (headerBtn) headerBtn.style.display = "none";
         loadDownloads();
     }
 }
@@ -1028,6 +1034,14 @@ async function loadClips() {
         if (publishAllCount) publishAllCount.textContent = clips.length;
         if (publishAllBtn) publishAllBtn.style.display = clips.length > 0 ? "inline-flex" : "none";
 
+        // Clean up any selected clips that no longer exist
+        const currentClipNames = new Set(clips.map(c => c.name));
+        for (const selName of state.selectedClips) {
+            if (!currentClipNames.has(selName)) {
+                state.selectedClips.delete(selName);
+            }
+        }
+
         if (clips.length === 0) {
             grid.innerHTML = `
                 <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: var(--text-muted);">
@@ -1037,17 +1051,23 @@ async function loadClips() {
                     <button class="btn-primary" onclick="switchView('studio')"><i class="fa-solid fa-wand-magic-sparkles"></i> Open Studio</button>
                 </div>
             `;
+            updateClipSelectionUI();
             return;
         }
 
         grid.innerHTML = clips.map((clip, index) => {
             const url = clip.url || `/media/clips/${encodeURIComponent(clip.name)}`;
             const sizeMb = clip.size_mb ? `${clip.size_mb} MB` : (clip.size_bytes ? (clip.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "");
+            const isSelected = state.selectedClips.has(clip.name);
 
             return `
-                <div class="clip-card" data-index="${index}" data-name="${escapeHtml(clip.name)}" data-url="${url}">
+                <div class="clip-card ${isSelected ? 'selected' : ''}" data-index="${index}" data-name="${escapeHtml(clip.name)}" data-url="${url}">
                     <div class="clip-thumb-wrap" onclick="previewClipCard(this)">
                         <video src="${url}" preload="metadata" muted playsinline></video>
+                        <label class="clip-select-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" class="clip-select-checkbox" data-clipname="${escapeHtml(clip.name)}" ${isSelected ? 'checked' : ''} onchange="toggleClipSelection('${escapeHtml(clip.name)}', this.checked)">
+                            <span class="clip-select-custom"><i class="fa-solid fa-check"></i></span>
+                        </label>
                         <div style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff;">
                             9:16 Reel
                         </div>
@@ -1079,8 +1099,87 @@ async function loadClips() {
             `;
         }).join("");
 
+        updateClipSelectionUI();
     } catch (err) {
         console.error("Failed to load clips:", err);
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Multi-Clip Selection Handlers
+// ──────────────────────────────────────────────────────────────────────────────
+
+function toggleClipSelection(clipName, isChecked) {
+    if (isChecked) {
+        state.selectedClips.add(clipName);
+    } else {
+        state.selectedClips.delete(clipName);
+    }
+
+    const cards = document.querySelectorAll(".clip-card");
+    cards.forEach(card => {
+        if (card.dataset.name === clipName) {
+            card.classList.toggle("selected", isChecked);
+        }
+    });
+
+    updateClipSelectionUI();
+}
+
+function toggleSelectAllClips(selectAll) {
+    if (selectAll) {
+        (state.clips || []).forEach(c => state.selectedClips.add(c.name));
+    } else {
+        state.selectedClips.clear();
+    }
+
+    document.querySelectorAll(".clip-select-checkbox").forEach(cb => {
+        if (cb.id !== "selectAllClipsCheckbox") {
+            cb.checked = selectAll;
+        }
+    });
+
+    document.querySelectorAll(".clip-card").forEach(card => {
+        card.classList.toggle("selected", selectAll);
+    });
+
+    updateClipSelectionUI();
+}
+
+function clearClipSelection() {
+    state.selectedClips.clear();
+
+    document.querySelectorAll(".clip-select-checkbox").forEach(cb => {
+        cb.checked = false;
+    });
+
+    document.querySelectorAll(".clip-card").forEach(card => {
+        card.classList.remove("selected");
+    });
+
+    updateClipSelectionUI();
+}
+
+function updateClipSelectionUI() {
+    const selBar = document.getElementById("clipsSelectionBar");
+    const headerBtn = document.getElementById("publishSelectedHeaderBtn");
+    const summary = document.getElementById("selectedClipsSummary");
+    const countSpan = document.getElementById("publishSelectedCount");
+    const headerCount = document.getElementById("publishHeaderCount");
+    const selectAllCb = document.getElementById("selectAllClipsCheckbox");
+
+    const count = state.selectedClips.size;
+    const total = state.clips ? state.clips.length : 0;
+
+    if (selBar) selBar.style.display = count > 0 && state.activeLibraryTab === "clips" ? "flex" : "none";
+    if (headerBtn) headerBtn.style.display = count > 0 && state.activeLibraryTab === "clips" ? "inline-flex" : "none";
+    if (summary) summary.textContent = `${count} clip${count === 1 ? '' : 's'} selected`;
+    if (countSpan) countSpan.textContent = count;
+    if (headerCount) headerCount.textContent = count;
+
+    if (selectAllCb) {
+        selectAllCb.checked = total > 0 && count === total;
+        selectAllCb.indeterminate = count > 0 && count < total;
     }
 }
 
@@ -1106,6 +1205,7 @@ async function deleteClipCard(el) {
         const res = await apiRequest(`/api/media/clips?filename=${encodeURIComponent(filename)}`, { method: "DELETE" });
         if (res.ok) {
             showToast("Clip deleted successfully", "success");
+            state.selectedClips.delete(filename);
             loadClips();
             initStoragePill();
         } else {
@@ -1429,14 +1529,7 @@ function connectOAuth(platform) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function openSinglePublishModal(clipName, clipUrl) {
-    const modal = document.getElementById("publishModal");
-    const title = document.getElementById("publishModalTitleText");
-    const video = document.getElementById("publishModalVideo");
-    const badge = document.getElementById("publishClipBadge");
-    const captionInput = document.getElementById("publishCaptionInput");
-    const formState = document.getElementById("publishFormState");
-    const progressState = document.getElementById("publishProgressState");
-
+    state.isBatchPublish = false;
     state.modalVideoName = clipName;
     state.modalVideoUrl = clipUrl;
 
@@ -1445,16 +1538,151 @@ function openSinglePublishModal(clipName, clipUrl) {
         state.publishPollerTimer = null;
     }
 
+    const modal = document.getElementById("publishModal");
+    const title = document.getElementById("publishModalTitleText");
+    const video = document.getElementById("publishModalVideo");
+    const badge = document.getElementById("publishClipBadge");
+    const captionInput = document.getElementById("publishCaptionInput");
+    const formState = document.getElementById("publishFormState");
+    const progressState = document.getElementById("publishProgressState");
+    const singleWrap = document.getElementById("publishSinglePreviewWrap");
+    const multiWrap = document.getElementById("publishMultiPreviewWrap");
+    const executeBtnText = document.getElementById("publishExecuteBtnText");
+
     if (formState) formState.style.display = "block";
     if (progressState) progressState.style.display = "none";
+    if (singleWrap) singleWrap.style.display = "block";
+    if (multiWrap) multiWrap.style.display = "none";
 
-    if (title) title.textContent = "Publish Clip to Social Media";
+    if (title) title.innerHTML = `<i class="fa-solid fa-rocket" style="color: var(--accent-pink);"></i> Publish Clip to Socials`;
+    if (executeBtnText) executeBtnText.textContent = "Publish Now";
     if (video) video.src = clipUrl;
     if (badge) badge.textContent = clipName;
     if (captionInput) captionInput.value = clipName.replace(".mp4", "").replace(/_/g, " ") + " #viral #reels #shorts";
 
     loadAccounts();
     if (modal) modal.classList.add("active");
+}
+
+function openPublishModalForSelected() {
+    if (!state.selectedClips || state.selectedClips.size === 0) {
+        showToast("Please select at least one clip using the checkboxes", "warning");
+        return;
+    }
+
+    const selectedArray = Array.from(state.selectedClips);
+
+    if (selectedArray.length === 1) {
+        const clipName = selectedArray[0];
+        const clipObj = (state.clips || []).find(c => c.name === clipName);
+        const url = clipObj ? (clipObj.url || `/media/clips/${encodeURIComponent(clipObj.name)}`) : `/media/clips/${encodeURIComponent(clipName)}`;
+        openSinglePublishModal(clipName, url);
+        return;
+    }
+
+    // Multi-clip batch publishing modal mode
+    state.isBatchPublish = true;
+    state.modalVideoName = null;
+    state.modalVideoUrl = null;
+
+    if (state.publishPollerTimer) {
+        clearInterval(state.publishPollerTimer);
+        state.publishPollerTimer = null;
+    }
+
+    const modal = document.getElementById("publishModal");
+    const title = document.getElementById("publishModalTitleText");
+    const formState = document.getElementById("publishFormState");
+    const progressState = document.getElementById("publishProgressState");
+    const singleWrap = document.getElementById("publishSinglePreviewWrap");
+    const multiWrap = document.getElementById("publishMultiPreviewWrap");
+    const multiCount = document.getElementById("publishMultiCount");
+    const executeBtnText = document.getElementById("publishExecuteBtnText");
+    const captionInput = document.getElementById("publishCaptionInput");
+
+    if (formState) formState.style.display = "block";
+    if (progressState) progressState.style.display = "none";
+    if (singleWrap) singleWrap.style.display = "none";
+    if (multiWrap) multiWrap.style.display = "block";
+
+    if (title) {
+        title.innerHTML = `<i class="fa-solid fa-rocket" style="color: var(--accent-pink);"></i> Batch Publish (${selectedArray.length} Selected Clips)`;
+    }
+    if (multiCount) multiCount.textContent = selectedArray.length;
+    if (executeBtnText) executeBtnText.textContent = `Publish ${selectedArray.length} Clips Now`;
+
+    if (captionInput) {
+        captionInput.value = "Best Highlights {part} #viral #reels #shorts";
+    }
+
+    renderSelectedClipsInModal();
+    loadAccounts();
+    if (modal) modal.classList.add("active");
+}
+
+function renderSelectedClipsInModal() {
+    const listWrap = document.getElementById("publishMultiClipsList");
+    const multiCount = document.getElementById("publishMultiCount");
+    const executeBtnText = document.getElementById("publishExecuteBtnText");
+    const title = document.getElementById("publishModalTitleText");
+
+    const selectedArray = Array.from(state.selectedClips);
+    if (multiCount) multiCount.textContent = selectedArray.length;
+    if (executeBtnText) executeBtnText.textContent = `Publish ${selectedArray.length} Clips Now`;
+    if (title) {
+        title.innerHTML = `<i class="fa-solid fa-rocket" style="color: var(--accent-pink);"></i> Batch Publish (${selectedArray.length} Selected Clips)`;
+    }
+
+    if (!listWrap) return;
+
+    if (selectedArray.length === 0) {
+        listWrap.innerHTML = `<div style="color: var(--text-muted); font-size: 12.5px; padding: 12px 0; text-align: center;">No clips selected</div>`;
+        return;
+    }
+
+    listWrap.innerHTML = selectedArray.map(name => {
+        return `
+            <div class="selected-clip-item" data-clip="${escapeHtml(name)}">
+                <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; min-width: 0;">
+                    <i class="fa-solid fa-film" style="color: var(--primary); font-size: 13px; flex-shrink: 0;"></i>
+                    <span style="font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; color: #fff;" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+                </div>
+                <button type="button" class="remove-clip-btn" onclick="removeSelectedClipFromModal('${escapeHtml(name)}')" title="Remove from batch">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        `;
+    }).join("");
+}
+
+function removeSelectedClipFromModal(clipName) {
+    state.selectedClips.delete(clipName);
+
+    // Update checkbox on library page if visible
+    const cb = document.querySelector(`.clip-select-checkbox[data-clipname="${CSS.escape ? CSS.escape(clipName) : clipName}"]`);
+    if (cb) cb.checked = false;
+
+    const card = document.querySelector(`.clip-card[data-name="${CSS.escape ? CSS.escape(clipName) : clipName}"]`);
+    if (card) card.classList.remove("selected");
+
+    updateClipSelectionUI();
+
+    if (state.selectedClips.size === 0) {
+        closePublishModal();
+        showToast("All clips deselected", "info");
+        return;
+    }
+
+    if (state.selectedClips.size === 1) {
+        // Switch to single clip view inside modal
+        const remainingClipName = Array.from(state.selectedClips)[0];
+        const clipObj = (state.clips || []).find(c => c.name === remainingClipName);
+        const url = clipObj ? (clipObj.url || `/media/clips/${encodeURIComponent(clipObj.name)}`) : `/media/clips/${encodeURIComponent(remainingClipName)}`;
+        openSinglePublishModal(remainingClipName, url);
+        return;
+    }
+
+    renderSelectedClipsInModal();
 }
 
 function closePublishModal() {
@@ -1489,6 +1717,64 @@ async function executePublish() {
         return;
     }
 
+    // Branch 1: Multi-Clip Batch Publishing
+    if (state.isBatchPublish && state.selectedClips.size > 1) {
+        const selectedClipsArray = Array.from(state.selectedClips);
+        try {
+            if (btn) btn.disabled = true;
+            showToast(`Initiating batch publishing for ${selectedClipsArray.length} clips...`, "info");
+
+            const targets = accountIds.map(accId => {
+                const acc = state.accounts.find(a => a.id === accId);
+                return {
+                    account_id: accId,
+                    platform: acc ? acc.platform : "youtube",
+                    youtube_config: { title: "Clip Highlights", description: caption },
+                    instagram_config: { caption: caption, share_to_feed: true },
+                    facebook_config: { title: "Clip Highlights", description: caption, as_reel: true }
+                };
+            });
+
+            const res = await apiRequest("/publish/batch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    clip_paths: selectedClipsArray,
+                    caption: caption,
+                    targets: targets
+                })
+            });
+
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Batch publish request failed");
+
+            // Transition modal to State 2: Live Publishing Progress
+            const formState = document.getElementById("publishFormState");
+            const progressState = document.getElementById("publishProgressState");
+            const liveTitle = document.getElementById("publishLiveClipTitle");
+            const overallBadge = document.getElementById("publishOverallBadge");
+
+            if (formState) formState.style.display = "none";
+            if (progressState) progressState.style.display = "block";
+            if (liveTitle) liveTitle.textContent = `Batch Publishing: ${data.total_clips} clips across selected channels`;
+            if (overallBadge) {
+                overallBadge.className = "progress-status-badge processing";
+                overallBadge.textContent = "Uploading...";
+            }
+
+            renderBatchPublishProgress(data);
+            startBatchPublishPoller(data.batch_id);
+
+            showToast("Batch publishing dispatched! Tracking live progress...", "success");
+        } catch (err) {
+            showToast("Batch publishing failed: " + err.message, "error");
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+        return;
+    }
+
+    // Branch 2: Single Clip Publishing
     if (!state.modalVideoName) {
         showToast("No clip selected for publishing", "warning");
         return;
@@ -1546,6 +1832,129 @@ async function executePublish() {
     } finally {
         if (btn) btn.disabled = false;
     }
+}
+
+function startBatchPublishPoller(batchId) {
+    if (state.publishPollerTimer) {
+        clearInterval(state.publishPollerTimer);
+    }
+
+    state.publishPollerTimer = setInterval(async () => {
+        try {
+            const res = await apiRequest(`/publish/batch/${batchId}/status`);
+            if (!res.ok) return;
+            const batchJob = await res.json();
+
+            renderBatchPublishProgress(batchJob);
+
+            if (batchJob.all_done) {
+                clearInterval(state.publishPollerTimer);
+                state.publishPollerTimer = null;
+
+                let allTargets = [];
+                (batchJob.clips || []).forEach(c => {
+                    allTargets = allTargets.concat(c.targets || []);
+                });
+
+                const hasFailure = allTargets.some(t => t.status === "failed");
+                const hasSuccess = allTargets.some(t => t.status === "success");
+
+                const overallBadge = document.getElementById("publishOverallBadge");
+                if (overallBadge) {
+                    if (hasSuccess && !hasFailure) {
+                        overallBadge.className = "progress-status-badge completed";
+                        overallBadge.textContent = "Batch Published ✅";
+                    } else if (hasSuccess && hasFailure) {
+                        overallBadge.className = "progress-status-badge processing";
+                        overallBadge.textContent = "Partial Success";
+                    } else {
+                        overallBadge.className = "progress-status-badge cancelled";
+                        overallBadge.textContent = "Failed ❌";
+                    }
+                }
+
+                showToast(hasFailure ? "Batch publishing completed with some issues" : `All ${batchJob.total_clips} clips published successfully!`, hasFailure ? "warning" : "success");
+                loadPublishHistory();
+            }
+        } catch (e) {
+            console.error("Batch publish poll error:", e);
+        }
+    }, 1200);
+}
+
+function renderBatchPublishProgress(batchJob) {
+    const list = document.getElementById("publishTargetsProgressList");
+    if (!list) return;
+
+    const clips = batchJob.clips || [];
+    if (clips.length === 0) return;
+
+    list.innerHTML = clips.map((clip, idx) => {
+        const targets = clip.targets || [];
+        const doneCount = targets.filter(t => t.status === "success" || t.status === "failed").length;
+
+        const targetsHtml = targets.map(t => {
+            const p = (t.platform || "youtube").toLowerCase();
+            const icon = p === "youtube" ? "fa-brands fa-youtube" : p === "instagram" ? "fa-brands fa-instagram" : "fa-brands fa-facebook";
+            const status = t.status || "queued";
+            const progress = t.progress || 0;
+
+            let statusPill = "";
+            if (status === "uploading") {
+                statusPill = `<span class="progress-status-badge processing"><i class="fa-solid fa-cloud-arrow-up fa-bounce"></i> Uploading ${progress}%</span>`;
+            } else if (status === "success") {
+                statusPill = `<span class="progress-status-badge completed"><i class="fa-solid fa-circle-check"></i> Published</span>`;
+            } else if (status === "failed") {
+                statusPill = `<span class="progress-status-badge cancelled"><i class="fa-solid fa-circle-xmark"></i> Failed</span>`;
+            } else {
+                statusPill = `<span class="progress-status-badge queued">Queued</span>`;
+            }
+
+            const linkHtml = t.url ? `
+                <div style="margin-top: 8px;">
+                    <a href="${t.url}" target="_blank" rel="noopener noreferrer" class="publish-live-link">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Live on ${p.toUpperCase()}
+                    </a>
+                </div>
+            ` : "";
+
+            const errHtml = t.error ? `
+                <div class="publish-err-msg">
+                    <i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(t.error)}
+                </div>
+            ` : "";
+
+            return `
+                <div class="target-progress-card ${status}" style="margin-top: 8px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span class="platform-badge ${p}"><i class="${icon}"></i> ${escapeHtml(t.account_alias || p)}</span>
+                            <span style="font-size: 11px; color: var(--text-muted); text-transform: capitalize;">${p}</span>
+                        </div>
+                        ${statusPill}
+                    </div>
+                    <div class="progress-track" style="height: 6px; margin: 4px 0;">
+                        <div class="progress-bar-fill" style="width: ${progress}%;"></div>
+                    </div>
+                    ${linkHtml}
+                    ${errHtml}
+                </div>
+            `;
+        }).join("");
+
+        return `
+            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; min-width: 0;">
+                        <span style="background: var(--primary-glow); color: var(--primary-light); font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px;">#${idx + 1}</span>
+                        <span style="font-weight: 700; color: #fff; font-size: 13px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${escapeHtml(clip.clip_name)}">${escapeHtml(clip.clip_name)}</span>
+                    </div>
+                    <span style="font-size: 11.5px; color: var(--text-muted); flex-shrink: 0;">${doneCount}/${targets.length} done</span>
+                </div>
+                ${targetsHtml}
+            </div>
+        `;
+    }).join("");
 }
 
 function startPublishPoller(jobId) {
