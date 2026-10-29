@@ -1549,7 +1549,10 @@ function openSinglePublishModal(clipName, clipUrl) {
     const multiWrap = document.getElementById("publishMultiPreviewWrap");
     const executeBtnText = document.getElementById("publishExecuteBtnText");
 
-    if (formState) formState.style.display = "block";
+    if (formState) {
+        formState.style.display = "block";
+        formState.scrollTop = 0;
+    }
     if (progressState) progressState.style.display = "none";
     if (singleWrap) singleWrap.style.display = "block";
     if (multiWrap) multiWrap.style.display = "none";
@@ -1600,7 +1603,10 @@ function openPublishModalForSelected() {
     const executeBtnText = document.getElementById("publishExecuteBtnText");
     const captionInput = document.getElementById("publishCaptionInput");
 
-    if (formState) formState.style.display = "block";
+    if (formState) {
+        formState.style.display = "block";
+        formState.scrollTop = 0;
+    }
     if (progressState) progressState.style.display = "none";
     if (singleWrap) singleWrap.style.display = "none";
     if (multiWrap) multiWrap.style.display = "block";
@@ -1753,9 +1759,11 @@ async function executePublish() {
             const progressState = document.getElementById("publishProgressState");
             const liveTitle = document.getElementById("publishLiveClipTitle");
             const overallBadge = document.getElementById("publishOverallBadge");
+            const progressList = document.getElementById("publishTargetsProgressList");
 
             if (formState) formState.style.display = "none";
-            if (progressState) progressState.style.display = "block";
+            if (progressState) progressState.style.display = "flex";
+            if (progressList) progressList.scrollTop = 0;
             if (liveTitle) liveTitle.textContent = `Batch Publishing: ${data.total_clips} clips across selected channels`;
             if (overallBadge) {
                 overallBadge.className = "progress-status-badge processing";
@@ -1814,9 +1822,11 @@ async function executePublish() {
         const progressState = document.getElementById("publishProgressState");
         const liveTitle = document.getElementById("publishLiveClipTitle");
         const overallBadge = document.getElementById("publishOverallBadge");
+        const progressList = document.getElementById("publishTargetsProgressList");
 
         if (formState) formState.style.display = "none";
-        if (progressState) progressState.style.display = "block";
+        if (progressState) progressState.style.display = "flex";
+        if (progressList) progressList.scrollTop = 0;
         if (liveTitle) liveTitle.textContent = `Publishing "${state.modalVideoName}"`;
         if (overallBadge) {
             overallBadge.className = "progress-status-badge processing";
@@ -1943,7 +1953,7 @@ function renderBatchPublishProgress(batchJob) {
         }).join("");
 
         return `
-            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px;">
+            <div class="batch-clip-progress-group">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
                     <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; min-width: 0;">
                         <span style="background: var(--primary-glow); color: var(--primary-light); font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px;">#${idx + 1}</span>

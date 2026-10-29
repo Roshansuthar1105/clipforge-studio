@@ -711,7 +711,7 @@
             <button class="modal-close-btn" onclick="closePublishModal()"><i class="fa-solid fa-xmark"></i></button>
 
             <!-- State 1: Configuration Form -->
-            <div id="publishFormState">
+            <div id="publishFormState" class="publish-modal-form-scroll">
                 <div class="card-header" style="margin-bottom: 16px;">
                     <div>
                         <h3 id="publishModalTitleText" class="card-title"><i class="fa-solid fa-rocket" style="color: var(--accent-pink);"></i> Publish Clip to Socials</h3>
@@ -768,8 +768,8 @@
             </div>
 
             <!-- State 2: Live Publishing Progress & Process Tracker -->
-            <div id="publishProgressState" style="display: none;">
-                <div class="card-header" style="margin-bottom: 16px;">
+            <div id="publishProgressState" class="publish-progress-panel" style="display: none;">
+                <div class="publish-progress-header">
                     <div>
                         <h3 class="card-title"><i class="fa-solid fa-tower-broadcast" style="color: var(--accent-pink);"></i> Social Publishing In Progress</h3>
                         <p id="publishLiveClipTitle" class="card-subtitle">Dispatching uploads to connected channels...</p>
@@ -777,12 +777,12 @@
                     <span id="publishOverallBadge" class="progress-status-badge processing">Uploading</span>
                 </div>
 
-                <!-- Targets Live Progress Container -->
-                <div id="publishTargetsProgressList" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px;">
+                <!-- Targets Live Progress Container with proper scrolling and overflow handling -->
+                <div id="publishTargetsProgressList" class="publish-targets-scroll-list">
                     <!-- Dynamically rendered and updated by live polling -->
                 </div>
 
-                <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 16px; flex-wrap: wrap; gap: 10px;">
+                <div class="publish-progress-footer">
                     <button type="button" class="btn-secondary" onclick="closePublishModal()">
                         <i class="fa-solid fa-arrow-down-left-and-up-right-to-center"></i> Run in Background
                     </button>

@@ -653,8 +653,26 @@ button, input, select, textarea {
 
 .jobs-table-wrap {
   overflow-x: auto;
+  overflow-y: auto;
+  max-height: 65vh;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.4) rgba(255, 255, 255, 0.03);
+}
+
+.jobs-table-wrap::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.jobs-table-wrap::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.jobs-table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.4);
+  border-radius: 4px;
 }
 
 .jobs-table {
@@ -665,7 +683,11 @@ button, input, select, textarea {
 }
 
 .jobs-table th {
-  background: rgba(16, 22, 36, 0.9);
+  background: rgba(16, 22, 36, 0.96);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  backdrop-filter: blur(8px);
   padding: 14px 18px;
   color: var(--text-muted);
   font-weight: 600;
@@ -998,6 +1020,8 @@ button, input, select, textarea {
   border-radius: var(--radius-md);
   padding: 12px 16px;
   transition: var(--transition);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .target-progress-card.success {
@@ -1028,6 +1052,10 @@ button, input, select, textarea {
   text-decoration: none;
   border: 1px solid rgba(16, 185, 129, 0.35);
   transition: var(--transition);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .publish-live-link:hover {
@@ -1047,6 +1075,20 @@ button, input, select, textarea {
   margin-top: 6px;
   line-height: 1.4;
   word-break: break-word;
+  max-height: 100px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.batch-clip-progress-group {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 8px;
+  min-width: 0;
+  overflow: hidden;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1056,13 +1098,15 @@ button, input, select, textarea {
 .modal-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(4, 7, 15, 0.82);
-  backdrop-filter: blur(12px);
+  background: rgba(4, 7, 15, 0.85);
+  backdrop-filter: blur(14px);
   z-index: 10000;
   display: none;
   align-items: center;
   justify-content: center;
   padding: 20px;
+  overflow-y: auto;
+  box-sizing: border-box;
 }
 
 .modal-overlay.active {
@@ -1084,10 +1128,107 @@ button, input, select, textarea {
   width: 100%;
   padding: 30px;
   position: relative;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .modal-card.wide {
   max-width: 860px;
+  width: 100%;
+}
+
+/* Publishing Form Scroll Container (Modal State 1) */
+.publish-modal-form-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: calc(90vh - 70px);
+  padding-right: 6px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.4) rgba(255, 255, 255, 0.03);
+}
+
+.publish-modal-form-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.publish-modal-form-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+}
+.publish-modal-form-scroll::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.4);
+  border-radius: 4px;
+}
+.publish-modal-form-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* Publishing Progress Panel (Modal State 2) */
+.publish-progress-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: calc(90vh - 60px);
+  overflow: hidden;
+  min-height: 280px;
+  width: 100%;
+}
+
+.publish-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.publish-targets-scroll-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: calc(88vh - 210px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  margin-bottom: 16px;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.4) rgba(255, 255, 255, 0.03);
+}
+
+.publish-targets-scroll-list::-webkit-scrollbar {
+  width: 6px;
+}
+.publish-targets-scroll-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+}
+.publish-targets-scroll-list::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.4);
+  border-radius: 4px;
+}
+.publish-targets-scroll-list::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+.publish-progress-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 16px;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-top: auto;
+  background: #111827;
 }
 
 .modal-close-btn {
