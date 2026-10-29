@@ -159,7 +159,7 @@ def burn_subtitles_to_clip(
             f.write(ass_content)
 
         # Escape path for FFmpeg filter syntax
-        escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:")
+        escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
         cmd = [
             "ffmpeg", "-y",

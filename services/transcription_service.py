@@ -9,6 +9,7 @@ import os
 import json
 import logging
 import subprocess
+import urllib.parse
 from pathlib import Path
 from typing import Optional, Any, Dict, List
 
@@ -216,6 +217,19 @@ def slice_transcript_for_clip(
     return sliced_cues
 
 
+def _find_clip_path(clip_name: str) -> Optional[Path]:
+    """Helper to locate a clip file anywhere under CLIPS_DIR."""
+    unquoted = urllib.parse.unquote(clip_name).replace("\\", "/").strip("/")
+    direct = CLIPS_DIR / unquoted
+    if direct.is_file():
+        return direct
+    safe_name = Path(unquoted).name
+    for p in CLIPS_DIR.rglob("*"):
+        if p.is_file() and (p.name == safe_name or p.name == clip_name):
+            return p
+    return None
+
+
 def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
     """
     Get subtitle cues for a specific clip:
@@ -223,8 +237,25 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
     2. Otherwise checks clip metadata for source_video_id, clip_start, clip_end,
        and slices from parent transcript.
     """
-    custom_path = CLIPS_DIR / f"{clip_name}.subtitles.json"
-    if custom_path.exists():
+    clip_file = _find_clip_path(clip_name)
+    custom_path = None
+    if clip_file:
+        custom_path = clip_file.with_name(f"{clip_file.name}.subtitles.json")
+        if not custom_path.exists():
+            custom_path = clip_file.with_name(f"{clip_file.stem}.subtitles.json")
+    if not custom_path or not custom_path.exists():
+        custom_path = CLIPS_DIR / f"{Path(clip_name).name}.subtitles.json"
+    if not custom_path.exists():
+        custom_path = CLIPS_DIR / f"{Path(clip_name).stem}.subtitles.json"
+    if not custom_path.exists():
+        safe_name = Path(clip_name).name
+        safe_stem = Path(clip_name).stem
+        for p in CLIPS_DIR.rglob("*.subtitles.json"):
+            if p.name in (f"{safe_name}.subtitles.json", f"{safe_stem}.subtitles.json"):
+                custom_path = p
+                break
+
+    if custom_path and custom_path.exists():
         try:
             with open(custom_path, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -233,8 +264,24 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
 
     # Look up metadata
     meta = None
-    meta_path = CLIPS_DIR / f"{clip_name}.meta.json"
-    if meta_path.exists():
+    meta_path = None
+    if clip_file:
+        meta_path = clip_file.with_name(f"{clip_file.name}.meta.json")
+        if not meta_path.exists():
+            meta_path = clip_file.with_name(f"{clip_file.stem}.meta.json")
+    if not meta_path or not meta_path.exists():
+        meta_path = CLIPS_DIR / f"{Path(clip_name).name}.meta.json"
+    if not meta_path.exists():
+        meta_path = CLIPS_DIR / f"{Path(clip_name).stem}.meta.json"
+    if not meta_path.exists():
+        safe_name = Path(clip_name).name
+        safe_stem = Path(clip_name).stem
+        for p in CLIPS_DIR.rglob("*.meta.json"):
+            if p.name in (f"{safe_name}.meta.json", f"{safe_stem}.meta.json"):
+                meta_path = p
+                break
+
+    if meta_path and meta_path.exists():
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
@@ -242,7 +289,7 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             pass
 
     if not meta:
-        meta = db.db_get_clip_metadata(clip_name)
+        meta = db.db_get_clip_metadata(Path(clip_name).name)
 
     if not meta:
         return {"cues": [], "styles": {}, "source_video_id": None}
@@ -270,13 +317,10 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
                 logger.warning("Auto-transcribe of source video failed: %s", exc)
 
     # If still no transcript, transcribe the clip directly as standalone fallback
-    clip_file = CLIPS_DIR / clip_name
-    if not clip_file.exists():
-        found_clips = list(CLIPS_DIR.glob(f"**/{clip_name}"))
-        if found_clips:
-            clip_file = found_clips[0]
+    if not clip_file or not clip_file.exists():
+        clip_file = _find_clip_path(clip_name)
 
-    if not transcript and clip_file.exists() and get_groq_api_key():
+    if not transcript and clip_file and clip_file.exists() and get_groq_api_key():
         try:
             logger.info("Transcribing clip %s directly...", clip_name)
             clip_transcript = transcribe_video_with_groq(clip_file, video_id=clip_file.stem)
@@ -312,6 +356,11 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
 
 def save_clip_subtitles(clip_name: str, data: Dict[str, Any]) -> None:
     """Save user-edited subtitle cues & style settings for a clip."""
-    custom_path = CLIPS_DIR / f"{clip_name}.subtitles.json"
+    clip_file = _find_clip_path(clip_name)
+    if clip_file:
+        custom_path = clip_file.with_name(f"{clip_file.name}.subtitles.json")
+    else:
+        custom_path = CLIPS_DIR / f"{Path(clip_name).name}.subtitles.json"
+    custom_path.parent.mkdir(parents=True, exist_ok=True)
     with open(custom_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)

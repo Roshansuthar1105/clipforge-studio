@@ -178,7 +178,8 @@
                         <div class="form-row">
                             <div class="form-group" style="flex: 1.5;">
                                 <label class="form-label">Clip Title Prefix</label>
-                                <input id="titleInput" class="form-input" type="text" value="My Best Highlights" required>
+                                <input id="titleInput" class="form-input" type="text" value="My Best Highlights" placeholder="e.g. My Best Highlights or Episode part - {part}" required>
+                                <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">Supports <code>{part}</code> variable (e.g. <em>Highlights part - {part}</em>)</span>
                             </div>
 
                             <div class="form-group" style="flex: 1;">
@@ -501,6 +502,27 @@
                 </div>
             </div>
 
+            <!-- Search & Controls Bar for Generated Clips -->
+            <div id="clipsControlBar" class="library-controls-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; flex-wrap: wrap; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 12px; flex: 1; max-width: 480px;">
+                    <div style="position: relative; width: 100%;">
+                        <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 13px;"></i>
+                        <input type="text" id="librarySearchInput" class="form-input" style="padding-left: 38px; height: 38px; font-size: 13px; border-radius: var(--radius-sm);" placeholder="Search clips by video title, part, or tags..." oninput="filterClipsLibrary(this.value)">
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span id="libraryStatsSummary" class="badge-pill" style="font-size: 12.5px; padding: 6px 14px; background: rgba(255, 255, 255, 0.05); color: #cbd5e1; border: 1px solid var(--border-subtle);">
+                        <i class="fa-solid fa-folder-tree" style="color: var(--primary); margin-right: 4px;"></i> <span id="libraryStatsSummaryText">0 Video Folders • 0 Clips</span>
+                    </span>
+                    <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="expandAllFolders(true)" title="Expand all video groups">
+                        <i class="fa-solid fa-angles-down"></i> Expand All
+                    </button>
+                    <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="expandAllFolders(false)" title="Collapse all video groups">
+                        <i class="fa-solid fa-angles-up"></i> Collapse All
+                    </button>
+                </div>
+            </div>
+
             <!-- Batch Selection Toolbar for Generated Clips -->
             <div id="clipsSelectionBar" class="clips-selection-bar" style="display: none;">
                 <div style="display: flex; align-items: center; gap: 14px;">
@@ -521,8 +543,8 @@
                 </div>
             </div>
 
-            <!-- Panel 1: Generated 9:16 Clips Grid -->
-            <div id="clipsGrid" class="clips-grid">
+            <!-- Panel 1: Video-by-Video Grouped Clips Container -->
+            <div id="clipsGrid" class="clips-folders-container">
                 <!-- Dynamically rendered by app.js loadClips() -->
             </div>
 
@@ -804,8 +826,9 @@
                     <h3 style="color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
                         <i class="fa-solid fa-closed-captioning" style="color: var(--primary);"></i> Subtitle & Caption Studio
                     </h3>
-                    <p style="font-size: 12px; color: var(--text-dim); margin-top: 3px;">
-                        Clip: <span id="subModalClipNameBadge" style="color: #fff; font-weight: 600;">clip.mp4</span>
+                    <p style="font-size: 12px; color: var(--text-dim); margin-top: 3px; display: flex; align-items: center; gap: 8px;">
+                        <span>Clip: <span id="subModalClipNameBadge" style="color: #fff; font-weight: 600;">clip.mp4</span></span>
+                        <span id="subModalGroupBadge" class="folder-badge accent" style="display: none; font-size: 11px;"><i class="fa-solid fa-layer-group"></i> Group Mode</span>
                     </p>
                 </div>
                 <button class="modal-close-btn" onclick="closeSubtitleModal()"><i class="fa-solid fa-xmark"></i></button>
@@ -949,6 +972,20 @@
                                 </button>
                             </div>
                         </div>
+
+                        <!-- Reel Caption / Script Preview -->
+                        <div style="background: #111a2e; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px; margin-top: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <label style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-dim); margin-bottom: 0;">
+                                    <i class="fa-solid fa-align-left"></i> Caption / Spoken Script Preview
+                                </label>
+                                <button type="button" class="btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="copyReelCaption()" title="Copy Caption">
+                                    <i class="fa-regular fa-copy"></i> Copy
+                                </button>
+                            </div>
+                            <textarea id="subFullCaptionInput" class="form-input" rows="2" style="font-size: 12px; resize: vertical;" placeholder="Full caption text derived from subtitles preview..." oninput="onSubFullCaptionManualChange(this.value)"></textarea>
+                            <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">Automatically saved to reel description & captions section on burn.</span>
+                        </div>
                     </div>
 
                     <!-- TAB 2: ONE-BY-ONE EDIT -->
@@ -981,10 +1018,26 @@
                     <button type="button" class="btn-secondary" onclick="saveSubtitlesDraft(true)">
                         <i class="fa-solid fa-floppy-disk"></i> Save Edits
                     </button>
+                    <button id="subBurnGroupExecuteBtn" type="button" class="btn-secondary folder-mount-btn" style="display: none;" onclick="executeBurnGroupSubtitles()" title="Mount subtitles to each clip in this group and save reels">
+                        <i class="fa-solid fa-layer-group"></i> <span id="subBurnGroupText">Mount All in Group (<span id="subGroupCountBadge">0</span>)</span>
+                    </button>
                     <button id="subBurnExecuteBtn" type="button" class="btn-primary" onclick="executeBurnSubtitles()">
                         <i class="fa-solid fa-fire-flame-curved"></i> <span id="subBurnExecuteText">Burn to Video</span>
                     </button>
                 </div>
+            </div>
+
+            <!-- Group Burn Progress Overlay -->
+            <div id="subGroupProgressOverlay" style="display: none; position: absolute; inset: 0; background: rgba(9, 13, 22, 0.94); z-index: 100; border-radius: var(--radius-lg); flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; backdrop-filter: blur(4px);">
+                <div style="font-size: 40px; color: var(--primary); margin-bottom: 16px;">
+                    <i class="fa-solid fa-wand-magic-sparkles fa-bounce"></i>
+                </div>
+                <h3 id="subGroupProgressTitle" style="color: #fff; font-size: 19px; font-weight: 700; margin-bottom: 8px;">Mounting Subtitles to All Reels...</h3>
+                <p id="subGroupProgressSubtitle" style="color: var(--text-dim); font-size: 13.5px; margin-bottom: 20px; max-width: 440px;">Initiating subtitle mount...</p>
+                <div style="width: 100%; max-width: 400px; height: 10px; background: rgba(255, 255, 255, 0.1); border-radius: 999px; overflow: hidden; margin-bottom: 12px; border: 1px solid var(--border-subtle);">
+                    <div id="subGroupProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #6366f1, #a855f7); transition: width 0.3s ease;"></div>
+                </div>
+                <span id="subGroupProgressPercent" style="font-size: 13px; font-weight: 700; color: #a5b4fc; font-family: monospace;">0%</span>
             </div>
         </div>
     </div>

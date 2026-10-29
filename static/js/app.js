@@ -23,6 +23,9 @@ const state = {
     selectedPublishAccounts: new Set(),
     selectedClips: new Set(),
     isBatchPublish: false,
+    clipGroups: [],
+    collapsedFolders: new Set(),
+    librarySearchQuery: "",
 };
 
 // Helper: HTTP request with auth header
@@ -30,6 +33,9 @@ async function apiRequest(url, options = {}) {
     options.headers = options.headers || {};
     if (state.token) {
         options.headers["Authorization"] = `Bearer ${state.token}`;
+    }
+    if (options.body && typeof options.body === "string" && !options.headers["Content-Type"]) {
+        options.headers["Content-Type"] = "application/json";
     }
     const res = await fetch(url, options);
     return res;
@@ -1028,83 +1034,356 @@ async function loadClips() {
         if (!res.ok) return;
         const data = await res.json();
         const clips = data.clips || [];
+        const groups = data.groups || [];
         state.clips = clips;
+        state.clipGroups = groups;
 
         if (countBadge) countBadge.textContent = clips.length;
         if (publishAllCount) publishAllCount.textContent = clips.length;
         if (publishAllBtn) publishAllBtn.style.display = clips.length > 0 ? "inline-flex" : "none";
 
         // Clean up any selected clips that no longer exist
-        const currentClipNames = new Set(clips.map(c => c.name));
-        for (const selName of state.selectedClips) {
-            if (!currentClipNames.has(selName)) {
-                state.selectedClips.delete(selName);
+        const currentClipKeys = new Set(clips.map(c => c.relative_path || c.name));
+        for (const selKey of state.selectedClips) {
+            if (!currentClipKeys.has(selKey)) {
+                state.selectedClips.delete(selKey);
             }
         }
 
-        if (clips.length === 0) {
-            grid.innerHTML = `
-                <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: var(--text-muted);">
-                    <div style="font-size: 42px; margin-bottom: 12px; opacity: 0.5;"><i class="fa-solid fa-film"></i></div>
-                    <h3 style="color: #fff; margin-bottom: 6px;">No Clips Generated Yet</h3>
-                    <p style="font-size: 13.5px; margin-bottom: 18px;">Paste a YouTube link in the Studio tab to generate vertical 9:16 reels.</p>
-                    <button class="btn-primary" onclick="switchView('studio')"><i class="fa-solid fa-wand-magic-sparkles"></i> Open Studio</button>
-                </div>
-            `;
-            updateClipSelectionUI();
-            return;
-        }
-
-        grid.innerHTML = clips.map((clip, index) => {
-            const url = clip.url || `/media/clips/${encodeURIComponent(clip.name)}`;
-            const sizeMb = clip.size_mb ? `${clip.size_mb} MB` : (clip.size_bytes ? (clip.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "");
-            const isSelected = state.selectedClips.has(clip.name);
-
-            return `
-                <div class="clip-card ${isSelected ? 'selected' : ''}" data-index="${index}" data-name="${escapeHtml(clip.name)}" data-url="${url}">
-                    <div class="clip-thumb-wrap" onclick="previewClipCard(this)">
-                        <video src="${url}" preload="metadata" muted playsinline></video>
-                        <label class="clip-select-label" onclick="event.stopPropagation()">
-                            <input type="checkbox" class="clip-select-checkbox" data-clipname="${escapeHtml(clip.name)}" ${isSelected ? 'checked' : ''} onchange="toggleClipSelection('${escapeHtml(clip.name)}', this.checked)">
-                            <span class="clip-select-custom"><i class="fa-solid fa-check"></i></span>
-                        </label>
-                        <div style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff;">
-                            9:16 Reel
-                        </div>
-                        <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.2s;" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=0">
-                            <div style="width: 48px; height: 48px; border-radius: 50%; background: var(--primary); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-                                <i class="fa-solid fa-play" style="margin-left: 3px;"></i>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="clip-info">
-                        <div class="clip-title" title="${escapeHtml(clip.name)}">${escapeHtml(clip.name)}</div>
-                        <div class="clip-meta-row">
-                            <span><i class="fa-regular fa-hard-drive"></i> ${sizeMb}</span>
-                            ${clip.has_subtitles ? '<span style="color: #ffe500; font-weight: 600;"><i class="fa-solid fa-closed-captioning"></i> Subtitled</span>' : '<span style="color: var(--accent-emerald); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Ready</span>'}
-                        </div>
-                        <div class="clip-actions-row">
-                            <a href="${url}" download="${escapeHtml(clip.name)}" class="btn-secondary" style="flex: 1; padding: 7px 8px; font-size: 11.5px; text-align: center;">
-                                <i class="fa-solid fa-download"></i> Save
-                            </a>
-                            <button type="button" class="btn-secondary" style="flex: 1.1; padding: 7px 8px; font-size: 11.5px;" onclick="openSubtitleModal('${escapeHtml(clip.name)}', '${url}')" title="Subtitles & Captions Studio">
-                                <i class="fa-solid fa-closed-captioning"></i> Captions
-                            </button>
-                            <button type="button" class="btn-primary" style="flex: 1.2; padding: 7px 10px; font-size: 11.5px;" onclick="publishClipCard(this)">
-                                <i class="fa-solid fa-rocket"></i> Publish
-                            </button>
-                            <button type="button" class="btn-secondary danger" style="padding: 7px 8px; font-size: 11.5px;" onclick="deleteClipCard(this)" title="Delete Clip">
-                                <i class="fa-solid fa-trash-can"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join("");
-
+        renderGroupedClips();
         updateClipSelectionUI();
     } catch (err) {
         console.error("Failed to load clips:", err);
+    }
+}
+
+function renderGroupedClips() {
+    const grid = document.getElementById("clipsGrid");
+    const summaryText = document.getElementById("libraryStatsSummaryText");
+    if (!grid) return;
+
+    const query = (state.librarySearchQuery || "").toLowerCase();
+    let groups = state.clipGroups || [];
+
+    // Filter groups and clips by search query
+    if (query) {
+        groups = groups.map(g => {
+            const groupTitleMatch = (g.title || "").toLowerCase().includes(query) || (g.folder_name || "").toLowerCase().includes(query);
+            if (groupTitleMatch) return g;
+            const filteredClips = (g.clips || []).filter(c => 
+                (c.name || "").toLowerCase().includes(query) ||
+                (c.clean_title || "").toLowerCase().includes(query) ||
+                (c.description || "").toLowerCase().includes(query)
+            );
+            return filteredClips.length > 0 ? { ...g, clips: filteredClips, clip_count: filteredClips.length } : null;
+        }).filter(Boolean);
+    }
+
+    const totalClips = groups.reduce((acc, g) => acc + (g.clips ? g.clips.length : 0), 0);
+    if (summaryText) {
+        summaryText.textContent = `${groups.length} Video Folder${groups.length === 1 ? '' : 's'} • ${totalClips} Total Clip${totalClips === 1 ? '' : 's'}`;
+    }
+
+    if (groups.length === 0) {
+        grid.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: var(--text-muted); background: rgba(255, 255, 255, 0.02); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md);">
+                <div style="font-size: 42px; margin-bottom: 12px; opacity: 0.5;"><i class="fa-solid fa-film"></i></div>
+                <h3 style="color: #fff; margin-bottom: 6px;">${query ? 'No Matching Clips Found' : 'No Clips Generated Yet'}</h3>
+                <p style="font-size: 13.5px; margin-bottom: 18px;">${query ? `No clips or video folders match "${escapeHtml(query)}"` : 'Paste a YouTube link in the Studio tab to generate vertical 9:16 reels grouped by video.'}</p>
+                ${query ? `<button class="btn-secondary" onclick="filterClipsLibrary('')"><i class="fa-solid fa-xmark"></i> Clear Filter</button>` : `<button class="btn-primary" onclick="switchView('studio')"><i class="fa-solid fa-wand-magic-sparkles"></i> Open Studio</button>`}
+            </div>
+        `;
+        return;
+    }
+
+    grid.innerHTML = groups.map(group => {
+        const isCollapsed = state.collapsedFolders.has(group.folder_path);
+        const groupClips = group.clips || [];
+        const selectedInGroup = groupClips.filter(c => state.selectedClips.has(c.relative_path || c.name)).length;
+        const isAllInGroupSelected = groupClips.length > 0 && selectedInGroup === groupClips.length;
+
+        const rowsHtml = groupClips.map((clip) => {
+            const clipKey = clip.relative_path || clip.name;
+            const isSelected = state.selectedClips.has(clipKey);
+            const url = clip.url || `/media/clips/${encodeURIComponent(clipKey)}`;
+            const thumbUrl = clip.thumbnail_url || `${url}/thumb`;
+            const durationBadge = clip.duration_formatted || "0:30";
+
+            return `
+                <tr class="yt-shorts-row ${isSelected ? 'selected' : ''}" data-name="${escapeHtml(clip.name)}" data-key="${escapeHtml(clipKey)}" data-url="${url}">
+                    <td class="yt-check-cell">
+                        <label class="custom-checkbox-label" onclick="event.stopPropagation()">
+                            <input type="checkbox" class="clip-select-checkbox" data-clipname="${escapeHtml(clipKey)}" ${isSelected ? 'checked' : ''} onchange="toggleClipSelection('${escapeHtml(clipKey)}', this.checked)">
+                            <span class="clip-select-custom"><i class="fa-solid fa-check"></i></span>
+                        </label>
+                    </td>
+                    <td class="yt-short-main-cell">
+                        <div class="yt-thumb-box" onclick="previewClipByUrl('${url}', '${escapeHtml(clip.clean_title || clip.name)}')">
+                            <img src="${thumbUrl}" alt="Thumbnail" class="yt-thumb-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';">
+                            <video src="${url}#t=0.5" preload="metadata" muted playsinline style="display:none; width:100%; height:100%; object-fit:cover;"></video>
+                            <div class="yt-duration-badge">${durationBadge}</div>
+                            <div class="yt-thumb-play-overlay">
+                                <div class="yt-play-icon-circle"><i class="fa-solid fa-play" style="margin-left: 2px;"></i></div>
+                            </div>
+                        </div>
+                        <div class="yt-short-details">
+                            <div class="yt-short-title" onclick="previewClipByUrl('${url}', '${escapeHtml(clip.clean_title || clip.name)}')">
+                                ${escapeHtml(clip.clean_title || clip.name)}
+                            </div>
+                            <div class="yt-short-desc" title="${escapeHtml(clip.description || '')}">
+                                ${escapeHtml(clip.description || '9:16 Vertical Reel • 1080x1920')}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="yt-notices-cell">
+                        ${clip.has_subtitles 
+                            ? `<span class="notice-pill subtitles"><i class="fa-solid fa-closed-captioning"></i> Subtitled</span>` 
+                            : `<span style="color: #64748b;">—</span>`}
+                    </td>
+                    <td class="yt-visibility-cell">
+                        ${clip.is_published 
+                            ? `<div class="visibility-indicator published"><i class="fa-solid fa-globe"></i> <span>Public</span></div>
+                               <span class="visibility-sub">${escapeHtml((clip.publish_platforms || []).join(', ') || 'Published')}</span>`
+                            : `<div class="visibility-indicator ready"><i class="fa-solid fa-link"></i> <span>Ready</span></div>
+                               <span class="visibility-sub">Unlisted</span>`}
+                    </td>
+                    <td class="yt-date-cell">
+                        <span class="date-main">${escapeHtml(clip.formatted_date || '')}</span>
+                        <span class="date-sub">${clip.is_published ? 'Published' : 'Uploaded'}</span>
+                    </td>
+                    <td class="yt-views-cell">
+                        ${clip.views || 0}
+                    </td>
+                    <td class="yt-size-cell">
+                        ${clip.size_mb ? clip.size_mb + ' MB' : ''}
+                    </td>
+                    <td class="yt-actions-cell">
+                        <div class="yt-action-btns-wrap" onclick="event.stopPropagation()">
+                            <button type="button" class="yt-btn-action primary" onclick="publishSingleClipRow('${escapeHtml(clipKey)}', '${url}')" title="Publish Reel to Socials">
+                                <i class="fa-solid fa-rocket"></i> Publish
+                            </button>
+                            <button type="button" class="yt-btn-action" onclick="openSubtitleModal('${escapeHtml(clip.name)}', '${url}')" title="Subtitles & Captions Studio">
+                                <i class="fa-solid fa-closed-captioning"></i>
+                            </button>
+                            <a href="${url}" download="${escapeHtml(clip.name)}" class="yt-btn-action" title="Download Clip">
+                                <i class="fa-solid fa-download"></i>
+                            </a>
+                            <button type="button" class="yt-btn-action danger" onclick="deleteSingleClipRow('${escapeHtml(clipKey)}', '${escapeHtml(clip.name)}')" title="Delete Clip">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join("");
+
+        return `
+            <div class="video-folder-card ${isCollapsed ? 'collapsed' : ''}" data-folder="${escapeHtml(group.folder_path)}">
+                <div class="video-folder-header" onclick="toggleFolderAccordion('${escapeHtml(group.folder_path)}')">
+                    <div class="video-folder-title-wrap">
+                        <div class="video-folder-chevron"><i class="fa-solid fa-chevron-down"></i></div>
+                        <div class="video-folder-icon"><i class="fa-solid fa-film"></i></div>
+                        <div class="video-folder-title-info">
+                            <div class="video-folder-title" title="${escapeHtml(group.title)}">${escapeHtml(group.title)}</div>
+                            <div class="video-folder-meta">
+                                <span class="folder-badge accent"><i class="fa-solid fa-layer-group"></i> ${group.clip_count} Clips</span>
+                                <span class="folder-badge"><i class="fa-solid fa-hard-drive"></i> ${group.total_size_mb} MB</span>
+                                <span class="folder-badge"><i class="fa-regular fa-calendar"></i> ${escapeHtml(group.formatted_date || '')}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="video-folder-actions" onclick="event.stopPropagation()">
+                        <label class="custom-checkbox-label" title="Select all clips in this video folder">
+                            <input type="checkbox" class="clip-select-checkbox folder-checkbox" data-folder="${escapeHtml(group.folder_path)}" ${isAllInGroupSelected ? 'checked' : ''} onchange="toggleFolderSelection('${escapeHtml(group.folder_path)}', this.checked)">
+                            <span class="clip-select-custom"><i class="fa-solid fa-check"></i></span>
+                            <span style="font-size: 12.5px; color: #cbd5e1; font-weight: 600; margin-left: 2px;">Select All</span>
+                        </label>
+                        <button type="button" class="folder-subtitles-btn" onclick="openGroupSubtitlesModal('${escapeHtml(group.folder_path)}')" title="Mount subtitles to each clip in this group and save reels">
+                            <i class="fa-solid fa-closed-captioning"></i> Mount Subtitles (${group.clip_count})
+                        </button>
+                        <button type="button" class="folder-publish-btn" onclick="publishVideoFolder('${escapeHtml(group.folder_path)}')" title="Publish all clips in this folder">
+                            <i class="fa-solid fa-paper-plane"></i> Publish Folder (<span class="folder-publish-count">${group.clip_count}</span>)
+                        </button>
+                        <button type="button" class="btn-secondary danger" style="padding: 7px 11px; font-size: 12px; border-radius: var(--radius-sm);" onclick="deleteVideoFolder('${escapeHtml(group.folder_path)}', '${escapeHtml(group.title)}')" title="Delete folder and clips">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="video-folder-body">
+                    <div class="yt-shorts-table-wrap">
+                        <table class="yt-shorts-table">
+                            <thead>
+                                <tr>
+                                    <th class="yt-check-cell"></th>
+                                    <th>Short</th>
+                                    <th>Notices</th>
+                                    <th>Visibility</th>
+                                    <th>Date</th>
+                                    <th>Views</th>
+                                    <th>Size</th>
+                                    <th style="text-align: right; padding-right: 18px;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rowsHtml}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    // Set indeterminate status on folder checkboxes if partially selected
+    groups.forEach(group => {
+        const groupClips = group.clips || [];
+        const selectedInGroup = groupClips.filter(c => state.selectedClips.has(c.relative_path || c.name)).length;
+        const folderCb = document.querySelector(`.folder-checkbox[data-folder="${CSS.escape ? CSS.escape(group.folder_path) : group.folder_path}"]`);
+        if (folderCb) {
+            folderCb.checked = groupClips.length > 0 && selectedInGroup === groupClips.length;
+            folderCb.indeterminate = selectedInGroup > 0 && selectedInGroup < groupClips.length;
+        }
+    });
+}
+
+function filterClipsLibrary(query) {
+    state.librarySearchQuery = (query || "").trim();
+    renderGroupedClips();
+    updateClipSelectionUI();
+}
+
+function toggleFolderAccordion(folderPath) {
+    if (state.collapsedFolders.has(folderPath)) {
+        state.collapsedFolders.delete(folderPath);
+    } else {
+        state.collapsedFolders.add(folderPath);
+    }
+    const card = document.querySelector(`.video-folder-card[data-folder="${CSS.escape ? CSS.escape(folderPath) : folderPath}"]`);
+    if (card) {
+        card.classList.toggle("collapsed", state.collapsedFolders.has(folderPath));
+    }
+}
+
+function expandAllFolders(expand) {
+    if (expand) {
+        state.collapsedFolders.clear();
+        document.querySelectorAll(".video-folder-card").forEach(c => c.classList.remove("collapsed"));
+    } else {
+        (state.clipGroups || []).forEach(g => state.collapsedFolders.add(g.folder_path));
+        document.querySelectorAll(".video-folder-card").forEach(c => c.classList.add("collapsed"));
+    }
+}
+
+function toggleFolderSelection(folderPath, isChecked) {
+    const group = (state.clipGroups || []).find(g => g.folder_path === folderPath);
+    if (!group || !group.clips) return;
+
+    group.clips.forEach(clip => {
+        const key = clip.relative_path || clip.name;
+        if (isChecked) {
+            state.selectedClips.add(key);
+        } else {
+            state.selectedClips.delete(key);
+        }
+    });
+
+    // Update row checkboxes inside this folder
+    const card = document.querySelector(`.video-folder-card[data-folder="${CSS.escape ? CSS.escape(folderPath) : folderPath}"]`);
+    if (card) {
+        card.querySelectorAll(".yt-shorts-row").forEach(row => {
+            row.classList.toggle("selected", isChecked);
+            const cb = row.querySelector(".clip-select-checkbox");
+            if (cb) cb.checked = isChecked;
+        });
+    }
+
+    updateClipSelectionUI();
+}
+
+function publishVideoFolder(folderPath) {
+    const group = (state.clipGroups || []).find(g => g.folder_path === folderPath);
+    if (!group || !group.clips || group.clips.length === 0) {
+        showToast("No clips found in this folder to publish", "warning");
+        return;
+    }
+
+    // Select all clips in this folder
+    state.selectedClips.clear();
+    group.clips.forEach(c => state.selectedClips.add(c.relative_path || c.name));
+
+    // Update UI checkboxes
+    document.querySelectorAll(".clip-select-checkbox").forEach(cb => {
+        const clipName = cb.dataset.clipname;
+        cb.checked = clipName && state.selectedClips.has(clipName);
+    });
+    document.querySelectorAll(".yt-shorts-row").forEach(row => {
+        const key = row.dataset.key || row.dataset.name;
+        row.classList.toggle("selected", state.selectedClips.has(key));
+    });
+
+    updateClipSelectionUI();
+
+    // Auto-fill batch title prefix and caption tailored to this video
+    const cleanFolderTitle = group.title || group.folder_name;
+    const captionInput = document.getElementById("publishCaptionInput");
+    if (captionInput) {
+        captionInput.value = `Best Highlights of ${cleanFolderTitle} part - {part} #viral #reels #shorts #trending #fyp`;
+    }
+
+    openPublishModalForSelected();
+}
+
+async function deleteVideoFolder(folderPath, folderTitle) {
+    if (!confirm(`Are you sure you want to delete the folder "${folderTitle}" and ALL clips inside it? This cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        showToast(`Deleting folder "${folderTitle}"...`, "info");
+        const res = await apiRequest(`/api/media/clips/folder?folder_path=${encodeURIComponent(folderPath)}`, {
+            method: "DELETE"
+        });
+        if (res.ok) {
+            const data = await res.json();
+            showToast(data.message || `Deleted folder (${data.freed_mb} MB freed)`, "success");
+            loadClips();
+            initStoragePill();
+        } else {
+            const err = await res.json();
+            showToast("Delete folder failed: " + (err.detail || "Server error"), "error");
+        }
+    } catch (err) {
+        showToast("Network error deleting folder", "error");
+    }
+}
+
+function previewClipByUrl(url, name) {
+    openPhoneModal(url, name);
+}
+
+function publishSingleClipRow(clipKey, url) {
+    const clipObj = (state.clips || []).find(c => (c.relative_path || c.name) === clipKey || c.name === clipKey);
+    const clipName = clipObj ? clipObj.name : clipKey;
+    const clipUrl = url || (clipObj ? clipObj.url : `/media/clips/${encodeURIComponent(clipKey)}`);
+    openSinglePublishModal(clipName, clipUrl);
+}
+
+async function deleteSingleClipRow(clipKey, clipName) {
+    if (!confirm(`Delete clip "${clipName}"?`)) return;
+
+    try {
+        const res = await apiRequest(`/api/media/clips?filename=${encodeURIComponent(clipKey)}`, { method: "DELETE" });
+        if (res.ok) {
+            showToast("Clip deleted successfully", "success");
+            state.selectedClips.delete(clipKey);
+            loadClips();
+            initStoragePill();
+        } else {
+            const err = await res.json();
+            showToast("Delete failed: " + (err.detail || "Server error"), "error");
+        }
+    } catch (err) {
+        showToast("Network error deleting clip", "error");
     }
 }
 
@@ -1112,17 +1391,30 @@ async function loadClips() {
 // Multi-Clip Selection Handlers
 // ──────────────────────────────────────────────────────────────────────────────
 
-function toggleClipSelection(clipName, isChecked) {
+function toggleClipSelection(clipKey, isChecked) {
     if (isChecked) {
-        state.selectedClips.add(clipName);
+        state.selectedClips.add(clipKey);
     } else {
-        state.selectedClips.delete(clipName);
+        state.selectedClips.delete(clipKey);
     }
 
-    const cards = document.querySelectorAll(".clip-card");
-    cards.forEach(card => {
-        if (card.dataset.name === clipName) {
-            card.classList.toggle("selected", isChecked);
+    // Update matching rows
+    document.querySelectorAll(".yt-shorts-row").forEach(row => {
+        if (row.dataset.key === clipKey || row.dataset.name === clipKey) {
+            row.classList.toggle("selected", isChecked);
+            const cb = row.querySelector(".clip-select-checkbox");
+            if (cb) cb.checked = isChecked;
+        }
+    });
+
+    // Update folder header checkboxes
+    (state.clipGroups || []).forEach(group => {
+        const groupClips = group.clips || [];
+        const selectedInGroup = groupClips.filter(c => state.selectedClips.has(c.relative_path || c.name)).length;
+        const folderCb = document.querySelector(`.folder-checkbox[data-folder="${CSS.escape ? CSS.escape(group.folder_path) : group.folder_path}"]`);
+        if (folderCb) {
+            folderCb.checked = groupClips.length > 0 && selectedInGroup === groupClips.length;
+            folderCb.indeterminate = selectedInGroup > 0 && selectedInGroup < groupClips.length;
         }
     });
 
@@ -1131,7 +1423,7 @@ function toggleClipSelection(clipName, isChecked) {
 
 function toggleSelectAllClips(selectAll) {
     if (selectAll) {
-        (state.clips || []).forEach(c => state.selectedClips.add(c.name));
+        (state.clips || []).forEach(c => state.selectedClips.add(c.relative_path || c.name));
     } else {
         state.selectedClips.clear();
     }
@@ -1142,8 +1434,13 @@ function toggleSelectAllClips(selectAll) {
         }
     });
 
-    document.querySelectorAll(".clip-card").forEach(card => {
-        card.classList.toggle("selected", selectAll);
+    document.querySelectorAll(".yt-shorts-row").forEach(row => {
+        row.classList.toggle("selected", selectAll);
+    });
+
+    document.querySelectorAll(".folder-checkbox").forEach(cb => {
+        cb.checked = selectAll;
+        cb.indeterminate = false;
     });
 
     updateClipSelectionUI();
@@ -1154,10 +1451,11 @@ function clearClipSelection() {
 
     document.querySelectorAll(".clip-select-checkbox").forEach(cb => {
         cb.checked = false;
+        cb.indeterminate = false;
     });
 
-    document.querySelectorAll(".clip-card").forEach(card => {
-        card.classList.remove("selected");
+    document.querySelectorAll(".yt-shorts-row").forEach(row => {
+        row.classList.remove("selected");
     });
 
     updateClipSelectionUI();
@@ -1187,28 +1485,29 @@ function updateClipSelectionUI() {
 }
 
 function previewClipCard(el) {
-    const card = el.closest(".clip-card");
+    const card = el.closest(".clip-card, .yt-shorts-row");
     if (!card) return;
     openPhoneModal(card.dataset.url, card.dataset.name);
 }
 
 function publishClipCard(el) {
-    const card = el.closest(".clip-card");
+    const card = el.closest(".clip-card, .yt-shorts-row");
     if (!card) return;
     openSinglePublishModal(card.dataset.name, card.dataset.url);
 }
 
 async function deleteClipCard(el) {
-    const card = el.closest(".clip-card");
+    const card = el.closest(".clip-card, .yt-shorts-row");
     if (!card) return;
+    const key = card.dataset.key || card.dataset.name;
     const filename = card.dataset.name;
     if (!confirm(`Delete clip "${filename}"?`)) return;
 
     try {
-        const res = await apiRequest(`/api/media/clips?filename=${encodeURIComponent(filename)}`, { method: "DELETE" });
+        const res = await apiRequest(`/api/media/clips?filename=${encodeURIComponent(key)}`, { method: "DELETE" });
         if (res.ok) {
             showToast("Clip deleted successfully", "success");
-            state.selectedClips.delete(filename);
+            state.selectedClips.delete(key);
             loadClips();
             initStoragePill();
         } else {
@@ -1564,7 +1863,14 @@ function openSinglePublishModal(clipName, clipUrl) {
     if (executeBtnText) executeBtnText.textContent = "Publish Now";
     if (video) video.src = clipUrl;
     if (badge) badge.textContent = clipName;
-    if (captionInput) captionInput.value = clipName.replace(".mp4", "").replace(/_/g, " ") + " #viral #reels #shorts";
+    if (captionInput) {
+        const foundClip = (state.clips || []).find(c => c.name === clipName || c.relative_path === clipName);
+        if (foundClip && foundClip.description && !foundClip.description.startsWith("Best Highlights of")) {
+            captionInput.value = foundClip.description;
+        } else {
+            captionInput.value = clipName.replace(".mp4", "").replace(/_/g, " ") + " #viral #reels #shorts";
+        }
+    }
 
     loadAccounts();
     if (modal) modal.classList.add("active");
@@ -1579,9 +1885,10 @@ function openPublishModalForSelected() {
     const selectedArray = Array.from(state.selectedClips);
 
     if (selectedArray.length === 1) {
-        const clipName = selectedArray[0];
-        const clipObj = (state.clips || []).find(c => c.name === clipName);
-        const url = clipObj ? (clipObj.url || `/media/clips/${encodeURIComponent(clipObj.name)}`) : `/media/clips/${encodeURIComponent(clipName)}`;
+        const clipKey = selectedArray[0];
+        const clipObj = (state.clips || []).find(c => (c.relative_path || c.name) === clipKey || c.name === clipKey);
+        const clipName = clipObj ? clipObj.name : clipKey;
+        const url = clipObj ? (clipObj.url || `/media/clips/${encodeURIComponent(clipObj.relative_path || clipObj.name)}`) : `/media/clips/${encodeURIComponent(clipKey)}`;
         openSinglePublishModal(clipName, url);
         return;
     }
@@ -1649,14 +1956,16 @@ function renderSelectedClipsInModal() {
         return;
     }
 
-    listWrap.innerHTML = selectedArray.map(name => {
+    listWrap.innerHTML = selectedArray.map(key => {
+        const clipObj = (state.clips || []).find(c => (c.relative_path || c.name) === key || c.name === key);
+        const displayName = clipObj ? (clipObj.clean_title || clipObj.name) : key;
         return `
-            <div class="selected-clip-item" data-clip="${escapeHtml(name)}">
+            <div class="selected-clip-item" data-clip="${escapeHtml(key)}">
                 <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; min-width: 0;">
                     <i class="fa-solid fa-film" style="color: var(--primary); font-size: 13px; flex-shrink: 0;"></i>
-                    <span style="font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; color: #fff;" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+                    <span style="font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; color: #fff;" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
                 </div>
-                <button type="button" class="remove-clip-btn" onclick="removeSelectedClipFromModal('${escapeHtml(name)}')" title="Remove from batch">
+                <button type="button" class="remove-clip-btn" onclick="removeSelectedClipFromModal('${escapeHtml(key)}')" title="Remove from batch">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
@@ -1664,15 +1973,15 @@ function renderSelectedClipsInModal() {
     }).join("");
 }
 
-function removeSelectedClipFromModal(clipName) {
-    state.selectedClips.delete(clipName);
+function removeSelectedClipFromModal(clipKey) {
+    state.selectedClips.delete(clipKey);
 
     // Update checkbox on library page if visible
-    const cb = document.querySelector(`.clip-select-checkbox[data-clipname="${CSS.escape ? CSS.escape(clipName) : clipName}"]`);
+    const cb = document.querySelector(`.clip-select-checkbox[data-clipname="${CSS.escape ? CSS.escape(clipKey) : clipKey}"]`);
     if (cb) cb.checked = false;
 
-    const card = document.querySelector(`.clip-card[data-name="${CSS.escape ? CSS.escape(clipName) : clipName}"]`);
-    if (card) card.classList.remove("selected");
+    const row = document.querySelector(`.yt-shorts-row[data-key="${CSS.escape ? CSS.escape(clipKey) : clipKey}"]`);
+    if (row) row.classList.remove("selected");
 
     updateClipSelectionUI();
 
@@ -1684,9 +1993,10 @@ function removeSelectedClipFromModal(clipName) {
 
     if (state.selectedClips.size === 1) {
         // Switch to single clip view inside modal
-        const remainingClipName = Array.from(state.selectedClips)[0];
-        const clipObj = (state.clips || []).find(c => c.name === remainingClipName);
-        const url = clipObj ? (clipObj.url || `/media/clips/${encodeURIComponent(clipObj.name)}`) : `/media/clips/${encodeURIComponent(remainingClipName)}`;
+        const remainingKey = Array.from(state.selectedClips)[0];
+        const clipObj = (state.clips || []).find(c => (c.relative_path || c.name) === remainingKey || c.name === remainingKey);
+        const remainingClipName = clipObj ? clipObj.name : remainingKey;
+        const url = clipObj ? (clipObj.url || `/media/clips/${encodeURIComponent(clipObj.relative_path || clipObj.name)}`) : `/media/clips/${encodeURIComponent(remainingKey)}`;
         openSinglePublishModal(remainingClipName, url);
         return;
     }
@@ -2274,26 +2584,73 @@ const subState = {
         text_transform: "uppercase",
         box_style: "none"
     },
-    activeTab: "bulk"
+    activeTab: "bulk",
+    groupContext: null,
+    manualCaptionEdited: false
 };
 
-async function openSubtitleModal(clipName, clipUrl) {
+async function openSubtitleModal(clipName, clipUrl, groupOptions = null) {
     subState.clipName = clipName;
     subState.clipUrl = clipUrl;
     subState.cues = [];
+    subState.manualCaptionEdited = false;
+
+    // Detect group context
+    let group = null;
+    if (groupOptions && groupOptions.groupFolderPath) {
+        group = groupOptions;
+    } else {
+        for (const g of (state.clipGroups || [])) {
+            if ((g.clips || []).some(c => c.name === clipName || c.relative_path === clipName)) {
+                group = {
+                    groupFolderPath: g.folder_path,
+                    groupTitle: g.title,
+                    groupClipCount: g.clip_count,
+                    groupClips: g.clips
+                };
+                break;
+            }
+        }
+    }
+    subState.groupContext = group;
 
     const modal = document.getElementById("subtitlesModal");
     const video = document.getElementById("subModalVideo");
     const clipBadge = document.getElementById("subModalClipNameBadge");
+    const groupBadge = document.getElementById("subModalGroupBadge");
     const banner = document.getElementById("subStatusBanner");
+    const burnGroupBtn = document.getElementById("subBurnGroupExecuteBtn");
+    const burnGroupCount = document.getElementById("subGroupCountBadge");
 
     if (clipBadge) clipBadge.textContent = clipName;
+    if (groupBadge) {
+        if (group && group.groupTitle) {
+            groupBadge.style.display = "inline-flex";
+            groupBadge.innerHTML = `<i class="fa-solid fa-layer-group"></i> ${escapeHtml(group.groupTitle)} (${group.groupClipCount} Clips)`;
+        } else {
+            groupBadge.style.display = "none";
+        }
+    }
+
+    if (burnGroupBtn) {
+        if (group && group.groupClipCount > 1) {
+            burnGroupBtn.style.display = "inline-flex";
+            if (burnGroupCount) burnGroupCount.textContent = group.groupClipCount;
+        } else {
+            burnGroupBtn.style.display = "none";
+        }
+    }
+
     if (banner) {
         banner.style.display = "block";
         banner.style.background = "rgba(99, 102, 241, 0.15)";
         banner.style.border = "1px solid rgba(99, 102, 241, 0.35)";
         banner.style.color = "#a5b4fc";
-        banner.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Retrieving transcript and slicing subtitles...';
+        if (groupOptions && groupOptions.isGroupMode) {
+            banner.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> <strong>Group Subtitle Studio:</strong> Configuring style for all ${group.groupClipCount} reels in "${escapeHtml(group.groupTitle)}". Slicing preview for <code>${escapeHtml(clipName)}</code>...`;
+        } else {
+            banner.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Retrieving transcript and slicing subtitles...';
+        }
     }
 
     if (video) {
@@ -2317,7 +2674,13 @@ async function openSubtitleModal(clipName, clipUrl) {
 
         // Check banner notices
         if (banner) {
-            if (subState.cues.length > 0) {
+            if (groupOptions && groupOptions.isGroupMode) {
+                banner.style.display = "block";
+                banner.style.background = "rgba(99, 102, 241, 0.15)";
+                banner.style.border = "1px solid rgba(99, 102, 241, 0.35)";
+                banner.style.color = "#c7d2fe";
+                banner.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> <strong>Group Subtitle Mode:</strong> Previewing <code>${escapeHtml(clipName)}</code>. Configure style, then click <strong>"Mount All in Group (${group.groupClipCount})"</strong> below to mount and save subtitles to all reels in this group.`;
+            } else if (subState.cues.length > 0) {
                 banner.style.display = "none";
             } else if (data.has_groq_key === false) {
                 banner.style.background = "rgba(245, 158, 11, 0.15)";
@@ -2335,6 +2698,7 @@ async function openSubtitleModal(clipName, clipUrl) {
         syncSubStyleControlsFromState();
         renderSubCuesList();
         updateSubOverlay();
+        updateFullCaptionPreview();
 
     } catch (err) {
         console.error("Error opening subtitles:", err);
@@ -2435,6 +2799,7 @@ function applySubPreset(preset) {
     }
     syncSubStyleControlsFromState();
     updateSubOverlay();
+    updateFullCaptionPreview();
     showToast(`Applied preset: ${preset.toUpperCase()}`);
 }
 
@@ -2448,6 +2813,9 @@ function updateSubStyle(key, value) {
         if (hex) hex.textContent = value.toUpperCase();
     }
     updateSubOverlay();
+    if (key === "text_transform") {
+        updateFullCaptionPreview();
+    }
 }
 
 function setSubPosition(pos, updateOverlayNow = true) {
@@ -2645,6 +3013,7 @@ function onSubCueTextChange(index, value) {
     if (!subState.cues[index]) return;
     subState.cues[index].text = value;
     updateSubOverlay();
+    updateFullCaptionPreview();
 }
 
 function addNewSubCue() {
@@ -2660,12 +3029,14 @@ function addNewSubCue() {
     subState.cues.sort((a, b) => a.start - b.start);
     renderSubCuesList();
     updateSubOverlay();
+    updateFullCaptionPreview();
 }
 
 function deleteSubCue(index) {
     subState.cues.splice(index, 1);
     renderSubCuesList();
     updateSubOverlay();
+    updateFullCaptionPreview();
 }
 
 function round2(num) {
@@ -2710,14 +3081,74 @@ function bulkFindAndReplace() {
 
     renderSubCuesList();
     updateSubOverlay();
+    updateFullCaptionPreview();
     showToast(`Replaced occurrences in ${replacements} cues.`);
+}
+
+function updateFullCaptionPreview() {
+    const input = document.getElementById("subFullCaptionInput");
+    if (!input || subState.manualCaptionEdited) return;
+
+    const transform = (subState.styles && subState.styles.text_transform) || "none";
+    const textPieces = (subState.cues || []).map(c => {
+        let t = (c.text || "").trim();
+        if (transform === "uppercase") t = t.toUpperCase();
+        else if (transform === "title") t = t.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+        return t;
+    }).filter(Boolean);
+
+    input.value = textPieces.join(" ");
+}
+
+function onSubFullCaptionManualChange(val) {
+    subState.manualCaptionEdited = true;
+}
+
+function copyReelCaption() {
+    const input = document.getElementById("subFullCaptionInput");
+    if (!input || !input.value.trim()) {
+        showToast("No caption text to copy.", "info");
+        return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(input.value.trim()).then(() => {
+            showToast("Caption copied to clipboard!");
+        }).catch(() => {
+            input.select();
+            document.execCommand("copy");
+            showToast("Caption copied to clipboard!");
+        });
+    } else {
+        input.select();
+        document.execCommand("copy");
+        showToast("Caption copied to clipboard!");
+    }
+}
+
+function applyCurrentTransformToCues() {
+    const transform = (subState.styles && subState.styles.text_transform) || "none";
+    if (Array.isArray(subState.cues) && transform !== "none") {
+        for (const cue of subState.cues) {
+            if (!cue.text) continue;
+            if (transform === "uppercase") {
+                cue.text = cue.text.toUpperCase();
+            } else if (transform === "title") {
+                cue.text = cue.text.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+            }
+        }
+        renderSubCuesList();
+    }
+    updateFullCaptionPreview();
+    updateSubOverlay();
 }
 
 async function saveSubtitlesDraft(notify = true) {
     if (!subState.clipName) return;
+    applyCurrentTransformToCues();
     try {
         const res = await apiRequest(`/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/save`, {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 cues: subState.cues,
                 styles: subState.styles
@@ -2745,35 +3176,187 @@ async function executeBurnSubtitles() {
         return;
     }
 
+    // 1. Transform cues so the saved captions match what was previewed
+    applyCurrentTransformToCues();
+
     const btn = document.getElementById("subBurnExecuteBtn");
     const btnText = document.getElementById("subBurnExecuteText");
 
     if (btn) btn.disabled = true;
-    if (btnText) btnText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Rendering Subtitles...';
+    if (btnText) btnText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Burning & Replacing Reel...';
+
+    // 2. Pause video and release src so browser releases Windows file lock
+    const video = document.getElementById("subModalVideo");
+    if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+    }
 
     try {
         const res = await apiRequest(`/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/burn`, {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 cues: subState.cues,
                 styles: subState.styles,
-                replace_original: false
+                replace_original: true // Always replace original clip with current configurations
             })
         });
 
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Burning failed");
 
-        showToast(`Subtitles burned successfully! Created: ${data.filename}`);
+        showToast("Subtitles burned and reel replaced successfully with current configurations!");
         closeSubtitleModal();
-        renderClips();
+        await loadClips();
 
     } catch (err) {
         console.error("Burn error:", err);
         alert(`Failed to burn subtitles: ${err.message}`);
+        if (video && subState.clipUrl) {
+            video.src = subState.clipUrl;
+            video.load();
+        }
     } finally {
         if (btn) btn.disabled = false;
         if (btnText) btnText.innerHTML = '<i class="fa-solid fa-fire-flame-curved"></i> Burn to Video';
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GROUP SUBTITLE MOUNTING
+// ──────────────────────────────────────────────────────────────────────────────
+
+function openGroupSubtitlesModal(folderPath) {
+    const group = (state.clipGroups || []).find(g => g.folder_path === folderPath || g.folder_name === folderPath);
+    if (!group || !group.clips || group.clips.length === 0) {
+        showToast("No clips found in this video folder.", "warning");
+        return;
+    }
+
+    // Open Subtitle Studio with first clip of the group as live visual preview
+    const firstClip = group.clips[0];
+    const url = firstClip.url || `/media/clips/${encodeURIComponent(firstClip.relative_path || firstClip.name)}`;
+
+    openSubtitleModal(firstClip.relative_path || firstClip.name, url, {
+        isGroupMode: true,
+        groupFolderPath: group.folder_path,
+        groupTitle: group.title,
+        groupClipCount: group.clip_count,
+        groupClips: group.clips
+    });
+}
+
+async function executeBurnGroupSubtitles() {
+    if (!subState.groupContext) {
+        alert("No group context found for this clip.");
+        return;
+    }
+    const ctx = subState.groupContext;
+
+    const confirmed = confirm(
+        `Mount subtitles to all ${ctx.groupClipCount} reels in "${ctx.groupTitle}" using the current subtitle style configurations?\n\nThis will mount styled subtitles to each clip in the group and save those reels.`
+    );
+    if (!confirmed) return;
+
+    // Apply preview transform
+    applyCurrentTransformToCues();
+
+    // Release video src to prevent Windows file locks
+    const video = document.getElementById("subModalVideo");
+    if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+    }
+
+    const overlay = document.getElementById("subGroupProgressOverlay");
+    const title = document.getElementById("subGroupProgressTitle");
+    const subTitle = document.getElementById("subGroupProgressSubtitle");
+    const bar = document.getElementById("subGroupProgressBar");
+    const pct = document.getElementById("subGroupProgressPercent");
+
+    if (overlay) overlay.style.display = "flex";
+    if (title) title.textContent = `Mounting Subtitles to "${ctx.groupTitle}"...`;
+    if (subTitle) subTitle.textContent = `Starting mount for ${ctx.groupClipCount} reels in background...`;
+    if (bar) bar.style.width = "0%";
+    if (pct) pct.textContent = "0%";
+
+    try {
+        const res = await apiRequest(`/api/groups/${encodeURIComponent(ctx.groupFolderPath)}/subtitles/burn`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                styles: subState.styles,
+                replace_original: true
+            })
+        });
+
+        if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.detail || "Failed to start group subtitle burning");
+        }
+
+        const data = await res.json();
+        const jobId = data.job_id;
+
+        await pollSubtitleJob(jobId, ctx);
+
+    } catch (err) {
+        console.error("Group subtitle burn error:", err);
+        alert(`Failed to mount subtitles to group: ${err.message}`);
+        if (overlay) overlay.style.display = "none";
+        if (video && subState.clipUrl) {
+            video.src = subState.clipUrl;
+            video.load();
+        }
+    }
+}
+
+function pollSubtitleJob(jobId, ctx) {
+    return new Promise((resolve, reject) => {
+        const interval = setInterval(async () => {
+            try {
+                const res = await apiRequest(`/api/subtitle-jobs/${jobId}`);
+                if (!res.ok) {
+                    clearInterval(interval);
+                    reject(new Error("Subtitle job status check failed"));
+                    return;
+                }
+                const job = await res.json();
+
+                const overlay = document.getElementById("subGroupProgressOverlay");
+                const subTitle = document.getElementById("subGroupProgressSubtitle");
+                const bar = document.getElementById("subGroupProgressBar");
+                const pct = document.getElementById("subGroupProgressPercent");
+
+                if (bar) bar.style.width = `${job.progress || 0}%`;
+                if (pct) pct.textContent = `${job.progress || 0}%`;
+                if (subTitle) subTitle.textContent = job.message || "Mounting subtitles to reels...";
+
+                if (job.status === "completed") {
+                    clearInterval(interval);
+                    if (bar) bar.style.width = "100%";
+                    if (pct) pct.textContent = "100%";
+                    if (subTitle) subTitle.textContent = `Completed! ${job.processed_clips} reels saved with subtitles.`;
+                    setTimeout(() => {
+                        if (overlay) overlay.style.display = "none";
+                        closeSubtitleModal();
+                        showToast(`All ${job.processed_clips} reels in "${ctx.groupTitle}" now have subtitles mounted and saved!`, "success");
+                        loadClips();
+                        resolve(job);
+                    }, 800);
+                } else if (job.status === "failed") {
+                    clearInterval(interval);
+                    if (overlay) overlay.style.display = "none";
+                    alert(`Group subtitle mount failed: ${job.error || "Unknown error"}`);
+                    reject(new Error(job.error || "Job failed"));
+                }
+            } catch (pollErr) {
+                console.error("Subtitle job poll error:", pollErr);
+            }
+        }, 1200);
+    });
 }
 

@@ -59,8 +59,45 @@ app = FastAPI(title="ClipForge Studio")
 
 logger = logging.getLogger("clipforge")
 
+def organize_clips_into_video_folders():
+    """Ensure all clips in data/clips/my_clips are organized into separate video folders."""
+    my_clips_dir = CLIPS_DIR / "my_clips"
+    if not my_clips_dir.exists():
+        return
+    try:
+        for file in list(my_clips_dir.glob("*.mp4")):
+            if not file.is_file():
+                continue
+            stem = file.stem
+            match = re.split(r"(_part_\d+|- part \d+|__part\d+)", stem, flags=re.IGNORECASE)
+            raw_title = match[0].strip() if len(match) > 1 else stem.strip()
+            raw_title = re.sub(r"[_\-]+$", "", raw_title).strip()
+            folder_name = safe_name(raw_title or "Untitled")
+            target_folder = my_clips_dir / folder_name
+            target_folder.mkdir(parents=True, exist_ok=True)
+            target_file = target_folder / file.name
+            try:
+                shutil.move(str(file), str(target_file))
+            except Exception:
+                continue
+            for comp in list(my_clips_dir.glob(f"{file.name}*")):
+                if comp.is_file() and comp != file:
+                    try:
+                        shutil.move(str(comp), str(target_folder / comp.name))
+                    except Exception:
+                        pass
+            for comp in list(my_clips_dir.glob(f"{file.stem}.*")):
+                if comp.is_file() and comp.suffix != ".mp4":
+                    try:
+                        shutil.move(str(comp), str(target_folder / comp.name))
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.warning("Auto-organizing clips encountered error: %s", exc)
+
 @app.on_event("startup")
 def on_startup():
+    organize_clips_into_video_folders()
     if db.is_db_connected():
         cleaned = db.db_cleanup_stale_jobs()
         if cleaned > 0:
@@ -116,6 +153,9 @@ class ClipRequest(BaseModel):
     show_title: bool = True
     show_parts: bool = True
     keep_source: bool = True
+
+    title_y: int = 180
+    part_y: int | None = None
 
     # "blur" for cinematic blurred 9:16 background, "black" for classic bars.
     background_style: str = "blur"
@@ -232,13 +272,24 @@ def extract_video_id(url: str) -> str | None:
 
 
 def find_file_in_dir(directory: Path, filename: str) -> Path | None:
-    """Find a file by exact or URL-unquoted name in directory or subdirectories."""
+    """Find a file by exact, relative subpath, or URL-unquoted name in directory or subdirectories."""
     if not directory.exists():
         return None
     import urllib.parse
-    clean_name = urllib.parse.unquote(filename)
+    clean_name = urllib.parse.unquote(filename).replace("\\", "/").strip("/")
     safe_target = Path(clean_name).name
     raw_target = Path(filename).name
+
+    # Check direct relative path from directory first
+    try:
+        direct_sub = directory / clean_name
+        if direct_sub.is_file():
+            return direct_sub
+        direct_sub_raw = directory / filename.replace("\\", "/").strip("/")
+        if direct_sub_raw.is_file():
+            return direct_sub_raw
+    except Exception:
+        pass
 
     direct = directory / safe_target
     if direct.is_file():
@@ -250,6 +301,38 @@ def find_file_in_dir(directory: Path, filename: str) -> Path | None:
     for p in directory.rglob("*"):
         if p.is_file() and (p.name == safe_target or p.name == raw_target):
             return p
+    return None
+
+
+def ensure_clip_thumbnail(clip_path: Path) -> Path | None:
+    """Generate and cache a 9:16 vertical JPEG thumbnail for a video clip."""
+    if not clip_path.exists() or not clip_path.is_file():
+        return None
+    thumb_path = clip_path.with_name(f"{clip_path.stem}.thumb.jpg")
+    if thumb_path.exists() and thumb_path.stat().st_size > 0:
+        return thumb_path
+
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-ss", "00:00:01", "-i", str(clip_path),
+            "-vframes", "1",
+            "-vf", "scale=180:320:force_original_aspect_ratio=decrease,pad=180:320:(ow-iw)/2:(oh-ih)/2:black",
+            "-q:v", "3", str(thumb_path)
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        if not thumb_path.exists() or thumb_path.stat().st_size == 0:
+            cmd_fallback = [
+                "ffmpeg", "-y", "-ss", "00:00:00", "-i", str(clip_path),
+                "-vframes", "1",
+                "-vf", "scale=180:320:force_original_aspect_ratio=decrease,pad=180:320:(ow-iw)/2:(oh-ih)/2:black",
+                "-q:v", "3", str(thumb_path)
+            ]
+            subprocess.run(cmd_fallback, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            return thumb_path
+    except Exception as e:
+        logger.warning("Could not generate thumbnail for %s: %s", clip_path.name, e)
     return None
 
 
@@ -523,9 +606,12 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 )
             ).resolve()
         else:
+            raw_title_clean = re.sub(r"[_\-\s]*\{part\}", "", request.title or "Untitled", flags=re.IGNORECASE).strip()
+            raw_title_clean = re.sub(r"[_\-\s]+part[_\-\s]*$", "", raw_title_clean, flags=re.IGNORECASE).strip()
+            video_folder_name = safe_name(raw_title_clean or "Untitled")
             output_folder = CLIPS_DIR / safe_name(
                 request.clips_folder
-            )
+            ) / video_folder_name
 
         output_folder.mkdir(parents=True, exist_ok=True)
         job_output_dirs[job_id] = output_folder
@@ -733,22 +819,41 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 end - clip_start,
             )
 
-            title = (
-                safe_name(request.title)
-                if request.show_title
-                else ""
-            )
+            # Resolve title & part texts
+            raw_title = (request.title or "").strip()
+            # Support {part} placeholder in title (e.g. "My Video part - {part}")
+            has_part_in_title = bool(re.search(r"\{part\}", raw_title, re.IGNORECASE))
+            if has_part_in_title:
+                formatted_title = re.sub(r"\{part\}", str(index + 1), raw_title, flags=re.IGNORECASE)
+            else:
+                formatted_title = raw_title
 
-            part = (
-                f"Part {index + 1}"
-                if request.show_parts
-                else ""
-            )
+            title = formatted_title if request.show_title else ""
 
-            filename = (
-                f"{safe_name(request.title)}_part_{index + 1}.mp4"
-            )
+            # If user already embedded {part} into the title itself, don't duplicate a standalone "Part X" label
+            if has_part_in_title:
+                part = ""
+            elif request.show_parts:
+                part = f"Part {index + 1}"
+            else:
+                part = ""
+
+            stem_base = re.sub(r"[_\-\s]*\{part\}", "", raw_title, flags=re.IGNORECASE).strip()
+            stem_base = re.sub(r"[_\-\s]+part[_\-\s]*$", "", stem_base, flags=re.IGNORECASE).strip()
+            safe_stem = safe_name(stem_base or "clip")
+            filename = f"{safe_stem}_part_{index + 1}.mp4"
             output_path = output_folder / filename
+
+            # Calculate dynamic vertical positions (moved down into safe zone to avoid phone notches / UI)
+            title_y = request.title_y if getattr(request, "title_y", None) is not None else 180
+            if request.part_y is not None:
+                part_y = request.part_y
+            elif title and part:
+                part_y = title_y + 95  # 255 if title_y=180 (clean 23px visual gap below title box)
+            elif part:
+                part_y = title_y       # Primary position if only part is shown
+            else:
+                part_y = title_y + 95
 
             # Fit the video into a 9:16 frame.
             if request.background_style == "blur":
@@ -769,7 +874,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         "fontcolor=white:"
                         "fontsize=48:"
                         "x=(w-text_w)/2:"
-                        "y=55:"
+                        f"y={title_y}:"
                         "box=1:"
                         "boxcolor=black@0.45:"
                         "boxborderw=14[t1]"
@@ -784,7 +889,10 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         "fontcolor=white:"
                         "fontsize=34:"
                         "x=(w-text_w)/2:"
-                        "y=175[t2]"
+                        f"y={part_y}:"
+                        "box=1:"
+                        "boxcolor=black@0.40:"
+                        "boxborderw=10[t2]"
                     )
                     last_pad = "t2"
 
@@ -807,7 +915,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         "fontcolor=white:"
                         "fontsize=48:"
                         "x=(w-text_w)/2:"
-                        "y=55:"
+                        f"y={title_y}:"
                         "box=1:"
                         "boxcolor=black@0.35:"
                         "boxborderw=14"
@@ -821,7 +929,10 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         "fontcolor=white:"
                         "fontsize=34:"
                         "x=(w-text_w)/2:"
-                        "y=175"
+                        f"y={part_y}:"
+                        "box=1:"
+                        "boxcolor=black@0.35:"
+                        "boxborderw=10"
                     )
 
                 filter_args = ["-vf", filters, "-map", "0:v:0"]
@@ -890,10 +1001,16 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 logger.warning("Could not persist clip metadata: %s", meta_err)
 
             import urllib.parse
+            rel_clip_path = str(output_path.relative_to(CLIPS_DIR)).replace("\\", "/")
             created_files.append({
                 "name": filename,
-                "url": f"/media/clips/{urllib.parse.quote(filename)}",
+                "relative_path": rel_clip_path,
+                "url": f"/media/clips/{urllib.parse.quote(rel_clip_path)}",
             })
+            try:
+                ensure_clip_thumbnail(output_path)
+            except Exception:
+                pass
 
             update_job(
                 job_id,
@@ -1287,6 +1404,28 @@ def download_clip(job_id: str, filename: str):
     )
 
 
+@app.get("/media/clip-thumbs/{filename:path}")
+@app.get("/media/clips/{filename:path}/thumb")
+def serve_clip_thumbnail(filename: str):
+    """Serve or generate a 9:16 vertical JPEG thumbnail for a clip."""
+    unquoted = urllib.parse.unquote(filename).replace("\\", "/")
+    clip_path = find_file_in_dir(CLIPS_DIR, unquoted)
+    if not clip_path:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Clip '{Path(unquoted).name}' not found",
+        )
+    thumb = ensure_clip_thumbnail(clip_path)
+    if not thumb or not thumb.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail could not be generated")
+    return FileResponse(
+        thumb,
+        media_type="image/jpeg",
+        filename=thumb.name,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/media/clips/{filename:path}")
 def serve_clip_media(filename: str):
     """Serve generated clip video directly by filename for preview or social publishing."""
@@ -1307,22 +1446,153 @@ def serve_clip_media(filename: str):
 
 @app.get("/api/clips")
 def list_available_clips():
-    """List all available generated clips found in the clips directory."""
-    clips = []
+    """List all available generated clips grouped by video title and folder."""
+    all_clips = []
+    groups_dict = {}
+
+    # Load publish history to map published status
+    from storage import read_json, HISTORY_FILE
+    history_records = read_json(HISTORY_FILE, {"records": []}).get("records", [])
+    published_map = {}
+    for record in history_records:
+        c_name = record.get("clip_name")
+        c_path = record.get("clip_path")
+        success_targets = [t for t in record.get("targets", []) if t.get("status") == "success"]
+        if success_targets:
+            if c_name:
+                published_map[c_name] = success_targets
+            if c_path:
+                published_map[Path(c_path).name] = success_targets
+
     if CLIPS_DIR.exists():
         for file in sorted(CLIPS_DIR.glob("**/*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
-            encoded_name = urllib.parse.quote(file.name)
-            stat = file.stat()
-            has_subtitles = file.with_name(f"{file.name}.subtitles.json").exists() or "_subtitled" in file.stem
-            clips.append({
-                "name": file.name,
-                "url": f"/media/clips/{encoded_name}",
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "size_bytes": stat.st_size,
-                "modified": stat.st_mtime,
-                "has_subtitles": has_subtitles,
-            })
-    return {"clips": clips}
+            if file.name.endswith("_temp_burn.mp4"):
+                continue
+            try:
+                stat = file.stat()
+                rel_path = str(file.relative_to(CLIPS_DIR)).replace("\\", "/")
+                parent_folder = file.parent
+                folder_name = parent_folder.name if parent_folder != CLIPS_DIR and parent_folder != (CLIPS_DIR / "my_clips") else "General"
+                folder_rel = str(parent_folder.relative_to(CLIPS_DIR)).replace("\\", "/") if parent_folder != CLIPS_DIR else "my_clips"
+
+                # Subtitles
+                has_subtitles = (
+                    file.with_name(f"{file.name}.subtitles.json").exists()
+                    or file.with_name(f"{file.stem}.subtitles.json").exists()
+                    or "_subtitled" in file.stem
+                )
+
+                # Duration & Metadata
+                duration = 0.0
+                meta_data = {}
+                meta_file = file.with_name(f"{file.name}.meta.json")
+                if not meta_file.exists():
+                    meta_file = file.with_name(f"{file.stem}.meta.json")
+                if meta_file.exists():
+                    try:
+                        import json
+                        with open(meta_file, "r", encoding="utf-8") as f_meta:
+                            meta_data = json.load(f_meta)
+                            duration = float(meta_data.get("duration", 0.0))
+                            if meta_data.get("has_subtitles"):
+                                has_subtitles = True
+                    except Exception:
+                        pass
+
+                if duration <= 0:
+                    try:
+                        duration = probe_duration(file)
+                    except Exception:
+                        duration = 30.0
+
+                mins = int(duration // 60)
+                secs = int(duration % 60)
+                duration_str = f"{mins}:{secs:02d}"
+
+                stem = file.stem
+                part_match = re.search(r"part_(\d+)", stem, re.IGNORECASE)
+                part_num = int(part_match.group(1)) if part_match else 1
+                part_label = f"Part {part_num}" if part_match else ""
+
+                clean_title = f"{folder_name}_part_{part_num} - Part {part_num}" if (part_match and folder_name != "General") else stem
+                meta_caption = (meta_data.get("caption") or meta_data.get("description") or "").strip()
+                default_caption = f"Best Highlights of {folder_name} | part - {part_num} #viral #reels #shorts #trending" if folder_name != "General" else f"{stem} #viral #reels #shorts"
+                caption = meta_caption if meta_caption else default_caption
+
+                dt = datetime.datetime.fromtimestamp(stat.st_mtime)
+                date_str = dt.strftime("%b %d, %Y")
+
+                pub_targets = published_map.get(file.name) or published_map.get(stem)
+                is_published = bool(pub_targets)
+                publish_platforms = [t.get("account_alias") or t.get("platform") for t in (pub_targets or [])]
+                publish_url = pub_targets[0].get("url") if pub_targets else None
+
+                encoded_rel = urllib.parse.quote(rel_path)
+                url = f"/media/clips/{encoded_rel}"
+                thumb_url = f"/media/clip-thumbs/{encoded_rel}"
+
+                clip_data = {
+                    "name": file.name,
+                    "relative_path": rel_path,
+                    "folder_name": folder_name,
+                    "folder_path": folder_rel,
+                    "url": url,
+                    "thumbnail_url": thumb_url,
+                    "clean_title": clean_title,
+                    "description": caption,
+                    "part_number": part_num,
+                    "part_label": part_label,
+                    "duration": duration,
+                    "duration_formatted": duration_str,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "size_bytes": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "formatted_date": date_str,
+                    "has_subtitles": has_subtitles,
+                    "is_published": is_published,
+                    "publish_platforms": publish_platforms,
+                    "publish_url": publish_url,
+                    "views": 0,
+                    "comments": 0,
+                }
+                all_clips.append(clip_data)
+
+                if folder_rel not in groups_dict:
+                    groups_dict[folder_rel] = {
+                        "folder_name": folder_name,
+                        "folder_path": folder_rel,
+                        "title": folder_name,
+                        "clips": [],
+                        "clip_count": 0,
+                        "total_size_mb": 0.0,
+                        "modified": stat.st_mtime,
+                        "formatted_date": date_str,
+                        "thumbnail_url": thumb_url,
+                    }
+                groups_dict[folder_rel]["clips"].append(clip_data)
+                groups_dict[folder_rel]["clip_count"] += 1
+                groups_dict[folder_rel]["total_size_mb"] = round(groups_dict[folder_rel]["total_size_mb"] + clip_data["size_mb"], 2)
+                if stat.st_mtime > groups_dict[folder_rel]["modified"]:
+                    groups_dict[folder_rel]["modified"] = stat.st_mtime
+                    groups_dict[folder_rel]["formatted_date"] = date_str
+
+            except Exception as e:
+                logger.warning("Error processing clip %s: %s", file, e)
+
+    groups_list = list(groups_dict.values())
+    for grp in groups_list:
+        grp["clips"].sort(key=lambda c: (c["part_number"], c["name"]))
+        if grp["clips"]:
+            grp["thumbnail_url"] = grp["clips"][0]["thumbnail_url"]
+
+    groups_list.sort(key=lambda g: g["modified"], reverse=True)
+
+    return {
+        "clips": all_clips,
+        "groups": groups_list,
+        "total_clips": len(all_clips),
+        "total_groups": len(groups_list),
+    }
 
 
 @app.get("/media/downloads/{filename:path}")
@@ -1506,10 +1776,32 @@ def delete_clips(filename: str | None = None):
         if not p:
             raise HTTPException(status_code=404, detail=f"Clip '{Path(filename).name}' not found")
         try:
+            parent_dir = p.parent
             size = p.stat().st_size
             p.unlink()
             freed_bytes += size
             deleted_count += 1
+            # Remove associated metadata, thumbnail, and subtitle files
+            for comp in [
+                p.with_name(f"{p.name}.meta.json"),
+                p.with_name(f"{p.stem}.meta.json"),
+                p.with_name(f"{p.name}.subtitles.json"),
+                p.with_name(f"{p.stem}.subtitles.json"),
+                p.with_name(f"{p.stem}.thumb.jpg"),
+                p.with_name(f"{p.name}.thumb.jpg"),
+            ]:
+                if comp.exists() and comp.is_file():
+                    try:
+                        freed_bytes += comp.stat().st_size
+                        comp.unlink()
+                    except Exception:
+                        pass
+            # If parent folder became empty, clean it up
+            if parent_dir != CLIPS_DIR and parent_dir != (CLIPS_DIR / "my_clips") and not any(parent_dir.iterdir()):
+                try:
+                    parent_dir.rmdir()
+                except Exception:
+                    pass
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to delete {p.name}: {exc}")
     else:
@@ -1534,6 +1826,45 @@ def delete_clips(filename: str | None = None):
         "deleted_count": deleted_count,
         "freed_mb": round(freed_bytes / (1024 * 1024), 2),
         "message": f"Deleted {deleted_count} clip(s) ({round(freed_bytes / (1024 * 1024), 2)} MB freed)",
+    }
+
+
+@app.delete("/api/media/clips/folder")
+def delete_clip_folder(folder_path: str):
+    """Delete an entire video folder and all clips contained within it."""
+    unquoted = urllib.parse.unquote(folder_path).replace("\\", "/").strip("/")
+    target_dir = CLIPS_DIR / unquoted
+    if not target_dir.exists() or not target_dir.is_dir():
+        safe_target = Path(unquoted).name
+        candidates = [d for d in CLIPS_DIR.glob(f"**/{safe_target}") if d.is_dir()]
+        if candidates:
+            target_dir = candidates[0]
+        else:
+            raise HTTPException(status_code=404, detail=f"Clip folder '{unquoted}' not found")
+
+    # Safety checks
+    if target_dir.resolve() in (CLIPS_DIR.resolve(), (CLIPS_DIR / "my_clips").resolve(), BASE_DIR.resolve()):
+        raise HTTPException(status_code=400, detail="Cannot delete root clips directory")
+
+    deleted_count = 0
+    freed_bytes = 0
+    for p in list(target_dir.rglob("*")):
+        if p.is_file():
+            try:
+                freed_bytes += p.stat().st_size
+                deleted_count += 1
+            except Exception:
+                pass
+    try:
+        shutil.rmtree(str(target_dir))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete folder: {exc}")
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "freed_mb": round(freed_bytes / (1024 * 1024), 2),
+        "message": f"Deleted folder and {deleted_count} file(s) ({round(freed_bytes / (1024 * 1024), 2)} MB freed)",
     }
 
 

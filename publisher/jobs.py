@@ -43,6 +43,9 @@ def resolve_clip_file(clip_path_str: str) -> Path:
 
     # Try searching within data/clips
     clips_dir = project_root / "data" / "clips"
+    clean_sub = unquoted.replace("\\", "/").strip("/")
+    if (clips_dir / clean_sub).is_file():
+        return (clips_dir / clean_sub).resolve()
     if clips_dir.exists():
         for p in clips_dir.rglob("*"):
             if p.is_file() and (p.name == path.name or p.name == raw_path.name):
