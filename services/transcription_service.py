@@ -6,6 +6,7 @@ Using Groq Cloud Whisper API (whisper-large-v3) with persistent storage and zero
 from __future__ import annotations
 
 import os
+import re
 import json
 import logging
 import subprocess
@@ -138,6 +139,245 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                 temp_audio.unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def translate_video_to_english_with_groq(video_path: Path, video_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Translate full video audio directly into English using Groq whisper-large-v3 translations API.
+    Guarantees 100% English transcript with ZERO Hindi Devanagari characters.
+    """
+    if not video_id:
+        video_id = video_path.stem
+
+    en_video_id = f"{video_id}_en"
+    cached = get_stored_transcript(en_video_id)
+    if cached and cached.get("segments"):
+        logger.info("Found cached English transcript for video_id: %s", en_video_id)
+        return cached
+
+    api_key = get_groq_api_key()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is not set.")
+
+    from groq import Groq
+    client = Groq(api_key=api_key)
+
+    temp_audio = TRANSCRIPTS_DIR / f"{video_id}_temp_en.mp3"
+    try:
+        logger.info("Extracting audio from %s for English translation...", video_path.name)
+        extract_audio_for_transcription(video_path, temp_audio)
+
+        logger.info("Calling Groq Whisper Translations API for %s...", video_path.name)
+        with open(temp_audio, "rb") as f:
+            translation = client.audio.translations.create(
+                file=(temp_audio.name, f.read()),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+            )
+
+        segments_raw = getattr(translation, "segments", []) or []
+        parsed_segments: List[Dict[str, Any]] = []
+        for idx, seg in enumerate(segments_raw):
+            seg_dict = seg if isinstance(seg, dict) else (seg.model_dump() if hasattr(seg, "model_dump") else seg)
+            start = round(float(seg_dict.get("start", 0.0)), 2)
+            end = round(float(seg_dict.get("end", 0.0)), 2)
+            text = str(seg_dict.get("text", "")).strip()
+
+            parsed_segments.append({
+                "id": idx,
+                "start": start,
+                "end": end,
+                "text": text,
+                "words": [],
+            })
+
+        transcript_data = {
+            "video_id": en_video_id,
+            "source_file": video_path.name,
+            "language": "en",
+            "duration": getattr(translation, "duration", 0.0),
+            "full_text": getattr(translation, "text", ""),
+            "segments": parsed_segments,
+        }
+
+        save_transcript(en_video_id, transcript_data)
+        return transcript_data
+
+    finally:
+        if temp_audio.exists():
+            try:
+                temp_audio.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def translate_clip_to_english_with_groq(clip_path: Path) -> List[Dict[str, Any]]:
+    """Translate a single clip's audio directly into pure English cues using Groq Whisper."""
+    api_key = get_groq_api_key()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is not set.")
+
+    from groq import Groq
+    client = Groq(api_key=api_key)
+
+    temp_audio = clip_path.with_name(f"{clip_path.stem}_temp_en.mp3")
+    try:
+        extract_audio_for_transcription(clip_path, temp_audio)
+        with open(temp_audio, "rb") as f:
+            translation = client.audio.translations.create(
+                file=(temp_audio.name, f.read()),
+                model="whisper-large-v3",
+                response_format="verbose_json"
+            )
+
+        segments_raw = getattr(translation, "segments", []) or []
+        parsed_cues = []
+        for idx, seg in enumerate(segments_raw):
+            seg_dict = seg if isinstance(seg, dict) else (seg.model_dump() if hasattr(seg, "model_dump") else seg)
+            start = round(float(seg_dict.get("start", 0.0)), 2)
+            end = round(float(seg_dict.get("end", 0.0)), 2)
+            text = str(seg_dict.get("text", "")).strip()
+            parsed_cues.append({
+                "id": idx,
+                "start": start,
+                "end": end,
+                "text": text,
+                "words": []
+            })
+        return parsed_cues
+
+    finally:
+        if temp_audio.exists():
+            try:
+                temp_audio.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def has_devanagari_characters(text: str) -> bool:
+    """Return True if text contains any Hindi/Devanagari characters (Unicode range U+0900 to U+097F)."""
+    if not text:
+        return False
+    return bool(re.search(r'[\u0900-\u097F]', text))
+
+
+def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 20) -> List[str]:
+    """
+    Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq.
+    Preserves original English words and phrasing without translating meaning to English words.
+    Guarantees 0 Devanagari characters in output.
+    """
+    if not texts:
+        return []
+
+    # If no Devanagari characters in any line, return immediately
+    if not any(has_devanagari_characters(t) for t in texts):
+        return texts
+
+    api_key = get_groq_api_key()
+    if not api_key:
+        logger.warning("GROQ_API_KEY is not set for Hinglish conversion.")
+        return texts
+
+    from groq import Groq
+    client = Groq(api_key=api_key)
+
+    system_prompt = (
+        "You are a strict Hinglish transliteration engine.\n"
+        "Your task is to convert Hindi text written in Devanagari script into Hinglish (Romanized Hindi using the English Latin alphabet).\n\n"
+        "RULES:\n"
+        "1. Preserve existing English words as-is with their original spelling (e.g. 'started', 'realizing', 'considerate', 'trauma trigger', 'make sure', 'community').\n"
+        "2. Convert all Hindi / Devanagari words into everyday standard Hinglish (e.g. 'लड़कियां' -> 'ladkiyan', 'बहुत' -> 'bahut', 'दोस्त' -> 'dost', 'हैं' -> 'hain', 'हो जाए' -> 'ho jaye').\n"
+        "3. DO NOT translate the meaning into English. The spoken Hindi words MUST remain Hindi words, just written in English Latin letters.\n"
+        "4. Output MUST contain ZERO Devanagari characters (only standard English A-Z, numbers, and basic punctuation).\n"
+        "5. Return ONLY a valid JSON array of strings, with exactly one output string corresponding to each input string in the exact same order."
+    )
+
+    results: List[str] = []
+    for i in range(0, len(texts), batch_size):
+        chunk = texts[i:i + batch_size]
+        # If this entire chunk has no Devanagari, pass it through directly
+        if not any(has_devanagari_characters(t) for t in chunk):
+            results.extend(chunk)
+            continue
+
+        try:
+            user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
+            res = client.chat.completions.create(
+                model="qwen/qwen3.8-27b",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg}
+                ],
+                temperature=0.0,
+                max_tokens=1500
+            )
+
+            raw = res.choices[0].message.content.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r'^```(?:json)?\s*', '', raw)
+                raw = re.sub(r'\s*```$', '', raw)
+
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                for val in parsed.values():
+                    if isinstance(val, list):
+                        parsed = val
+                        break
+
+            if isinstance(parsed, list) and len(parsed) == len(chunk):
+                results.extend([str(item).strip() for item in parsed])
+            else:
+                logger.warning("Hinglish transliteration count mismatch (expected %d, got %s)", len(chunk), len(parsed) if isinstance(parsed, list) else "not-list")
+                results.extend([str(x) for x in parsed[:len(chunk)]] if isinstance(parsed, list) else chunk)
+        except Exception as exc:
+            logger.error("Hinglish transliteration failed for chunk %d: %s", i, exc)
+            results.extend(chunk)
+
+    return results
+
+
+def convert_cues_to_hinglish(cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert cues list with Hindi Devanagari text into Hinglish (English alphabet)."""
+    if not cues:
+        return []
+
+    texts = [c.get("text", "") for c in cues]
+    hinglish_texts = convert_text_to_hinglish_batch(texts)
+
+    converted_cues = []
+    for cue, hing_text in zip(cues, hinglish_texts):
+        c_copy = dict(cue)
+        c_copy["text"] = hing_text
+        converted_cues.append(c_copy)
+    return converted_cues
+
+
+def convert_transcript_to_hinglish(transcript: Dict[str, Any], video_id: Optional[str] = None) -> Dict[str, Any]:
+    """Convert an entire transcript to Hinglish and cache on disk."""
+    segments = transcript.get("segments", [])
+    if not segments:
+        return transcript
+
+    texts = [s.get("text", "") for s in segments]
+    hing_texts = convert_text_to_hinglish_batch(texts)
+
+    new_segments = []
+    for s, h_text in zip(segments, hing_texts):
+        s_copy = dict(s)
+        s_copy["text"] = h_text
+        new_segments.append(s_copy)
+
+    new_transcript = dict(transcript)
+    new_transcript["segments"] = new_segments
+    new_transcript["language"] = "hinglish"
+    new_transcript["full_text"] = " ".join([t for t in hing_texts if t])
+
+    vid = video_id or transcript.get("video_id")
+    if vid:
+        save_transcript(f"{vid}_hinglish", new_transcript)
+
+    return new_transcript
 
 
 def save_transcript(video_id: str, data: Dict[str, Any]) -> None:

@@ -25,6 +25,11 @@ from pydantic import BaseModel, Field
 import db
 from services.transcription_service import (
     transcribe_video_with_groq,
+    translate_video_to_english_with_groq,
+    translate_clip_to_english_with_groq,
+    convert_cues_to_hinglish,
+    convert_transcript_to_hinglish,
+    has_devanagari_characters,
     get_stored_transcript,
     get_clip_subtitles,
     save_clip_subtitles,
@@ -216,6 +221,8 @@ class SubtitleBurnRequest(BaseModel):
 class GroupSubtitleBurnRequest(BaseModel):
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
     replace_original: bool = True
+    english_only: bool = False
+    hinglish: bool = True
 
 
 # ------------------------------------------------------------------ #
@@ -302,6 +309,136 @@ def save_subtitles_for_clip(clip_name: str, payload: SubtitleSaveRequest):
         update_clip_metadata_caption(input_clip, full_caption, styles)
 
     return {"success": True, "message": "Subtitles saved successfully."}
+
+
+@router.post("/clips/{clip_name:path}/subtitles/translate")
+def translate_clip_subtitles_endpoint(clip_name: str, mode: str = "hinglish"):
+    """
+    Convert or translate clip speech into 100% English alphabet transcript.
+    - mode="hinglish" (default): Spoken Hindi words written in English Latin alphabet (Romanized Hindi).
+      Zero Devanagari characters. Retains the authentic spoken reel words & phrases.
+    - mode="english": Translates meaning into pure English words using Groq Whisper.
+    """
+    unquoted = urllib.parse.unquote(clip_name).replace("\\", "/").strip("/")
+    input_clip = CLIPS_DIR / unquoted
+    if not input_clip.exists() or not input_clip.is_file():
+        found = _find_clip_path(unquoted)
+        if found and found.is_file():
+            input_clip = found
+        else:
+            raise HTTPException(status_code=404, detail=f"Clip '{unquoted}' not found.")
+
+    if not get_groq_api_key():
+        raise HTTPException(status_code=400, detail="GROQ_API_KEY is not configured in .env.")
+
+    meta_path = input_clip.with_name(f"{input_clip.name}.meta.json")
+    if not meta_path.exists():
+        meta_path = input_clip.with_name(f"{input_clip.stem}.meta.json")
+
+    meta = {}
+    if meta_path.exists():
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+
+    source_video_id = meta.get("source_video_id")
+    clip_start = float(meta.get("clip_start", 0.0))
+    clip_end = float(meta.get("clip_end", 0.0))
+
+    cues = []
+
+    if mode == "hinglish":
+        # Check if parent transcript exists
+        if source_video_id and clip_end > clip_start:
+            hinglish_trans = get_stored_transcript(f"{source_video_id}_hinglish")
+            if hinglish_trans:
+                cues = slice_transcript_for_clip(hinglish_trans, clip_start, clip_end)
+            else:
+                orig_trans = get_stored_transcript(source_video_id)
+                if orig_trans:
+                    cues = slice_transcript_for_clip(orig_trans, clip_start, clip_end)
+
+        # If not obtained from parent transcript, load existing subtitles or transcribe clip
+        if not cues:
+            existing = get_clip_subtitles(unquoted)
+            cues = existing.get("cues") or []
+
+        if not cues and get_groq_api_key():
+            try:
+                clip_transcript = transcribe_video_with_groq(input_clip, video_id=input_clip.stem)
+                cues = clip_transcript.get("segments", [])
+            except Exception as exc:
+                logger.warning("Direct clip transcription failed: %s", exc)
+
+        if not cues:
+            raise HTTPException(status_code=400, detail="No speech cues found to convert to Hinglish.")
+
+        # Convert cues to Hinglish (English Latin alphabet) if any Devanagari detected
+        if any(has_devanagari_characters(c.get("text", "")) for c in cues):
+            try:
+                cues = convert_cues_to_hinglish(cues)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to convert speech to Hinglish: {exc}")
+
+    else:
+        # mode == "english" (Pure English translation)
+        if source_video_id and clip_end > clip_start:
+            found_source = None
+            for f in DOWNLOAD_DIR.glob("**/*.*"):
+                if f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
+                    if source_video_id in f.name:
+                        found_source = f
+                        break
+            if found_source:
+                try:
+                    en_transcript = translate_video_to_english_with_groq(found_source, video_id=source_video_id)
+                    cues = slice_transcript_for_clip(en_transcript, clip_start, clip_end)
+                except Exception as exc:
+                    logger.warning("Parent video translation failed, falling back to direct clip translation: %s", exc)
+
+        if not cues:
+            try:
+                cues = translate_clip_to_english_with_groq(input_clip)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to translate clip to English: {exc}")
+
+    # Load existing styles
+    existing = get_clip_subtitles(unquoted)
+    styles = existing.get("styles") or meta.get("styles") or {}
+    text_transform = styles.get("text_transform", "uppercase")
+
+    # Apply transform
+    for cue in cues:
+        if cue.get("text"):
+            cue["text"] = apply_text_transform(cue["text"], text_transform)
+
+    # Save to .subtitles.json
+    save_clip_subtitles(unquoted, {"cues": cues, "styles": styles})
+
+    # Save to .meta.json
+    full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
+    update_clip_metadata_caption(input_clip, full_caption, styles)
+
+    mode_label = "Hinglish (English Latin alphabet)" if mode == "hinglish" else "English translation"
+    return {
+        "success": True,
+        "cues": cues,
+        "styles": styles,
+        "caption": full_caption,
+        "mode": mode,
+        "message": f"Successfully converted speech to {mode_label} ({len(cues)} cues). Zero Devanagari script."
+    }
+
+
+@router.post("/clips/{clip_name:path}/subtitles/hinglish")
+def hinglish_clip_subtitles_endpoint(clip_name: str):
+    """
+    Dedicated endpoint to convert clip speech into Hinglish (Hindi written in English alphabets).
+    Guarantees zero Hindi Devanagari characters in subtitles.
+    """
+    return translate_clip_subtitles_endpoint(clip_name, mode="hinglish")
 
 
 @router.post("/clips/{clip_name:path}/subtitles/burn")
@@ -394,13 +531,39 @@ def _process_group_subtitle_job(
     target_folder: Path,
     clips: List[Path],
     styles: Dict[str, Any],
-    replace_original: bool
+    replace_original: bool,
+    english_only: bool = False,
+    hinglish: bool = True
 ) -> None:
     """Background worker to mount subtitles to each clip in the group and save reels."""
     total = len(clips)
     processed = 0
     results = []
     text_transform = styles.get("text_transform", "uppercase")
+
+    # If english_only is requested, ensure parent video English transcript is pre-generated once
+    if english_only and clips:
+        first_clip = clips[0]
+        meta_p = first_clip.with_name(f"{first_clip.name}.meta.json")
+        if not meta_p.exists():
+            meta_p = first_clip.with_name(f"{first_clip.stem}.meta.json")
+        meta_first = {}
+        if meta_p.exists():
+            try:
+                with open(meta_p, "r", encoding="utf-8") as fm:
+                    meta_first = json.load(fm)
+            except Exception:
+                pass
+        src_id = meta_first.get("source_video_id")
+        if src_id and not get_stored_transcript(f"{src_id}_en") and DOWNLOAD_DIR.exists():
+            for f in DOWNLOAD_DIR.glob("**/*.*"):
+                if f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov") and src_id in f.name:
+                    try:
+                        logger.info("Pre-translating parent video %s to English for group...", f.name)
+                        translate_video_to_english_with_groq(f, video_id=src_id)
+                    except Exception as exc:
+                        logger.warning("Could not pre-translate parent video: %s", exc)
+                    break
 
     for idx, clip_file in enumerate(clips):
         rel_clip_path = str(clip_file.relative_to(CLIPS_DIR)).replace("\\", "/")
@@ -412,9 +575,45 @@ def _process_group_subtitle_job(
             _save_subtitle_job(current_job)
 
         try:
-            # 1. Retrieve or slice subtitles
+            # 1. Retrieve or slice subtitles (English only or Hinglish if requested)
+            cues = []
             sub_data = get_clip_subtitles(rel_clip_path)
-            cues = sub_data.get("cues", [])
+
+            meta_p = clip_file.with_name(f"{clip_file.name}.meta.json")
+            if not meta_p.exists():
+                meta_p = clip_file.with_name(f"{clip_file.stem}.meta.json")
+            meta_item = {}
+            if meta_p.exists():
+                try:
+                    with open(meta_p, "r", encoding="utf-8") as fm:
+                        meta_item = json.load(fm)
+                except Exception:
+                    pass
+            src_id = meta_item.get("source_video_id")
+            c_start = float(meta_item.get("clip_start", 0.0))
+            c_end = float(meta_item.get("clip_end", 0.0))
+
+            if english_only:
+                en_trans = get_stored_transcript(f"{src_id}_en") if src_id else None
+                if en_trans and c_end > c_start:
+                    cues = slice_transcript_for_clip(en_trans, c_start, c_end)
+                if not cues:
+                    try:
+                        cues = translate_clip_to_english_with_groq(clip_file)
+                    except Exception as t_err:
+                        logger.warning("English translation failed for %s: %s", clip_file.name, t_err)
+
+            elif hinglish:
+                h_trans = get_stored_transcript(f"{src_id}_hinglish") if src_id else None
+                if h_trans and c_end > c_start:
+                    cues = slice_transcript_for_clip(h_trans, c_start, c_end)
+                elif src_id and c_end > c_start:
+                    orig_t = get_stored_transcript(src_id)
+                    if orig_t:
+                        cues = slice_transcript_for_clip(orig_t, c_start, c_end)
+
+            if not cues:
+                cues = sub_data.get("cues", [])
 
             # Fallback to direct clip transcription if needed
             if not cues and get_groq_api_key():
@@ -429,6 +628,14 @@ def _process_group_subtitle_job(
                 logger.warning("No subtitle cues found for %s; skipping.", clip_file.name)
                 results.append({"clip": clip_file.name, "status": "skipped", "reason": "No speech cues found"})
                 continue
+
+            # If hinglish is active, guarantee zero Devanagari characters
+            if hinglish and not english_only:
+                if any(has_devanagari_characters(c.get("text", "")) for c in cues):
+                    try:
+                        cues = convert_cues_to_hinglish(cues)
+                    except Exception as h_err:
+                        logger.warning("Hinglish cue conversion failed for %s: %s", clip_file.name, h_err)
 
             # 2. Merge styles and apply preview text transform
             merged_styles = {**(sub_data.get("styles") or {}), **styles}
@@ -540,7 +747,7 @@ def burn_subtitles_for_group_endpoint(folder_path: str, payload: GroupSubtitleBu
     # Launch background thread
     t = threading.Thread(
         target=_process_group_subtitle_job,
-        args=(job_id, target_folder, clips, payload.styles or {}, payload.replace_original),
+        args=(job_id, target_folder, clips, payload.styles or {}, payload.replace_original, payload.english_only, payload.hinglish),
         daemon=True
     )
     t.start()

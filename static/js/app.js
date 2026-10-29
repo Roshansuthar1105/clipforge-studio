@@ -3225,6 +3225,97 @@ async function executeBurnSubtitles() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// HINGLISH & ENGLISH TRANSLATION (NO DEVANAGARI)
+// ──────────────────────────────────────────────────────────────────────────────
+
+async function convertCurrentSubtitlesToHinglish() {
+    if (!subState.clipName) return;
+
+    const bannerBtn = document.getElementById("subHinglishBtn");
+    const footerBtn = document.getElementById("subHinglishFooterBtn");
+    const footerText = document.getElementById("subHinglishFooterText");
+
+    if (bannerBtn) bannerBtn.disabled = true;
+    if (footerBtn) footerBtn.disabled = true;
+    if (footerText) footerText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Converting...';
+
+    showToast("Converting Hindi speech to English alphabets (Hinglish)...", "info");
+
+    try {
+        const res = await apiRequest(`/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/hinglish`, {
+            method: "POST"
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Hinglish conversion failed");
+        }
+
+        const data = await res.json();
+        subState.cues = Array.isArray(data.cues) ? data.cues : [];
+        if (data.styles && Object.keys(data.styles).length > 0) {
+            subState.styles = { ...subState.styles, ...data.styles };
+        }
+
+        renderSubCuesList();
+        updateSubOverlay();
+        updateFullCaptionPreview();
+
+        showToast("Subtitles converted to Hinglish (English alphabets)! Zero Devanagari script.", "success");
+    } catch (err) {
+        console.error("Hinglish conversion error:", err);
+        alert(`Failed to convert to Hinglish: ${err.message}`);
+    } finally {
+        if (bannerBtn) bannerBtn.disabled = false;
+        if (footerBtn) footerBtn.disabled = false;
+        if (footerText) footerText.textContent = "Hinglish (A-Z)";
+    }
+}
+
+async function translateCurrentSubtitlesToEnglish() {
+    if (!subState.clipName) return;
+
+    const bannerBtn = document.getElementById("subTranslateBtn");
+    const footerBtn = document.getElementById("subTranslateFooterBtn");
+    const footerText = document.getElementById("subTranslateFooterText");
+    if (bannerBtn) bannerBtn.disabled = true;
+    if (footerBtn) footerBtn.disabled = true;
+    if (footerText) footerText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Translating...';
+
+    showToast("Translating speech to pure English via Whisper...", "info");
+
+    try {
+        const res = await apiRequest(`/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/translate?mode=english`, {
+            method: "POST"
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Translation failed");
+        }
+
+        const data = await res.json();
+        subState.cues = Array.isArray(data.cues) ? data.cues : [];
+        if (data.styles && Object.keys(data.styles).length > 0) {
+            subState.styles = { ...subState.styles, ...data.styles };
+        }
+
+        renderSubCuesList();
+        updateSubOverlay();
+        updateFullCaptionPreview();
+
+        showToast("Subtitles translated to pure English! Zero Devanagari script.", "success");
+    } catch (err) {
+        console.error("Translation error:", err);
+        alert(`Failed to translate to English: ${err.message}`);
+    } finally {
+        if (bannerBtn) bannerBtn.disabled = false;
+        if (footerBtn) footerBtn.disabled = false;
+        if (footerText) footerText.textContent = "English Translation";
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // GROUP SUBTITLE MOUNTING
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -3260,6 +3351,16 @@ async function executeBurnGroupSubtitles() {
     );
     if (!confirmed) return;
 
+    let useHinglish = true;
+    let englishOnly = false;
+    // Check if current cues contain any Devanagari Hindi characters
+    const hasDevanagari = (subState.cues || []).some(c => /[\u0900-\u097F]/.test(c.text || ""));
+    if (hasDevanagari) {
+        useHinglish = confirm(
+            "Detected Hindi Devanagari speech in this video.\n\nDo you want to mount with Hinglish (Hindi words written in English Latin alphabets)?\n\n• Click 'OK' for Hinglish (English Alphabets, e.g. 'ladkiyan bahut considerate hain' - Zero Devanagari fonts)\n• Click 'Cancel' for Original Devanagari Hindi"
+        );
+    }
+
     // Apply preview transform
     applyCurrentTransformToCues();
 
@@ -3277,9 +3378,10 @@ async function executeBurnGroupSubtitles() {
     const bar = document.getElementById("subGroupProgressBar");
     const pct = document.getElementById("subGroupProgressPercent");
 
+    const modeLabel = useHinglish ? 'Hinglish (English Alphabets)' : (englishOnly ? 'English Translation' : 'Original speech');
     if (overlay) overlay.style.display = "flex";
     if (title) title.textContent = `Mounting Subtitles to "${ctx.groupTitle}"...`;
-    if (subTitle) subTitle.textContent = `Starting mount for ${ctx.groupClipCount} reels in background...`;
+    if (subTitle) subTitle.textContent = `Starting mount for ${ctx.groupClipCount} reels in background (${modeLabel})...`;
     if (bar) bar.style.width = "0%";
     if (pct) pct.textContent = "0%";
 
@@ -3289,7 +3391,9 @@ async function executeBurnGroupSubtitles() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 styles: subState.styles,
-                replace_original: true
+                replace_original: true,
+                english_only: englishOnly,
+                hinglish: useHinglish
             })
         });
 
