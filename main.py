@@ -53,6 +53,7 @@ from routers.auth_router import router as auth_router, get_current_user_optional
 from routers.accounts_router import router as accounts_router
 from routers.publish_router import router as publish_router
 from routers.meta_publish_router import router as meta_publish_router
+from routers.subtitles_router import router as subtitles_router
 
 app = FastAPI(title="ClipForge Studio")
 
@@ -69,6 +70,7 @@ app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(publish_router)
 app.include_router(meta_publish_router)
+app.include_router(subtitles_router)
 
 app.mount(
     "/static",
@@ -867,6 +869,26 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     f"FFmpeg did not create a valid clip: {filename}"
                 )
 
+            # Persist clip metadata for zero-cost subtitle mapping
+            try:
+                eff_video_id = video_id if "video_id" in locals() and video_id else (source_path.stem if source_path else "")
+                clip_meta = {
+                    "clip_name": filename,
+                    "source_file": source_path.name if source_path else "",
+                    "source_video_id": eff_video_id,
+                    "clip_start": float(clip_start),
+                    "clip_end": float(clip_start + clip_duration),
+                    "duration": float(clip_duration),
+                }
+                meta_path = output_path.with_name(f"{filename}.meta.json")
+                with open(meta_path, "w", encoding="utf-8") as f_meta:
+                    import json
+                    json.dump(clip_meta, f_meta, indent=2)
+                if db.is_db_connected():
+                    db.db_save_clip_metadata(filename, clip_meta)
+            except Exception as meta_err:
+                logger.warning("Could not persist clip metadata: %s", meta_err)
+
             import urllib.parse
             created_files.append({
                 "name": filename,
@@ -1291,12 +1313,14 @@ def list_available_clips():
         for file in sorted(CLIPS_DIR.glob("**/*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
             encoded_name = urllib.parse.quote(file.name)
             stat = file.stat()
+            has_subtitles = file.with_name(f"{file.name}.subtitles.json").exists() or "_subtitled" in file.stem
             clips.append({
                 "name": file.name,
                 "url": f"/media/clips/{encoded_name}",
                 "size_mb": round(stat.st_size / (1024 * 1024), 2),
                 "size_bytes": stat.st_size,
                 "modified": stat.st_mtime,
+                "has_subtitles": has_subtitles,
             })
     return {"clips": clips}
 

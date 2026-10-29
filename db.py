@@ -397,3 +397,52 @@ def db_get_publish_history(user_id: Optional[str] = None, limit: int = 50) -> Li
         doc.pop("_id", None)
         items.append(doc)
     return items
+
+
+# ------------------------------------------------------------------ #
+# Transcripts & Clip Metadata Persistence                            #
+# ------------------------------------------------------------------ #
+
+def db_save_transcript(video_id: str, transcript_data: Dict[str, Any]) -> None:
+    """Save full video transcription in MongoDB."""
+    db = get_db()
+    if db is None:
+        return
+    doc = dict(transcript_data)
+    doc["video_id"] = video_id
+    doc["updated_at"] = datetime.datetime.utcnow().isoformat()
+    db.transcripts.replace_one({"video_id": video_id}, doc, upsert=True)
+
+
+def db_get_transcript(video_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve full video transcription by video_id."""
+    db = get_db()
+    if db is None:
+        return None
+    doc = db.transcripts.find_one({"video_id": video_id})
+    if doc:
+        doc.pop("_id", None)
+    return doc
+
+
+def db_save_clip_metadata(clip_name: str, meta: Dict[str, Any]) -> None:
+    """Save clip time bounds and source metadata."""
+    db = get_db()
+    if db is None:
+        return
+    doc = dict(meta)
+    doc["clip_name"] = clip_name
+    doc["updated_at"] = datetime.datetime.utcnow().isoformat()
+    db.clip_metadata.replace_one({"clip_name": clip_name}, doc, upsert=True)
+
+
+def db_get_clip_metadata(clip_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve clip metadata (start_time, end_time, source_video_id)."""
+    db = get_db()
+    if db is None:
+        return None
+    doc = db.clip_metadata.find_one({"clip_name": clip_name})
+    if doc:
+        doc.pop("_id", None)
+    return doc
+

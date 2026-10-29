@@ -1081,16 +1081,19 @@ async function loadClips() {
                         <div class="clip-title" title="${escapeHtml(clip.name)}">${escapeHtml(clip.name)}</div>
                         <div class="clip-meta-row">
                             <span><i class="fa-regular fa-hard-drive"></i> ${sizeMb}</span>
-                            <span style="color: var(--accent-emerald); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Ready</span>
+                            ${clip.has_subtitles ? '<span style="color: #ffe500; font-weight: 600;"><i class="fa-solid fa-closed-captioning"></i> Subtitled</span>' : '<span style="color: var(--accent-emerald); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Ready</span>'}
                         </div>
                         <div class="clip-actions-row">
-                            <a href="${url}" download="${escapeHtml(clip.name)}" class="btn-secondary" style="flex: 1; padding: 7px 10px; font-size: 12px; text-align: center;">
+                            <a href="${url}" download="${escapeHtml(clip.name)}" class="btn-secondary" style="flex: 1; padding: 7px 8px; font-size: 11.5px; text-align: center;">
                                 <i class="fa-solid fa-download"></i> Save
                             </a>
-                            <button type="button" class="btn-primary" style="flex: 1.2; padding: 7px 12px; font-size: 12px;" onclick="publishClipCard(this)">
+                            <button type="button" class="btn-secondary" style="flex: 1.1; padding: 7px 8px; font-size: 11.5px;" onclick="openSubtitleModal('${escapeHtml(clip.name)}', '${url}')" title="Subtitles & Captions Studio">
+                                <i class="fa-solid fa-closed-captioning"></i> Captions
+                            </button>
+                            <button type="button" class="btn-primary" style="flex: 1.2; padding: 7px 10px; font-size: 11.5px;" onclick="publishClipCard(this)">
                                 <i class="fa-solid fa-rocket"></i> Publish
                             </button>
-                            <button type="button" class="btn-secondary danger" style="padding: 7px 10px; font-size: 12px;" onclick="deleteClipCard(this)" title="Delete Clip">
+                            <button type="button" class="btn-secondary danger" style="padding: 7px 8px; font-size: 11.5px;" onclick="deleteClipCard(this)" title="Delete Clip">
                                 <i class="fa-solid fa-trash-can"></i>
                             </button>
                         </div>
@@ -2251,3 +2254,526 @@ function escapeHtml(str) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SUBTITLE & CAPTION STUDIO LOGIC
+// ──────────────────────────────────────────────────────────────────────────────
+
+const subState = {
+    clipName: "",
+    clipUrl: "",
+    cues: [],
+    styles: {
+        font_name: "Arial Black",
+        font_size: 68,
+        text_color: "#FFFFFF",
+        outline_color: "#000000",
+        outline_width: 4,
+        position_preset: "bottom",
+        margin_v: 220,
+        text_transform: "uppercase",
+        box_style: "none"
+    },
+    activeTab: "bulk"
+};
+
+async function openSubtitleModal(clipName, clipUrl) {
+    subState.clipName = clipName;
+    subState.clipUrl = clipUrl;
+    subState.cues = [];
+
+    const modal = document.getElementById("subtitlesModal");
+    const video = document.getElementById("subModalVideo");
+    const clipBadge = document.getElementById("subModalClipNameBadge");
+    const banner = document.getElementById("subStatusBanner");
+
+    if (clipBadge) clipBadge.textContent = clipName;
+    if (banner) {
+        banner.style.display = "block";
+        banner.style.background = "rgba(99, 102, 241, 0.15)";
+        banner.style.border = "1px solid rgba(99, 102, 241, 0.35)";
+        banner.style.color = "#a5b4fc";
+        banner.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Retrieving transcript and slicing subtitles...';
+    }
+
+    if (video) {
+        video.src = clipUrl;
+        video.currentTime = 0;
+        video.load();
+    }
+
+    if (modal) modal.classList.add("active");
+    switchSubTab("bulk");
+
+    try {
+        const res = await apiRequest(`/api/clips/${encodeURIComponent(clipName)}/subtitles`);
+        if (!res.ok) throw new Error("Could not load subtitles from server");
+        const data = await res.json();
+
+        subState.cues = Array.isArray(data.cues) ? data.cues : [];
+        if (data.styles && typeof data.styles === "object" && Object.keys(data.styles).length > 0) {
+            subState.styles = { ...subState.styles, ...data.styles };
+        }
+
+        // Check banner notices
+        if (banner) {
+            if (subState.cues.length > 0) {
+                banner.style.display = "none";
+            } else if (data.has_groq_key === false) {
+                banner.style.background = "rgba(245, 158, 11, 0.15)";
+                banner.style.border = "1px solid rgba(245, 158, 11, 0.35)";
+                banner.style.color = "#fcd34d";
+                banner.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> <strong>Groq API Key Not Set:</strong> Add <code>GROQ_API_KEY</code> to your <code>.env</code> file to auto-transcribe in seconds. You can also manually add cues in the One-by-One tab.';
+            } else {
+                banner.style.background = "rgba(59, 130, 246, 0.15)";
+                banner.style.border = "1px solid rgba(59, 130, 246, 0.35)";
+                banner.style.color = "#93c5fd";
+                banner.innerHTML = '<i class="fa-solid fa-info-circle"></i> No existing speech detected or parent video not yet transcribed. Click "Add Cue Line" in One-by-One Edit to type custom captions.';
+            }
+        }
+
+        syncSubStyleControlsFromState();
+        renderSubCuesList();
+        updateSubOverlay();
+
+    } catch (err) {
+        console.error("Error opening subtitles:", err);
+        if (banner) {
+            banner.style.display = "block";
+            banner.style.background = "rgba(239, 68, 68, 0.15)";
+            banner.style.border = "1px solid rgba(239, 68, 68, 0.35)";
+            banner.style.color = "#fca5a5";
+            banner.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> Error loading subtitles: ${err.message}`;
+        }
+    }
+}
+
+function closeSubtitleModal() {
+    const modal = document.getElementById("subtitlesModal");
+    const video = document.getElementById("subModalVideo");
+    if (video) video.pause();
+    if (modal) modal.classList.remove("active");
+}
+
+function switchSubTab(tab) {
+    subState.activeTab = tab;
+    const btnBulk = document.getElementById("subTabBtnBulk");
+    const btnCues = document.getElementById("subTabBtnCues");
+    const panelBulk = document.getElementById("subTabBulk");
+    const panelCues = document.getElementById("subTabCues");
+
+    if (btnBulk) btnBulk.classList.toggle("active", tab === "bulk");
+    if (btnCues) btnCues.classList.toggle("active", tab === "cues");
+    if (panelBulk) panelBulk.style.display = tab === "bulk" ? "block" : "none";
+    if (panelCues) panelCues.style.display = tab === "cues" ? "block" : "none";
+
+    if (tab === "cues") {
+        renderSubCuesList();
+    }
+}
+
+function syncSubStyleControlsFromState() {
+    const s = subState.styles;
+    const elFont = document.getElementById("subFontName");
+    const elSize = document.getElementById("subFontSize");
+    const elSizeVal = document.getElementById("subFontSizeVal");
+    const elColor = document.getElementById("subTextColor");
+    const elColorHex = document.getElementById("subTextColorHex");
+    const elOutline = document.getElementById("subOutlineColor");
+    const elOutlineHex = document.getElementById("subOutlineColorHex");
+    const elOutlineW = document.getElementById("subOutlineWidth");
+    const elOutlineWVal = document.getElementById("subOutlineWidthVal");
+    const elTrans = document.getElementById("subTextTransform");
+
+    if (elFont) elFont.value = s.font_name || "Arial Black";
+    if (elSize) elSize.value = s.font_size || 68;
+    if (elSizeVal) elSizeVal.textContent = s.font_size || 68;
+    if (elColor) elColor.value = s.text_color || "#FFFFFF";
+    if (elColorHex) elColorHex.textContent = s.text_color || "#FFFFFF";
+    if (elOutline) elOutline.value = s.outline_color || "#000000";
+    if (elOutlineHex) elOutlineHex.textContent = s.outline_color || "#000000";
+    if (elOutlineW) elOutlineW.value = s.outline_width !== undefined ? s.outline_width : 4;
+    if (elOutlineWVal) elOutlineWVal.textContent = s.outline_width !== undefined ? s.outline_width : 4;
+    if (elTrans) elTrans.value = s.text_transform || "uppercase";
+
+    setSubPosition(s.position_preset || "bottom", false);
+}
+
+function applySubPreset(preset) {
+    if (preset === "hormozi") {
+        subState.styles.font_name = "Impact";
+        subState.styles.font_size = 72;
+        subState.styles.text_color = "#FFE500";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 5;
+        subState.styles.position_preset = "bottom";
+        subState.styles.text_transform = "uppercase";
+    } else if (preset === "clean") {
+        subState.styles.font_name = "Montserrat ExtraBold";
+        subState.styles.font_size = 58;
+        subState.styles.text_color = "#FFFFFF";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 2.5;
+        subState.styles.position_preset = "bottom";
+        subState.styles.text_transform = "title";
+    } else if (preset === "neon") {
+        subState.styles.font_name = "Impact";
+        subState.styles.font_size = 70;
+        subState.styles.text_color = "#22C55E";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 4.5;
+        subState.styles.position_preset = "bottom";
+        subState.styles.text_transform = "uppercase";
+    } else if (preset === "cyan") {
+        subState.styles.font_name = "Bebas Neue";
+        subState.styles.font_size = 76;
+        subState.styles.text_color = "#06B6D4";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 4.5;
+        subState.styles.position_preset = "middle";
+        subState.styles.text_transform = "uppercase";
+    }
+    syncSubStyleControlsFromState();
+    updateSubOverlay();
+    showToast(`Applied preset: ${preset.toUpperCase()}`);
+}
+
+function updateSubStyle(key, value) {
+    subState.styles[key] = value;
+    if (key === "text_color") {
+        const hex = document.getElementById("subTextColorHex");
+        if (hex) hex.textContent = value.toUpperCase();
+    } else if (key === "outline_color") {
+        const hex = document.getElementById("subOutlineColorHex");
+        if (hex) hex.textContent = value.toUpperCase();
+    }
+    updateSubOverlay();
+}
+
+function setSubPosition(pos, updateOverlayNow = true) {
+    subState.styles.position_preset = pos;
+    const btnTop = document.getElementById("subPosTop");
+    const btnMid = document.getElementById("subPosMiddle");
+    const btnBot = document.getElementById("subPosBottom");
+
+    if (btnTop) btnTop.classList.toggle("active", pos === "top");
+    if (btnMid) btnMid.classList.toggle("active", pos === "middle");
+    if (btnBot) btnBot.classList.toggle("active", pos === "bottom");
+
+    if (updateOverlayNow) {
+        updateSubOverlay();
+    }
+}
+
+function updateSubOverlay() {
+    const overlay = document.getElementById("subOverlayCaption");
+    const video = document.getElementById("subModalVideo");
+    if (!overlay) return;
+
+    const s = subState.styles;
+    const currentTime = video ? video.currentTime : 0;
+
+    // Find active cue
+    let activeCue = null;
+    for (const cue of subState.cues) {
+        if (currentTime >= cue.start && currentTime <= cue.end) {
+            activeCue = cue;
+            break;
+        }
+    }
+
+    let textToShow = "";
+    if (activeCue && activeCue.text) {
+        textToShow = activeCue.text;
+    } else if (subState.cues.length > 0) {
+        // If between cues while paused, display closest or placeholder preview
+        textToShow = subState.cues[0].text;
+    } else {
+        textToShow = "SUBTITLE PREVIEW";
+    }
+
+    if (s.text_transform === "uppercase") {
+        textToShow = textToShow.toUpperCase();
+    } else if (s.text_transform === "title") {
+        textToShow = textToShow.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+    }
+
+    overlay.textContent = textToShow;
+
+    // Font family mapping
+    let fontFam = s.font_name || "Arial Black";
+    if (fontFam.includes("Impact")) fontFam = "Impact, Haettenschweiler, sans-serif";
+    else if (fontFam.includes("Montserrat")) fontFam = "'Montserrat', sans-serif";
+    else if (fontFam.includes("Bebas")) fontFam = "'Bebas Neue', sans-serif";
+    else if (fontFam.includes("Roboto")) fontFam = "'Roboto', sans-serif";
+    else fontFam = "'Arial Black', sans-serif";
+
+    overlay.style.fontFamily = fontFam;
+    overlay.style.fontWeight = "900";
+    overlay.style.color = s.text_color || "#FFFFFF";
+
+    // Outline / Stroke emulation for CSS overlay
+    const strokeW = parseFloat(s.outline_width) || 3;
+    const strokeC = s.outline_color || "#000000";
+    overlay.style.textShadow = `
+        -${strokeW}px -${strokeW}px 0 ${strokeC},
+         ${strokeW}px -${strokeW}px 0 ${strokeC},
+        -${strokeW}px  ${strokeW}px 0 ${strokeC},
+         ${strokeW}px  ${strokeW}px 0 ${strokeC},
+         0px ${strokeW + 1}px 4px rgba(0,0,0,0.8)
+    `;
+
+    // Scale font size down to preview window (roughly 1/3 of 1080p canvas)
+    const previewScale = 0.32;
+    const computedFontSize = Math.max(14, Math.round((parseInt(s.font_size) || 68) * previewScale));
+    overlay.style.fontSize = `${computedFontSize}px`;
+
+    // Positioning
+    overlay.style.top = "auto";
+    overlay.style.bottom = "auto";
+    if (s.position_preset === "top") {
+        overlay.style.top = "14%";
+    } else if (s.position_preset === "middle") {
+        overlay.style.top = "46%";
+    } else {
+        overlay.style.bottom = "12%";
+    }
+}
+
+function toggleSubVideoPlay() {
+    const video = document.getElementById("subModalVideo");
+    const icon = document.getElementById("subPlayIcon");
+    if (!video) return;
+
+    if (video.paused) {
+        video.play();
+        if (icon) icon.className = "fa-solid fa-pause";
+    } else {
+        video.pause();
+        if (icon) icon.className = "fa-solid fa-play";
+    }
+}
+
+function onSubVideoSeek(val) {
+    const video = document.getElementById("subModalVideo");
+    if (!video || !video.duration) return;
+    video.currentTime = (val / 100) * video.duration;
+    updateSubOverlay();
+}
+
+function onSubVideoTimeUpdate() {
+    const video = document.getElementById("subModalVideo");
+    const seek = document.getElementById("subVideoSeek");
+    const display = document.getElementById("subVideoTimeDisplay");
+
+    if (video && video.duration) {
+        const pct = (video.currentTime / video.duration) * 100;
+        if (seek) seek.value = pct;
+
+        const curMins = Math.floor(video.currentTime / 60);
+        const curSecs = Math.floor(video.currentTime % 60);
+        const totMins = Math.floor(video.duration / 60);
+        const totSecs = Math.floor(video.duration % 60);
+        if (display) {
+            display.textContent = `${curMins}:${curSecs.toString().padStart(2, "0")} / ${totMins}:${totSecs.toString().padStart(2, "0")}`;
+        }
+    }
+
+    updateSubOverlay();
+
+    // Highlight active cue in One-by-One list
+    if (subState.activeTab === "cues" && video) {
+        const cards = document.querySelectorAll(".sub-cue-card");
+        cards.forEach(card => {
+            const start = parseFloat(card.dataset.start);
+            const end = parseFloat(card.dataset.end);
+            const isActive = video.currentTime >= start && video.currentTime <= end;
+            card.classList.toggle("active-playback", isActive);
+        });
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ONE-BY-ONE CUE EDITING
+// ──────────────────────────────────────────────────────────────────────────────
+
+function renderSubCuesList() {
+    const container = document.getElementById("subCuesListContainer");
+    const countBadge = document.getElementById("subCuesCount");
+    if (!container) return;
+
+    if (countBadge) countBadge.textContent = subState.cues.length;
+
+    if (subState.cues.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: 30px 10px; color: var(--text-dim);">
+                <i class="fa-solid fa-comment-slash" style="font-size: 28px; opacity: 0.5; margin-bottom: 8px;"></i>
+                <p style="font-size: 13px;">No subtitle cues found. Click "+ Add Cue Line" to create one.</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = subState.cues.map((cue, index) => {
+        return `
+            <div class="sub-cue-card" data-index="${index}" data-start="${cue.start}" data-end="${cue.end}">
+                <div class="sub-cue-header">
+                    <span style="font-weight: 700; color: #fff;">#${index + 1}</span>
+                    <div class="sub-cue-timing-inputs">
+                        <label style="font-size: 11px;">In:</label>
+                        <input type="number" step="0.1" min="0" class="sub-cue-time-input" value="${cue.start}" onchange="onSubCueTimeChange(${index}, 'start', this.value)">
+                        <label style="font-size: 11px;">Out:</label>
+                        <input type="number" step="0.1" min="0" class="sub-cue-time-input" value="${cue.end}" onchange="onSubCueTimeChange(${index}, 'end', this.value)">
+                        <button type="button" class="btn-secondary danger" style="padding: 3px 7px; font-size: 11px; margin-left: 6px;" onclick="deleteSubCue(${index})" title="Delete Cue">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                </div>
+                <textarea class="sub-cue-textarea" placeholder="Subtitle text..." oninput="onSubCueTextChange(${index}, this.value)">${escapeHtml(cue.text || "")}</textarea>
+            </div>
+        `;
+    }).join("");
+}
+
+function onSubCueTimeChange(index, field, value) {
+    if (!subState.cues[index]) return;
+    subState.cues[index][field] = parseFloat(value) || 0.0;
+    updateSubOverlay();
+}
+
+function onSubCueTextChange(index, value) {
+    if (!subState.cues[index]) return;
+    subState.cues[index].text = value;
+    updateSubOverlay();
+}
+
+function addNewSubCue() {
+    const video = document.getElementById("subModalVideo");
+    const currentTime = video ? round2(video.currentTime) : 0.0;
+    const newCue = {
+        id: subState.cues.length,
+        start: currentTime,
+        end: round2(currentTime + 2.5),
+        text: "New subtitle text"
+    };
+    subState.cues.push(newCue);
+    subState.cues.sort((a, b) => a.start - b.start);
+    renderSubCuesList();
+    updateSubOverlay();
+}
+
+function deleteSubCue(index) {
+    subState.cues.splice(index, 1);
+    renderSubCuesList();
+    updateSubOverlay();
+}
+
+function round2(num) {
+    return Math.round(num * 100) / 100;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// BULK TOOLS
+// ──────────────────────────────────────────────────────────────────────────────
+
+function shiftAllCues(seconds) {
+    if (subState.cues.length === 0) return;
+    for (const cue of subState.cues) {
+        cue.start = Math.max(0, round2(cue.start + seconds));
+        cue.end = Math.max(cue.start + 0.1, round2(cue.end + seconds));
+    }
+    renderSubCuesList();
+    updateSubOverlay();
+    showToast(`Shifted all captions by ${seconds > 0 ? "+" : ""}${seconds}s`);
+}
+
+function bulkFindAndReplace() {
+    const findInput = document.getElementById("subFindInput");
+    const replaceInput = document.getElementById("subReplaceInput");
+    if (!findInput || !replaceInput) return;
+
+    const findWord = findInput.value.trim();
+    const replaceWord = replaceInput.value;
+    if (!findWord) {
+        alert("Please enter a word to find.");
+        return;
+    }
+
+    let replacements = 0;
+    const regex = new RegExp(findWord, "gi");
+    for (const cue of subState.cues) {
+        if (cue.text && regex.test(cue.text)) {
+            cue.text = cue.text.replace(regex, replaceWord);
+            replacements++;
+        }
+    }
+
+    renderSubCuesList();
+    updateSubOverlay();
+    showToast(`Replaced occurrences in ${replacements} cues.`);
+}
+
+async function saveSubtitlesDraft(notify = true) {
+    if (!subState.clipName) return;
+    try {
+        const res = await apiRequest(`/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/save`, {
+            method: "POST",
+            body: JSON.stringify({
+                cues: subState.cues,
+                styles: subState.styles
+            })
+        });
+        if (!res.ok) throw new Error("Server error saving draft");
+        if (notify) showToast("Saved subtitle edits successfully!");
+    } catch (err) {
+        console.error("Save error:", err);
+        if (notify) alert("Failed to save subtitles: " + err.message);
+    }
+}
+
+function downloadSubtitles(format) {
+    if (!subState.clipName) return;
+    saveSubtitlesDraft(false);
+    const downloadUrl = `/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/download?format=${format}`;
+    window.open(downloadUrl, "_blank");
+}
+
+async function executeBurnSubtitles() {
+    if (!subState.clipName) return;
+    if (subState.cues.length === 0) {
+        alert("Cannot burn subtitles: There are no subtitle cues.");
+        return;
+    }
+
+    const btn = document.getElementById("subBurnExecuteBtn");
+    const btnText = document.getElementById("subBurnExecuteText");
+
+    if (btn) btn.disabled = true;
+    if (btnText) btnText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Rendering Subtitles...';
+
+    try {
+        const res = await apiRequest(`/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/burn`, {
+            method: "POST",
+            body: JSON.stringify({
+                cues: subState.cues,
+                styles: subState.styles,
+                replace_original: false
+            })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Burning failed");
+
+        showToast(`Subtitles burned successfully! Created: ${data.filename}`);
+        closeSubtitleModal();
+        renderClips();
+
+    } catch (err) {
+        console.error("Burn error:", err);
+        alert(`Failed to burn subtitles: ${err.message}`);
+    } finally {
+        if (btn) btn.disabled = false;
+        if (btnText) btnText.innerHTML = '<i class="fa-solid fa-fire-flame-curved"></i> Burn to Video';
+    }
+}
+

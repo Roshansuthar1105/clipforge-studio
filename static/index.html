@@ -794,6 +794,202 @@
         </div>
     </div>
 
+    <!-- ==================================================================
+         MODAL 5: SUBTITLE & CAPTION STUDIO (Whisper + Bulk / 1-by-1 Edit)
+         ================================================================== -->
+    <div id="subtitlesModal" class="modal-overlay" onclick="closeSubtitleModal()">
+        <div class="modal-card subtitle-modal" onclick="event.stopPropagation()">
+            <div class="sub-studio-header">
+                <div>
+                    <h3 style="color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                        <i class="fa-solid fa-closed-captioning" style="color: var(--primary);"></i> Subtitle & Caption Studio
+                    </h3>
+                    <p style="font-size: 12px; color: var(--text-dim); margin-top: 3px;">
+                        Clip: <span id="subModalClipNameBadge" style="color: #fff; font-weight: 600;">clip.mp4</span>
+                    </p>
+                </div>
+                <button class="modal-close-btn" onclick="closeSubtitleModal()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <!-- Notice / Status Banner for Groq Key or Auto-transcription -->
+            <div id="subStatusBanner" style="display: none; padding: 9px 14px; border-radius: var(--radius-sm); font-size: 12.5px; margin-bottom: 12px;"></div>
+
+            <div class="sub-studio-layout">
+                <!-- Left Column: 9:16 Video Preview with Dynamic Subtitle Overlay -->
+                <div class="sub-preview-column">
+                    <div class="sub-video-wrapper">
+                        <video id="subModalVideo" playsinline preload="metadata" ontimeupdate="onSubVideoTimeUpdate()"></video>
+                        <div id="subOverlayCaption" class="sub-overlay-caption">PREVIEW SUBTITLE</div>
+                    </div>
+                    <!-- Quick Playback Controls -->
+                    <div style="display: flex; align-items: center; gap: 12px; margin-top: 10px; width: 100%; max-width: 290px;">
+                        <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="toggleSubVideoPlay()">
+                            <i id="subPlayIcon" class="fa-solid fa-play"></i>
+                        </button>
+                        <input id="subVideoSeek" type="range" min="0" max="100" value="0" step="0.1" style="flex: 1;" oninput="onSubVideoSeek(this.value)">
+                        <span id="subVideoTimeDisplay" style="font-size: 11px; font-family: monospace; color: var(--text-dim);">0:00</span>
+                    </div>
+                </div>
+
+                <!-- Right Column: Subtitle Editor Controls (Bulk vs One-by-One) -->
+                <div class="sub-editor-column">
+                    <div class="sub-tabs-bar">
+                        <button type="button" id="subTabBtnBulk" class="sub-tab-btn active" onclick="switchSubTab('bulk')">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Bulk Style & Presets
+                        </button>
+                        <button type="button" id="subTabBtnCues" class="sub-tab-btn" onclick="switchSubTab('cues')">
+                            <i class="fa-solid fa-list-check"></i> One-by-One Edit (<span id="subCuesCount">0</span>)
+                        </button>
+                    </div>
+
+                    <!-- TAB 1: BULK STYLE & PRESETS -->
+                    <div id="subTabBulk" class="sub-tab-panel">
+                        <div style="margin-bottom: 12px;">
+                            <label style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); margin-bottom: 6px; display: block;">
+                                1-Click Viral Style Presets
+                            </label>
+                            <div class="sub-preset-grid">
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('hormozi')">
+                                    <i class="fa-solid fa-bolt" style="color: #ffe500;"></i> Hormozi Viral
+                                </button>
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('clean')">
+                                    <i class="fa-solid fa-feather"></i> Minimal Clean
+                                </button>
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('neon')">
+                                    <i class="fa-solid fa-droplet" style="color: #22c55e;"></i> Neon Green
+                                </button>
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('cyan')">
+                                    <i class="fa-solid fa-circle-nodes" style="color: #06b6d4;"></i> Cyber Cyan
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Typography & Style Grid -->
+                        <div class="sub-control-grid">
+                            <div class="sub-control-group">
+                                <label>Font Family</label>
+                                <select id="subFontName" class="form-select" onchange="updateSubStyle('font_name', this.value)">
+                                    <option value="Arial Black">Arial Black (Universal Bold)</option>
+                                    <option value="Impact">Impact / Anton (Viral Shorts)</option>
+                                    <option value="Montserrat ExtraBold">Montserrat ExtraBold (Modern)</option>
+                                    <option value="Bebas Neue">Bebas Neue (Tall Uppercase)</option>
+                                    <option value="Roboto Bold">Roboto Bold (Clean Tech)</option>
+                                </select>
+                            </div>
+
+                            <div class="sub-control-group">
+                                <label>Font Size: <span id="subFontSizeVal">68</span>px</label>
+                                <input id="subFontSize" type="range" min="36" max="96" value="68" oninput="updateSubStyle('font_size', this.value); document.getElementById('subFontSizeVal').textContent=this.value;">
+                            </div>
+
+                            <div class="sub-control-group">
+                                <label>Text Color</label>
+                                <div class="sub-color-row">
+                                    <input id="subTextColor" type="color" class="sub-color-input" value="#FFFFFF" onchange="updateSubStyle('text_color', this.value)">
+                                    <span id="subTextColorHex" style="font-size: 12px; font-family: monospace; color: var(--text-dim);">#FFFFFF</span>
+                                </div>
+                            </div>
+
+                            <div class="sub-control-group">
+                                <label>Outline / Stroke Color</label>
+                                <div class="sub-color-row">
+                                    <input id="subOutlineColor" type="color" class="sub-color-input" value="#000000" onchange="updateSubStyle('outline_color', this.value)">
+                                    <span id="subOutlineColorHex" style="font-size: 12px; font-family: monospace; color: var(--text-dim);">#000000</span>
+                                </div>
+                            </div>
+
+                            <div class="sub-control-group">
+                                <label>Outline Width: <span id="subOutlineWidthVal">4</span>px</label>
+                                <input id="subOutlineWidth" type="range" min="0" max="8" value="4" step="0.5" oninput="updateSubStyle('outline_width', this.value); document.getElementById('subOutlineWidthVal').textContent=this.value;">
+                            </div>
+
+                            <div class="sub-control-group">
+                                <label>Text Transform</label>
+                                <select id="subTextTransform" class="form-select" onchange="updateSubStyle('text_transform', this.value)">
+                                    <option value="uppercase">UPPERCASE (Reels Standard)</option>
+                                    <option value="title">Title Case</option>
+                                    <option value="none">Original Case</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Position Options -->
+                        <div class="sub-control-group" style="margin-bottom: 18px;">
+                            <label>Text Position</label>
+                            <div class="sub-pos-btn-group">
+                                <button type="button" id="subPosTop" class="sub-pos-btn" onclick="setSubPosition('top')">
+                                    <i class="fa-solid fa-arrow-up"></i> Top (20%)
+                                </button>
+                                <button type="button" id="subPosMiddle" class="sub-pos-btn" onclick="setSubPosition('middle')">
+                                    <i class="fa-solid fa-arrows-up-down"></i> Middle (50%)
+                                </button>
+                                <button type="button" id="subPosBottom" class="sub-pos-btn active" onclick="setSubPosition('bottom')">
+                                    <i class="fa-solid fa-arrow-down"></i> Bottom (80%)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Bulk Utilities: Global Shift & Find & Replace -->
+                        <div style="background: #111a2e; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px; margin-top: 10px;">
+                            <label style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px; display: block;">
+                                Bulk Timing & Content Tools
+                            </label>
+                            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                                <span style="font-size: 12px; color: var(--text-dim);">Shift All Cues:</span>
+                                <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="shiftAllCues(-0.3)">-0.3s</button>
+                                <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="shiftAllCues(-0.1)">-0.1s</button>
+                                <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="shiftAllCues(+0.1)">+0.1s</button>
+                                <button type="button" class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="shiftAllCues(+0.3)">+0.3s</button>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <input id="subFindInput" type="text" class="form-input" placeholder="Find word..." style="font-size: 12px; padding: 6px 10px;">
+                                <input id="subReplaceInput" type="text" class="form-input" placeholder="Replace with..." style="font-size: 12px; padding: 6px 10px;">
+                                <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;" onclick="bulkFindAndReplace()">
+                                    Replace All
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: ONE-BY-ONE EDIT -->
+                    <div id="subTabCues" class="sub-tab-panel" style="display: none;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                            <span style="font-size: 12px; color: var(--text-dim);">Edit individual lines & timings:</span>
+                            <button type="button" class="btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" onclick="addNewSubCue()">
+                                <i class="fa-solid fa-plus"></i> Add Cue Line
+                            </button>
+                        </div>
+                        <div id="subCuesListContainer" class="sub-cues-list">
+                            <!-- Populated dynamically with cue cards -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Bar -->
+            <div class="sub-studio-footer">
+                <div style="display: flex; gap: 8px;">
+                    <button type="button" class="btn-secondary" style="font-size: 12px; padding: 7px 12px;" onclick="downloadSubtitles('srt')">
+                        <i class="fa-solid fa-download"></i> .SRT
+                    </button>
+                    <button type="button" class="btn-secondary" style="font-size: 12px; padding: 7px 12px;" onclick="downloadSubtitles('ass')">
+                        <i class="fa-solid fa-file-code"></i> .ASS
+                    </button>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button type="button" class="btn-secondary" onclick="closeSubtitleModal()">Close</button>
+                    <button type="button" class="btn-secondary" onclick="saveSubtitlesDraft(true)">
+                        <i class="fa-solid fa-floppy-disk"></i> Save Edits
+                    </button>
+                    <button id="subBurnExecuteBtn" type="button" class="btn-primary" onclick="executeBurnSubtitles()">
+                        <i class="fa-solid fa-fire-flame-curved"></i> <span id="subBurnExecuteText">Burn to Video</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
     <!-- Main Client Application Script -->
     <script src="/static/js/app.js"></script>
 </body>
