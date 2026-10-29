@@ -100,64 +100,96 @@ async def _upload_video(
     upload_uri: str,
     video_path: Path,
     token: str,
+    container_id: Optional[str] = None,
 ) -> None:
     """
     Step 2 — Upload the raw video bytes to Meta's rupload endpoint.
 
-    Small files (≤ chunk_size) are sent in a single request.
-    Larger files are sent in sequential chunks, each with an updated ``offset``
-    header, until the full file is transferred.
-
-    The video is sent as raw binary content (``content=`` kwarg in httpx),
-    NOT as multipart form data.
+    Meta's rupload endpoint for Instagram Reels requires raw binary stream
+    (application/octet-stream) with offset 0 and total file_size.
+    Uploading the complete video in a single binary stream guarantees atom integrity
+    (avoiding partial chunk boundaries that trigger 400 ProcessingFailedError
+    and leave Meta's transcoder waiting indefinitely).
 
     Args:
         client: Shared httpx async client.
         upload_uri: The rupload.facebook.com URL returned by Step 1.
         video_path: Absolute path to the MP4 clip.
         token: Page Access Token.
+        container_id: Optional container ID to verify background ingestion.
     """
     settings = get_settings()
     total_bytes = video_path.stat().st_size
-    chunk_size = settings.chunk_size_bytes
 
     logger.info(
-        "[IG Reels] Step 2 – Uploading %s bytes to rupload (%s chunk size)",
+        "[IG Reels] Step 2 – Uploading %s bytes to Meta rupload (%s)...",
         total_bytes,
-        chunk_size,
+        video_path.name,
     )
 
+    headers = {
+        "Authorization": f"OAuth {token}",
+        "offset": "0",
+        "file_size": str(total_bytes),
+        "Content-Type": "application/octet-stream",
+    }
+
     with video_path.open("rb") as fh:
-        offset = 0
-        while offset < total_bytes:
-            chunk = fh.read(chunk_size)
-            if not chunk:
-                break
+        file_bytes = fh.read()
 
-            headers = {
-                "Authorization": f"OAuth {token}",
-                "offset": str(offset),
-                "file_size": str(total_bytes),
-                "Content-Type": "video/mp4",
-            }
+    max_retries = 2
+    for attempt in range(1, max_retries + 2):
+        try:
+            logger.info("[IG Reels] Step 2 – Sending binary payload (attempt %d/%d)...", attempt, max_retries + 1)
+            resp = await client.post(upload_uri, headers=headers, content=file_bytes, timeout=180)
 
-            resp = await client.post(upload_uri, content=chunk, headers=headers)
-            resp.raise_for_status()
-            body = resp.json()
+            # Meta returns 200 OK with {"success": true, "message": "Upload Successful."}
+            if resp.status_code in (200, 206):
+                logger.info("[IG Reels] Step 2 – Upload successful: HTTP %s (%s)", resp.status_code, resp.text[:120])
+                return
 
-            # On success the response contains "success": true or an "h" key (upload handle)
-            if not body.get("success") and "h" not in body and offset + len(chunk) >= total_bytes:
+            # If Meta returned 400 on socket close, check if the container is already FINISHED
+            if container_id:
                 logger.warning(
-                    "[IG Reels] Step 2 – Final chunk response unexpected: %s", body
+                    "[IG Reels] Step 2 – rupload returned status %s (%s); checking container status on Graph API...",
+                    resp.status_code,
+                    resp.text[:300],
                 )
+                try:
+                    c_resp = await client.get(
+                        f"{settings.graph_url}/{container_id}",
+                        params={"fields": "status_code,status", "access_token": token},
+                    )
+                    if c_resp.is_success:
+                        c_data = c_resp.json()
+                        c_status = c_data.get("status_code", "")
+                        if c_status == "FINISHED":
+                            logger.info("[IG Reels] Step 2 – Container already FINISHED on Meta servers!")
+                            return
+                except Exception as check_err:
+                    logger.warning("[IG Reels] Step 2 – Container check error: %s", check_err)
 
-            offset += len(chunk)
-            logger.info(
-                "[IG Reels] Step 2 – Uploaded %s / %s bytes (%.0f%%)",
-                min(offset, total_bytes),
-                total_bytes,
-                100 * min(offset, total_bytes) / total_bytes,
-            )
+            if attempt <= max_retries:
+                logger.warning(
+                    "[IG Reels] Step 2 – Upload returned %s; retrying in 3s...",
+                    resp.status_code,
+                )
+                await asyncio.sleep(3)
+                continue
+
+            resp.raise_for_status()
+
+        except (httpx.TimeoutException, httpx.NetworkError) as net_err:
+            if attempt <= max_retries:
+                logger.warning(
+                    "[IG Reels] Step 2 – Network error during upload (attempt %d/%d): %s; retrying in 3s...",
+                    attempt,
+                    max_retries + 1,
+                    net_err,
+                )
+                await asyncio.sleep(3)
+                continue
+            raise
 
     logger.info("[IG Reels] Step 2 – Upload complete")
 
@@ -395,7 +427,7 @@ async def publish_instagram_reel(
             container_id, upload_uri = await _create_container(
                 client, ig_uid, caption, share_to_feed, token
             )
-            await _upload_video(client, upload_uri, upload_file, token)
+            await _upload_video(client, upload_uri, upload_file, token, container_id=container_id)
             await _poll_container_status(client, container_id, token)
             media_id = await _publish_container(client, ig_uid, container_id, token)
 
