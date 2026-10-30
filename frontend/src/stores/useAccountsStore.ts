@@ -67,7 +67,8 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
     set({ testingAccountId: accountId });
     try {
       const res = await apiClient.testAccountConnection(accountId);
-      if (res.ok) {
+      const isOk = res.ok ?? (res as any).valid ?? false;
+      if (isOk) {
         showToast(`Account valid: ${res.message || 'Connected'}`, 'success');
       } else {
         showToast(`Token issue: ${res.message || 'Action required'}`, 'warning');
@@ -133,7 +134,7 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
 
     // Listen for auth completion message from popup
     const onMessage = (e: MessageEvent) => {
-      if (e.data && e.data.type === 'OAUTH_AUTH_SUCCESS') {
+      if (e.data && (e.data.type === 'OAUTH_AUTH_SUCCESS' || e.data.type === 'account_connected')) {
         showToast(`${platform.toUpperCase()} connected successfully!`, 'success');
         window.removeEventListener('message', onMessage);
         get().loadAccounts();

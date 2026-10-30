@@ -130,7 +130,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="app-container">
+    <div className="min-h-screen bg-[#080b13] text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white">
       {/* Top Header */}
       <Header currentView={currentView} onSwitchView={handleSwitchView} />
 
@@ -138,7 +138,7 @@ export const App: React.FC = () => {
       <GlobalJobProgress />
 
       {/* Main View Router */}
-      <main className="mt-4">
+      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Main Tab 1: Slicing Studio */}
         {currentView === 'studio' && (
           <StudioView

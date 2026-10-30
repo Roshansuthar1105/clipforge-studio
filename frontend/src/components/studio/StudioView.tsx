@@ -89,7 +89,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 animate-in fade-in">
+    <div className="w-full flex flex-col gap-6 animate-in fade-in">
       {/* 1. Source Video URL Input Card */}
       <div className="glass-panel p-5 sm:p-7 rounded-3xl relative overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
@@ -305,7 +305,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
 
       {/* 4. Mode-Specific Configurations */}
       {slicingMode === 'parts' ? (
-        <div className="glass-panel p-5 sm:p-7 rounded-3xl space-y-6">
+        <div className="glass-panel p-5 sm:p-7 rounded-3xl flex flex-col gap-6">
           <h2 className="text-base sm:text-lg font-black text-white font-['Outfit'] flex items-center gap-2">
             <span className="w-6 h-6 rounded-lg bg-indigo-600/30 text-indigo-400 border border-indigo-500/40 flex items-center justify-center text-xs">
               4
@@ -315,7 +315,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
 
           {/* Sliders for length and count */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div className="p-4 rounded-2xl bg-slate-900/50 border border-white/5 space-y-3">
+            <div className="p-4 rounded-2xl bg-slate-900/50 border border-white/5 flex flex-col gap-3">
               <div className="flex justify-between items-center text-xs font-bold">
                 <span className="text-slate-300">Clip Duration</span>
                 <span className="text-indigo-400 font-mono text-sm">{clipLength}s</span>
@@ -347,7 +347,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-900/50 border border-white/5 space-y-3">
+            <div className="p-4 rounded-2xl bg-slate-900/50 border border-white/5 flex flex-col gap-3">
               <div className="flex justify-between items-center text-xs font-bold">
                 <span className="text-slate-300">Max Clips to Generate</span>
                 <span className="text-indigo-400 font-mono text-sm">{maxClips}</span>
@@ -428,7 +428,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
             </div>
 
             {overlayDrawerOpen && (
-              <div className="mt-4 pt-4 border-t border-white/5 space-y-4 animate-in fade-in">
+              <div className="mt-4 pt-4 border-t border-white/5 flex flex-col gap-4 animate-in fade-in">
                 {/* Title Banner */}
                 <div>
                   <label className="text-xs text-slate-400 font-medium block mb-1">
@@ -516,7 +516,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
         </div>
       ) : (
         /* AI Viral Moments Slicing Config */
-        <div className="glass-panel p-5 sm:p-7 rounded-3xl space-y-4">
+        <div className="glass-panel p-5 sm:p-7 rounded-3xl flex flex-col gap-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-base sm:text-lg font-black text-white font-['Outfit'] flex items-center gap-2">
@@ -563,7 +563,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
           </div>
 
           {viralMoments.length > 0 && (
-            <div className="space-y-3 pt-2">
+            <div className="flex flex-col gap-3 pt-2">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                 Ranked Viral Hooks ({viralMoments.length})
               </h3>

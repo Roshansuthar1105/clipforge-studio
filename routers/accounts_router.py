@@ -75,6 +75,12 @@ def _popup_callback_html(platform: str, success: bool, message: str = "") -> str
           success: {'true' if success else 'false'},
           error: '{message}'
         }}, '*');
+        window.opener.postMessage({{
+          type: 'OAUTH_AUTH_SUCCESS',
+          platform: '{platform}',
+          success: {'true' if success else 'false'},
+          error: '{message}'
+        }}, '*');
         setTimeout(() => {{ window.close(); }}, 1500);
       }} else {{
         setTimeout(() => {{ window.location.href = '/'; }}, 2000);
@@ -132,15 +138,32 @@ def delete_single_account(account_id: str, authorization: Optional[str] = Header
     return {"success": True, "message": "Account disconnected"}
 
 
+@router.get("/{account_id}/test")
 @router.get("/{account_id}/status")
 def test_account(account_id: str, authorization: Optional[str] = Header(None)):
     """Test token validity and connection health for an account."""
-    return check_account_health(account_id)
+    health = check_account_health(account_id)
+    # Ensure backward and frontend compatibility for both 'ok' and 'valid'
+    health["ok"] = health.get("valid", False)
+    health["status"] = "ok" if health.get("valid") else "error"
+    return health
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # YouTube OAuth
 # ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/youtube/login")
+def login_youtube(authorization: Optional[str] = Header(None), user_id: Optional[str] = Query(None)):
+    """Redirect to Google OAuth authorization URL for popup flow."""
+    try:
+        user = get_current_user_optional(authorization)
+        state = (user["id"] if user else None) or user_id or "global"
+        url = get_youtube_auth_url(state=state)
+        return RedirectResponse(url=url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 
 @router.get("/youtube/connect")
 def connect_youtube(authorization: Optional[str] = Header(None)):
@@ -182,6 +205,18 @@ def youtube_oauth_callback(
 # ──────────────────────────────────────────────────────────────────────────────
 # Instagram OAuth
 # ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/instagram/login")
+def login_instagram(authorization: Optional[str] = Header(None), user_id: Optional[str] = Query(None)):
+    """Redirect to Meta OAuth authorization URL for popup flow."""
+    try:
+        user = get_current_user_optional(authorization)
+        state = (user["id"] if user else None) or user_id or "global"
+        url = get_instagram_auth_url(state=state)
+        return RedirectResponse(url=url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 
 @router.get("/instagram/connect")
 def connect_instagram(authorization: Optional[str] = Header(None)):
