@@ -240,19 +240,65 @@
                         </div>
 
                         <!-- Checkbox Overlays -->
-                        <div style="display: flex; gap: 24px; flex-wrap: wrap; margin: 18px 0;">
+                        <div style="display: flex; gap: 24px; flex-wrap: wrap; margin: 18px 0 10px 0;">
                             <label class="checkbox-label">
-                                <input id="showTitle" type="checkbox" checked>
+                                <input id="showTitle" type="checkbox" checked onchange="toggleOverlayCustomizerVisibility()">
                                 <span>Show Title Overlay Banner</span>
                             </label>
                             <label class="checkbox-label">
-                                <input id="showParts" type="checkbox" checked>
+                                <input id="showParts" type="checkbox" checked onchange="toggleOverlayCustomizerVisibility()">
                                 <span>Show Part Numbers ("Part 1", "Part 2")</span>
                             </label>
                             <label class="checkbox-label">
                                 <input id="keepSource" type="checkbox" checked>
                                 <span>Cache Source Video on Server (for instant re-slicing)</span>
                             </label>
+                        </div>
+
+                        <!-- Adjustable Title & Part Customizer Drawer (Before Creation) -->
+                        <div id="overlaySettingsDrawer" class="overlay-settings-drawer" style="margin-bottom: 20px; background: rgba(15, 23, 42, 0.65); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px 16px;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; cursor: pointer;" onclick="toggleOverlaySettingsAccordion()">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <i class="fa-solid fa-pen-ruler" style="color: var(--primary);"></i>
+                                    <span style="font-size: 13px; font-weight: 700; color: #fff;">Adjust Title & Part Text Appearance Before Creation</span>
+                                </div>
+                                <span id="overlayDrawerChevron" style="font-size: 12px; color: var(--text-dim); transition: transform 0.2s ease;"><i class="fa-solid fa-chevron-down"></i></span>
+                            </div>
+                            <div id="overlaySettingsBody">
+                                <div class="form-row" style="margin-bottom: 12px;">
+                                    <div class="form-group" style="flex: 1;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                            <label class="form-label" style="margin-bottom: 0;">Title Vertical Position: <span id="titleYVal">180</span>px</label>
+                                            <span style="font-size: 11px; color: var(--text-dim);">Top Safe Zone</span>
+                                        </div>
+                                        <input id="titleYInput" class="form-input" type="range" min="80" max="600" value="180" oninput="document.getElementById('titleYVal').textContent=this.value">
+                                    </div>
+                                    <div class="form-group" style="flex: 1;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                            <label class="form-label" style="margin-bottom: 0;">Title Font Size: <span id="titleFontSizeVal">48</span>px</label>
+                                            <span style="font-size: 11px; color: var(--text-dim);">Reels Standard</span>
+                                        </div>
+                                        <input id="titleFontSizeInput" class="form-input" type="range" min="28" max="72" value="48" oninput="document.getElementById('titleFontSizeVal').textContent=this.value">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group" style="flex: 1.3;">
+                                        <label class="form-label">Part Format Template</label>
+                                        <input id="partFormatInput" class="form-input" type="text" value="Part {part}" placeholder="e.g. Part {part}, Pt. {part}, EP {part}">
+                                        <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">Use <code>{part}</code> to automatically insert clip numbers (e.g. <em>Part 1, Part 2</em>)</span>
+                                    </div>
+                                    <div class="form-group" style="flex: 1;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                            <label class="form-label" style="margin-bottom: 0;">Part Font Size: <span id="partFontSizeVal">34</span>px</label>
+                                        </div>
+                                        <input id="partFontSizeInput" class="form-input" type="range" min="20" max="56" value="34" oninput="document.getElementById('partFontSizeVal').textContent=this.value">
+                                    </div>
+                                    <div class="form-group" style="flex: 0.9;">
+                                        <label class="form-label">Part Y Position (px)</label>
+                                        <input id="partYInput" class="form-input" type="number" min="80" max="1800" placeholder="Auto (below title)">
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Action Submit Buttons -->
@@ -712,14 +758,17 @@
          ================================================================== -->
     <div id="phoneModal" class="modal-overlay" onclick="closePhoneModal()">
         <button class="modal-close-btn" style="top: 24px; right: 24px;" onclick="closePhoneModal()"><i class="fa-solid fa-xmark"></i></button>
-        <div class="phone-frame" onclick="event.stopPropagation()">
-            <video id="phoneModalVideo" class="phone-video" controls autoplay loop playsinline></video>
-            <div style="position: absolute; bottom: 16px; left: 16px; right: 16px; display: flex; gap: 8px;">
-                <a id="phoneModalSaveLink" class="btn-secondary" style="flex: 1; padding: 10px; font-size: 13px;" download>
-                    <i class="fa-solid fa-download"></i> Save
+        <div class="phone-modal-wrapper" onclick="event.stopPropagation()">
+            <div class="phone-frame">
+                <video id="phoneModalVideo" class="phone-video" controls autoplay loop playsinline></video>
+            </div>
+            <!-- Dedicated Action Dock Beneath the Phone Frame (No overlap with video controls) -->
+            <div class="phone-modal-actions">
+                <a id="phoneModalSaveLink" class="btn-secondary phone-action-btn" download>
+                    <i class="fa-solid fa-download"></i> Save Video
                 </a>
-                <button type="button" class="btn-primary" style="flex: 1.5; padding: 10px; font-size: 13px;" onclick="closePhoneModal(); openSinglePublishModal(state.modalVideoName, state.modalVideoUrl);">
-                    <i class="fa-solid fa-rocket"></i> Publish
+                <button type="button" class="btn-primary phone-action-btn" onclick="closePhoneModal(); openSinglePublishModal(state.modalVideoName, state.modalVideoUrl);">
+                    <i class="fa-solid fa-rocket"></i> Publish Reel
                 </button>
             </div>
         </div>
@@ -872,17 +921,23 @@
                                 1-Click Viral Style Presets
                             </label>
                             <div class="sub-preset-grid">
-                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('hormozi')">
+                                <button type="button" class="sub-preset-chip active" onclick="applySubPreset('hormozi')">
                                     <i class="fa-solid fa-bolt" style="color: #ffe500;"></i> Hormozi Viral
+                                </button>
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('mrbeast')">
+                                    <i class="fa-solid fa-fire" style="color: #f97316;"></i> MrBeast Bold
+                                </button>
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('abdaal')">
+                                    <i class="fa-solid fa-highlighter" style="color: #22c55e;"></i> Ali Abdaal
+                                </button>
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('gadzhi')">
+                                    <i class="fa-solid fa-gem" style="color: #38bdf8;"></i> Iman Gadzhi
+                                </button>
+                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('neon')">
+                                    <i class="fa-solid fa-wand-magic-sparkles" style="color: #ec4899;"></i> Cyber Neon
                                 </button>
                                 <button type="button" class="sub-preset-chip" onclick="applySubPreset('clean')">
                                     <i class="fa-solid fa-feather"></i> Minimal Clean
-                                </button>
-                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('neon')">
-                                    <i class="fa-solid fa-droplet" style="color: #22c55e;"></i> Neon Green
-                                </button>
-                                <button type="button" class="sub-preset-chip" onclick="applySubPreset('cyan')">
-                                    <i class="fa-solid fa-circle-nodes" style="color: #06b6d4;"></i> Cyber Cyan
                                 </button>
                             </div>
                         </div>
@@ -918,6 +973,7 @@
                                     <option value="Montserrat ExtraBold">Montserrat ExtraBold (Modern)</option>
                                     <option value="Bebas Neue">Bebas Neue (Tall Uppercase)</option>
                                     <option value="Roboto Bold">Roboto Bold (Clean Tech)</option>
+                                    <option value="Inter">Inter SemiBold (Minimalist)</option>
                                 </select>
                             </div>
 
@@ -927,17 +983,25 @@
                             </div>
 
                             <div class="sub-control-group">
-                                <label>Text Color</label>
+                                <label>Base Text Color</label>
                                 <div class="sub-color-row">
-                                    <input id="subTextColor" type="color" class="sub-color-input" value="#FFFFFF" onchange="updateSubStyle('text_color', this.value)">
+                                    <input id="subTextColor" type="color" class="sub-color-input" value="#FFFFFF" onchange="updateSubStyle('text_color', this.value); document.getElementById('subTextColorHex').textContent=this.value;">
                                     <span id="subTextColorHex" style="font-size: 12px; font-family: monospace; color: var(--text-dim);">#FFFFFF</span>
+                                </div>
+                            </div>
+
+                            <div class="sub-control-group">
+                                <label>Highlight Word Color</label>
+                                <div class="sub-color-row">
+                                    <input id="subHighlightColor" type="color" class="sub-color-input" value="#FFE500" onchange="updateSubStyle('highlight_color', this.value); document.getElementById('subHighlightColorHex').textContent=this.value;">
+                                    <span id="subHighlightColorHex" style="font-size: 12px; font-family: monospace; color: #ffe500; font-weight: 700;">#FFE500</span>
                                 </div>
                             </div>
 
                             <div class="sub-control-group">
                                 <label>Outline / Stroke Color</label>
                                 <div class="sub-color-row">
-                                    <input id="subOutlineColor" type="color" class="sub-color-input" value="#000000" onchange="updateSubStyle('outline_color', this.value)">
+                                    <input id="subOutlineColor" type="color" class="sub-color-input" value="#000000" onchange="updateSubStyle('outline_color', this.value); document.getElementById('subOutlineColorHex').textContent=this.value;">
                                     <span id="subOutlineColorHex" style="font-size: 12px; font-family: monospace; color: var(--text-dim);">#000000</span>
                                 </div>
                             </div>
@@ -948,6 +1012,26 @@
                             </div>
 
                             <div class="sub-control-group">
+                                <label>Background Box Style</label>
+                                <select id="subBoxStyle" class="form-select" onchange="updateSubStyle('box_style', this.value)">
+                                    <option value="none">None (Outline & Shadow Only)</option>
+                                    <option value="pill">Rounded Pill Box (Viral Minimal)</option>
+                                    <option value="box">Semi-Transparent Box</option>
+                                    <option value="banner">Full Width Lower Banner</option>
+                                </select>
+                            </div>
+
+                            <div class="sub-control-group">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                    <label style="margin-bottom: 0;">Box Color & Opacity: <span id="subBoxOpacityVal">70</span>%</label>
+                                </div>
+                                <div class="sub-color-row" style="gap: 8px;">
+                                    <input id="subBoxColor" type="color" class="sub-color-input" value="#000000" onchange="updateSubStyle('box_color', this.value)">
+                                    <input id="subBoxOpacity" type="range" min="0" max="100" value="70" style="flex: 1;" oninput="updateSubStyle('box_opacity', this.value/100); document.getElementById('subBoxOpacityVal').textContent=this.value;">
+                                </div>
+                            </div>
+
+                            <div class="sub-control-group">
                                 <label>Text Transform</label>
                                 <select id="subTextTransform" class="form-select" onchange="updateSubStyle('text_transform', this.value)">
                                     <option value="uppercase">UPPERCASE (Reels Standard)</option>
@@ -955,20 +1039,36 @@
                                     <option value="none">Original Case</option>
                                 </select>
                             </div>
+
+                            <div class="sub-control-group">
+                                <label>Horizontal Align</label>
+                                <select id="subAlignH" class="form-select" onchange="updateSubStyle('align_h', this.value)">
+                                    <option value="center">Center</option>
+                                    <option value="left">Left</option>
+                                    <option value="right">Right</option>
+                                </select>
+                            </div>
                         </div>
 
-                        <!-- Position Options -->
-                        <div class="sub-control-group" style="margin-bottom: 18px;">
-                            <label>Text Position</label>
-                            <div class="sub-pos-btn-group">
-                                <button type="button" id="subPosTop" class="sub-pos-btn" onclick="setSubPosition('top')">
+                        <!-- Position Options with Precision Slider -->
+                        <div class="sub-control-group" style="margin-top: 10px; margin-bottom: 18px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <label style="margin-bottom: 0;">Vertical Position: <span id="subPosPercentVal">78</span>% from top</label>
+                                <span style="font-size: 11px; color: var(--accent-cyan); font-weight: 600;">78% = Viral Safe Zone</span>
+                            </div>
+                            <input id="subPositionPercent" type="range" min="10" max="90" value="78" step="1" oninput="updateSubPositionPercent(this.value)">
+                            <div class="sub-pos-btn-group" style="margin-top: 8px;">
+                                <button type="button" id="subPosTop" class="sub-pos-btn" onclick="setSubPositionPercent(20)">
                                     <i class="fa-solid fa-arrow-up"></i> Top (20%)
                                 </button>
-                                <button type="button" id="subPosMiddle" class="sub-pos-btn" onclick="setSubPosition('middle')">
+                                <button type="button" id="subPosMiddle" class="sub-pos-btn" onclick="setSubPositionPercent(50)">
                                     <i class="fa-solid fa-arrows-up-down"></i> Middle (50%)
                                 </button>
-                                <button type="button" id="subPosBottom" class="sub-pos-btn active" onclick="setSubPosition('bottom')">
-                                    <i class="fa-solid fa-arrow-down"></i> Bottom (80%)
+                                <button type="button" id="subPosSafe" class="sub-pos-btn active" onclick="setSubPositionPercent(78)">
+                                    <i class="fa-solid fa-bullseye"></i> Reels Safe (78%)
+                                </button>
+                                <button type="button" id="subPosBottom" class="sub-pos-btn" onclick="setSubPositionPercent(85)">
+                                    <i class="fa-solid fa-arrow-down"></i> Bottom (85%)
                                 </button>
                             </div>
                         </div>
@@ -1011,11 +1111,14 @@
 
                     <!-- TAB 2: ONE-BY-ONE EDIT -->
                     <div id="subTabCues" class="sub-tab-panel" style="display: none;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
                             <span style="font-size: 12px; color: var(--text-dim);">Edit individual lines & timings:</span>
                             <button type="button" class="btn-secondary" style="padding: 5px 10px; font-size: 11.5px;" onclick="addNewSubCue()">
                                 <i class="fa-solid fa-plus"></i> Add Cue Line
                             </button>
+                        </div>
+                        <div style="font-size: 11px; color: var(--accent-cyan); background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.25); border-radius: var(--radius-sm); padding: 6px 10px; margin-bottom: 10px;">
+                            <i class="fa-solid fa-highlighter"></i> <strong>Highlight Words:</strong> Click any word button in a cue to highlight, or type <code>[word]</code> in the text!
                         </div>
                         <div id="subCuesListContainer" class="sub-cues-list">
                             <!-- Populated dynamically with cue cards -->

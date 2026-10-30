@@ -357,15 +357,21 @@ def get_publish_job_status(job_id: str) -> dict | None:
     return None
 
 
-def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest) -> None:
+def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_index: int = 0) -> None:
+    import time
     load_dotenv(override=True)
     public_base = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
     with _jobs_lock:
         batch = _batch_publish_jobs.get(batch_id)
         if not batch:
             return
+        batch["status"] = "running"
+        batch["error_message"] = None
 
-    for clip_idx, clip_path_str in enumerate(request.clip_paths):
+    MAX_RETRIES = 3
+
+    for clip_idx in range(start_index, len(request.clip_paths)):
+        clip_path_str = request.clip_paths[clip_idx]
         try:
             clip_file = resolve_clip_file(clip_path_str)
         except Exception as exc:
@@ -373,7 +379,16 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest) -> None:
                 for target_status in batch["clips"][clip_idx]["targets"]:
                     target_status["status"] = "failed"
                     target_status["error"] = f"Clip file not found: {exc}"
-            continue
+                batch["status"] = "paused_on_failure"
+                batch["failed_clip_index"] = clip_idx
+                batch["failed_clip_name"] = Path(clip_path_str).name
+                batch["error_message"] = f"Sequence stopped at Part {clip_idx + 1}: Clip file not found."
+                # Hold remaining parts
+                for rem_idx in range(clip_idx + 1, len(request.clip_paths)):
+                    for rem_t in batch["clips"][rem_idx]["targets"]:
+                        rem_t["status"] = "held"
+                        rem_t["error"] = f"Held: Waiting for Part {clip_idx + 1} to be resolved"
+            return
 
         clip_title_prefix = request.title_prefix or clip_file.stem
         # Format title cleanly
@@ -384,7 +399,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest) -> None:
 
         clip_caption = (request.caption or clip_title).replace("{part}", str(clip_idx + 1))
 
-        # Upload for each selected target
+        # Upload for each selected target with retry capability (up to 3 attempts)
         for target_idx, target in enumerate(request.targets):
             account = find_account(target.account_id)
             if not account:
@@ -393,166 +408,171 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest) -> None:
                     batch["clips"][clip_idx]["targets"][target_idx]["error"] = "Account not found in storage"
                 continue
 
-            with _jobs_lock:
-                batch["clips"][clip_idx]["targets"][target_idx]["status"] = "uploading"
-                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 5
-
             platform = target.platform.lower()
-            if platform == "youtube":
-                def yt_progress(pct: int):
-                    with _jobs_lock:
-                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
+            upload_succeeded = False
+            last_target_err = ""
+
+            for attempt in range(1, MAX_RETRIES + 1):
+                with _jobs_lock:
+                    batch["clips"][clip_idx]["targets"][target_idx]["status"] = "uploading"
+                    batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 10 if attempt == 1 else 15
+                    if attempt > 1:
+                        batch["clips"][clip_idx]["targets"][target_idx]["error"] = f"Retry attempt {attempt}/{MAX_RETRIES}..."
 
                 try:
-                    res = upload_to_youtube(
-                        account=account,
-                        video_path=clip_file,
-                        title=clip_title,
-                        description=clip_caption,
-                        tags=["ClipForge", "Shorts"],
-                        privacy_status=request.privacy or "public",
-                        progress_callback=yt_progress,
-                    )
-                    with _jobs_lock:
-                        batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
-                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
-                        batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("shorts_url") or res.get("url")
-                        batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                except Exception as exc:
-                    with _jobs_lock:
-                        batch["clips"][clip_idx]["targets"][target_idx]["status"] = "failed"
-                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 0
-                        batch["clips"][clip_idx]["targets"][target_idx]["error"] = str(exc)
-                        batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    if platform == "youtube":
+                        def yt_progress(pct: int):
+                            with _jobs_lock:
+                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
 
-            elif platform == "instagram":
-                def ig_progress(pct: int, msg: str = ""):
-                    with _jobs_lock:
-                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
+                        res = upload_to_youtube(
+                            account=account,
+                            video_path=clip_file,
+                            title=clip_title,
+                            description=clip_caption,
+                            tags=["ClipForge", "Shorts"],
+                            privacy_status=request.privacy or "public",
+                            progress_callback=yt_progress,
+                        )
+                        with _jobs_lock:
+                            batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
+                            batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
+                            batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("shorts_url") or res.get("url")
+                            batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
+                            batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        upload_succeeded = True
+                        break
 
-                ig_token = account.get("access_token")
-                ig_uid = account.get("channel_id")
-                batch_published = False
+                    elif platform == "instagram":
+                        def ig_progress(pct: int, msg: str = ""):
+                            with _jobs_lock:
+                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
 
-                if ig_token and ig_uid:
-                    try:
-                        import asyncio
-                        from services.instagram_publisher import publish_instagram_reel as publish_ig_direct
-                        ig_progress(25)
-                        res = asyncio.run(
-                            publish_ig_direct(
-                                video_path=clip_file,
+                        ig_token = account.get("access_token")
+                        ig_uid = account.get("channel_id")
+                        batch_published = False
+
+                        if ig_token and ig_uid:
+                            try:
+                                import asyncio
+                                from services.instagram_publisher import publish_instagram_reel as publish_ig_direct
+                                ig_progress(25)
+                                res = asyncio.run(
+                                    publish_ig_direct(
+                                        video_path=clip_file,
+                                        caption=clip_caption,
+                                        share_to_feed=True,
+                                        ig_user_id=ig_uid,
+                                        page_access_token=ig_token,
+                                    )
+                                )
+                                if res.status.value == "published":
+                                    with _jobs_lock:
+                                        batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
+                                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
+                                        batch["clips"][clip_idx]["targets"][target_idx]["url"] = f"https://www.instagram.com/reel/{res.media_id}/" if res.media_id else "https://www.instagram.com"
+                                        batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
+                                        batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                                    batch_published = True
+                                    upload_succeeded = True
+                                    break
+                                else:
+                                    raise Exception(res.error_message or "Instagram direct upload failed")
+                            except Exception as direct_err:
+                                err_msg = str(direct_err)
+                                print(f"[Batch Instagram] Direct binary upload error (attempt {attempt}): {err_msg}")
+                                if "localhost" in public_base or "127.0.0.1" in public_base:
+                                    raise Exception(err_msg)
+
+                        if not batch_published:
+                            video_public_url = f"{public_base}/media/clips/{quote(clip_file.name)}"
+                            res = publish_to_instagram_reel(
+                                account=account,
+                                video_public_url=video_public_url,
                                 caption=clip_caption,
                                 share_to_feed=True,
-                                ig_user_id=ig_uid,
-                                page_access_token=ig_token,
+                                progress_callback=ig_progress,
                             )
-                        )
+                            with _jobs_lock:
+                                batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
+                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
+                                batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("permalink") or res.get("url")
+                                batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
+                                batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                            upload_succeeded = True
+                            break
+
+                    elif platform == "facebook":
+                        def fb_batch_progress(pct: int):
+                            with _jobs_lock:
+                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
+
+                        fb_cfg = target.facebook_config
+                        as_reel = fb_cfg.as_reel if fb_cfg is not None else True
+                        page_id = account.get("channel_id")
+                        token = account.get("access_token")
+
+                        import asyncio
+                        from services.facebook_publisher import publish_facebook_reel, publish_facebook_video
+
+                        fb_batch_progress(20)
+                        if as_reel:
+                            res = asyncio.run(
+                                publish_facebook_reel(
+                                    video_path=clip_file,
+                                    caption=clip_caption,
+                                    title=clip_title,
+                                    page_id=page_id,
+                                    page_access_token=token,
+                                )
+                            )
+                        else:
+                            res = asyncio.run(
+                                publish_facebook_video(
+                                    video_path=clip_file,
+                                    title=clip_title,
+                                    description=clip_caption,
+                                    page_id=page_id,
+                                    page_access_token=token,
+                                )
+                            )
+
                         if res.status.value == "published":
                             with _jobs_lock:
                                 batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
                                 batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
-                                batch["clips"][clip_idx]["targets"][target_idx]["url"] = f"https://www.instagram.com/reel/{res.media_id}/" if res.media_id else "https://www.instagram.com"
+                                vid = res.media_id
+                                permalink = res.details.get("permalink_url") if res.details else None
+                                if permalink:
+                                    fb_url = f"https://www.facebook.com{permalink}" if permalink.startswith("/") else permalink
+                                elif as_reel:
+                                    fb_url = f"https://www.facebook.com/reel/{vid}/" if vid else f"https://www.facebook.com/{page_id}"
+                                else:
+                                    fb_url = f"https://www.facebook.com/watch/?v={vid}" if vid else f"https://www.facebook.com/{page_id}"
+                                batch["clips"][clip_idx]["targets"][target_idx]["url"] = fb_url
+                                batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
                                 batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                            batch_published = True
+                            upload_succeeded = True
+                            break
                         else:
-                            raise Exception(res.error_message or "Instagram direct upload failed")
-                    except Exception as direct_err:
-                        err_msg = str(direct_err)
-                        print(f"[Batch Instagram] Direct binary upload error: {err_msg}")
-                        if "localhost" in public_base or "127.0.0.1" in public_base:
-                            with _jobs_lock:
-                                batch["clips"][clip_idx]["targets"][target_idx]["status"] = "failed"
-                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 0
-                                batch["clips"][clip_idx]["targets"][target_idx]["error"] = err_msg
-                                batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                            batch_published = True
+                            raise Exception(res.error_message or "Facebook publish failed")
 
-                if not batch_published:
-                    video_public_url = f"{public_base}/media/clips/{quote(clip_file.name)}"
-                    try:
-                        res = publish_to_instagram_reel(
-                            account=account,
-                            video_public_url=video_public_url,
-                            caption=clip_caption,
-                            share_to_feed=True,
-                            progress_callback=ig_progress,
-                        )
-                        with _jobs_lock:
-                            batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
-                            batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
-                            batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("permalink") or res.get("url")
-                            batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                    except Exception as exc:
+                except Exception as exc:
+                    last_target_err = str(exc)
+                    if attempt < MAX_RETRIES:
+                        time.sleep(3 * attempt)
+                    else:
                         with _jobs_lock:
                             batch["clips"][clip_idx]["targets"][target_idx]["status"] = "failed"
                             batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 0
-                            batch["clips"][clip_idx]["targets"][target_idx]["error"] = str(exc)
+                            batch["clips"][clip_idx]["targets"][target_idx]["error"] = f"Failed after {MAX_RETRIES} attempts: {last_target_err}"
                             batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-            elif platform == "facebook":
-                def fb_batch_progress(pct: int):
-                    with _jobs_lock:
-                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
-
-                fb_cfg = target.facebook_config
-                as_reel = fb_cfg.as_reel if fb_cfg is not None else True
-                page_id = account.get("channel_id")
-                token = account.get("access_token")
-
-                try:
-                    import asyncio
-                    from services.facebook_publisher import publish_facebook_reel, publish_facebook_video
-
-                    fb_batch_progress(20)
-                    if as_reel:
-                        res = asyncio.run(
-                            publish_facebook_reel(
-                                video_path=clip_file,
-                                caption=clip_caption,
-                                title=clip_title,
-                                page_id=page_id,
-                                page_access_token=token,
-                            )
-                        )
-                    else:
-                        res = asyncio.run(
-                            publish_facebook_video(
-                                video_path=clip_file,
-                                title=clip_title,
-                                description=clip_caption,
-                                page_id=page_id,
-                                page_access_token=token,
-                            )
-                        )
-
-                    if res.status.value == "published":
-                        with _jobs_lock:
-                            batch["clips"][clip_idx]["targets"][target_idx]["status"] = "success"
-                            batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 100
-                            vid = res.media_id
-                            permalink = res.details.get("permalink_url") if res.details else None
-                            if permalink:
-                                fb_url = f"https://www.facebook.com{permalink}" if permalink.startswith("/") else permalink
-                            elif as_reel:
-                                fb_url = f"https://www.facebook.com/reel/{vid}/" if vid else f"https://www.facebook.com/{page_id}"
-                            else:
-                                fb_url = f"https://www.facebook.com/watch/?v={vid}" if vid else f"https://www.facebook.com/{page_id}"
-                            batch["clips"][clip_idx]["targets"][target_idx]["url"] = fb_url
-                            batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                    else:
-                        raise Exception(res.error_message or "Facebook publish failed")
-                except Exception as exc:
-                    with _jobs_lock:
-                        batch["clips"][clip_idx]["targets"][target_idx]["status"] = "failed"
-                        batch["clips"][clip_idx]["targets"][target_idx]["progress"] = 0
-                        batch["clips"][clip_idx]["targets"][target_idx]["error"] = str(exc)
-                        batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Save completed clip record to history
         with _jobs_lock:
             clip_record = {
                 "job_id": batch["clips"][clip_idx]["job_id"],
+                "batch_id": batch_id,
                 "clip_path": str(clip_file),
                 "clip_name": clip_file.name,
                 "started_at": batch["started_at"],
@@ -564,7 +584,29 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest) -> None:
         except Exception:
             pass
 
+        # Sequential check: If any target on this clip failed, HALT AND DO NOT PROCEED TO NEXT PART!
+        with _jobs_lock:
+            has_failed_targets = any(
+                t.get("status") == "failed"
+                for t in batch["clips"][clip_idx]["targets"]
+            )
+            if has_failed_targets:
+                batch["status"] = "paused_on_failure"
+                batch["failed_clip_index"] = clip_idx
+                batch["failed_clip_name"] = clip_file.name
+                batch["error_message"] = (
+                    f"Sequential publishing halted at Part {clip_idx + 1} ({clip_file.name}). "
+                    f"Subsequent parts are held to maintain narrative continuity. Please retry or resolve Part {clip_idx + 1}."
+                )
+                for rem_idx in range(clip_idx + 1, len(request.clip_paths)):
+                    for rem_t in batch["clips"][rem_idx]["targets"]:
+                        rem_t["status"] = "held"
+                        rem_t["error"] = f"Held: Waiting for Part {clip_idx + 1} to be resolved"
+                batch["all_done"] = False
+                return
+
     with _jobs_lock:
+        batch["status"] = "completed"
         batch["all_done"] = True
 
 
@@ -609,6 +651,11 @@ def start_batch_publish_job(request: BatchPublishRequest) -> dict:
         "total_clips": len(request.clip_paths),
         "clips": clips_list,
         "all_done": False,
+        "status": "running",
+        "failed_clip_index": None,
+        "failed_clip_name": None,
+        "error_message": None,
+        "_request": request,
     }
 
     with _jobs_lock:
@@ -616,12 +663,60 @@ def start_batch_publish_job(request: BatchPublishRequest) -> dict:
 
     thread = threading.Thread(
         target=_run_batch_publish_job,
-        args=(batch_id, request),
+        args=(batch_id, request, 0),
         daemon=True,
     )
     thread.start()
 
     return batch_entry
+
+
+def retry_batch_publish_job(batch_id: str, skip_failed: bool = False) -> dict:
+    """
+    Retry a halted sequential batch job:
+    - skip_failed=False: Retries the failed Part N again with full retries.
+    - skip_failed=True: Skips Part N and resumes publishing from Part N+1.
+    """
+    with _jobs_lock:
+        batch = _batch_publish_jobs.get(batch_id)
+        if not batch:
+            raise ValueError(f"Batch publish job '{batch_id}' not found")
+
+        request = batch.get("_request")
+        if not request:
+            raise ValueError("Original batch request configuration not found")
+
+        failed_idx = batch.get("failed_clip_index", 0) or 0
+        start_idx = failed_idx + 1 if skip_failed else failed_idx
+
+        if start_idx >= len(request.clip_paths):
+            batch["status"] = "completed"
+            batch["all_done"] = True
+            batch["error_message"] = None
+            return dict(batch)
+
+        # Reset queued status for clips starting from start_idx
+        for idx in range(start_idx, len(request.clip_paths)):
+            for t in batch["clips"][idx]["targets"]:
+                t["status"] = "queued"
+                t["progress"] = 0
+                t["error"] = None
+                t["finished_at"] = None
+
+        batch["status"] = "running"
+        batch["all_done"] = False
+        batch["failed_clip_index"] = None
+        batch["failed_clip_name"] = None
+        batch["error_message"] = None
+
+    thread = threading.Thread(
+        target=_run_batch_publish_job,
+        args=(batch_id, request, start_idx),
+        daemon=True,
+    )
+    thread.start()
+
+    return dict(batch)
 
 
 def get_batch_publish_job_status(batch_id: str) -> dict | None:

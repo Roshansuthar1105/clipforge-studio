@@ -318,6 +318,26 @@ window.addEventListener("click", (e) => {
 // Background Job Management & Polling (Resilient Across Refresh & Navigation)
 // ──────────────────────────────────────────────────────────────────────────────
 
+function toggleOverlayCustomizerVisibility() {
+    const showTitle = document.getElementById("showTitle")?.checked;
+    const showParts = document.getElementById("showParts")?.checked;
+    const drawer = document.getElementById("overlaySettingsDrawer");
+    if (drawer) {
+        drawer.style.display = (showTitle || showParts) ? "block" : "none";
+    }
+}
+
+function toggleOverlaySettingsAccordion() {
+    const body = document.getElementById("overlaySettingsBody");
+    const chevron = document.getElementById("overlayDrawerChevron");
+    if (!body) return;
+    const isHidden = body.style.display === "none";
+    body.style.display = isHidden ? "block" : "none";
+    if (chevron) {
+        chevron.style.transform = isHidden ? "rotate(0deg)" : "rotate(-90deg)";
+    }
+}
+
 async function submitJob(isPreview = false) {
     const urlInput = document.getElementById("urlInput");
     const titleInput = document.getElementById("titleInput");
@@ -328,6 +348,11 @@ async function submitJob(isPreview = false) {
     const showTitleInput = document.getElementById("showTitle");
     const showPartsInput = document.getElementById("showParts");
     const keepSourceInput = document.getElementById("keepSource");
+    const titleYInput = document.getElementById("titleYInput");
+    const titleFontSizeInput = document.getElementById("titleFontSizeInput");
+    const partFormatInput = document.getElementById("partFormatInput");
+    const partFontSizeInput = document.getElementById("partFontSizeInput");
+    const partYInput = document.getElementById("partYInput");
 
     const payload = {
         url: urlInput ? urlInput.value.trim() : "",
@@ -343,6 +368,12 @@ async function submitJob(isPreview = false) {
         keep_source: keepSourceInput ? keepSourceInput.checked : true,
         is_preview: isPreview,
     };
+
+    if (titleYInput) payload.title_y = parseInt(titleYInput.value, 10) || 180;
+    if (titleFontSizeInput) payload.title_font_size = parseInt(titleFontSizeInput.value, 10) || 48;
+    if (partFormatInput && partFormatInput.value.trim()) payload.part_format = partFormatInput.value.trim();
+    if (partFontSizeInput) payload.part_font_size = parseInt(partFontSizeInput.value, 10) || 34;
+    if (partYInput && partYInput.value.trim() !== "") payload.part_y = parseInt(partYInput.value, 10);
 
     if (!payload.url) {
         showToast("Please enter a valid YouTube video URL", "warning");
@@ -2170,6 +2201,15 @@ function startBatchPublishPoller(batchId) {
 
             renderBatchPublishProgress(batchJob);
 
+            const overallBadge = document.getElementById("publishOverallBadge");
+            if (batchJob.status === "paused_on_failure") {
+                if (overallBadge) {
+                    overallBadge.className = "progress-status-badge cancelled";
+                    overallBadge.innerHTML = `<i class="fa-solid fa-pause"></i> Paused at Part ${(batchJob.failed_clip_index || 0) + 1}`;
+                }
+                return;
+            }
+
             if (batchJob.all_done) {
                 clearInterval(state.publishPollerTimer);
                 state.publishPollerTimer = null;
@@ -2182,7 +2222,6 @@ function startBatchPublishPoller(batchId) {
                 const hasFailure = allTargets.some(t => t.status === "failed");
                 const hasSuccess = allTargets.some(t => t.status === "success");
 
-                const overallBadge = document.getElementById("publishOverallBadge");
                 if (overallBadge) {
                     if (hasSuccess && !hasFailure) {
                         overallBadge.className = "progress-status-badge completed";
@@ -2205,6 +2244,35 @@ function startBatchPublishPoller(batchId) {
     }, 1200);
 }
 
+async function retrySequentialBatch(batchId) {
+    try {
+        showToast("Retrying part upload (up to 3 attempts) and resuming sequence...", "info");
+        const res = await apiRequest(`/publish/batch/${batchId}/retry`, { method: "POST" });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Retry failed");
+        }
+        startBatchPublishPoller(batchId);
+    } catch (e) {
+        showToast("Retry failed: " + e.message, "error");
+    }
+}
+
+async function skipSequentialBatch(batchId) {
+    try {
+        if (!confirm("Are you sure you want to skip this blocked part and upload subsequent parts?")) return;
+        showToast("Skipping part and proceeding to next in sequence...", "info");
+        const res = await apiRequest(`/publish/batch/${batchId}/skip`, { method: "POST" });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Skip failed");
+        }
+        startBatchPublishPoller(batchId);
+    } catch (e) {
+        showToast("Skip failed: " + e.message, "error");
+    }
+}
+
 function renderBatchPublishProgress(batchJob) {
     const list = document.getElementById("publishTargetsProgressList");
     if (!list) return;
@@ -2212,7 +2280,34 @@ function renderBatchPublishProgress(batchJob) {
     const clips = batchJob.clips || [];
     if (clips.length === 0) return;
 
-    list.innerHTML = clips.map((clip, idx) => {
+    let haltBannerHtml = "";
+    if (batchJob.status === "paused_on_failure") {
+        const failedPartNum = (batchJob.failed_clip_index !== undefined ? batchJob.failed_clip_index : 0) + 1;
+        haltBannerHtml = `
+            <div class="sequential-halt-banner" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.45); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 260px;">
+                        <div style="font-weight: 700; color: #fca5a5; font-size: 13.5px; display: flex; align-items: center; gap: 6px;">
+                            <i class="fa-solid fa-circle-exclamation" style="color: #ef4444;"></i> Sequential Queue Paused: Part ${failedPartNum} Failed / Blocked
+                        </div>
+                        <p style="font-size: 12px; color: #e2e8f0; margin-top: 5px; line-height: 1.45;">
+                            ${escapeHtml(batchJob.error_message || "Upload failed. Subsequent parts are paused to maintain narrative continuity.")}
+                        </p>
+                    </div>
+                    <div style="display: flex; gap: 8px; flex-shrink: 0; align-items: center;">
+                        <button type="button" class="btn-primary" style="padding: 7px 14px; font-size: 12px; background: #ef4444; border-color: #dc2626;" onclick="retrySequentialBatch('${batchJob.batch_id}')">
+                            <i class="fa-solid fa-arrows-rotate"></i> Retry Part ${failedPartNum}
+                        </button>
+                        <button type="button" class="btn-secondary" style="padding: 7px 14px; font-size: 12px;" onclick="skipSequentialBatch('${batchJob.batch_id}')" title="Skip this part and upload subsequent parts">
+                            <i class="fa-solid fa-forward-step"></i> Skip Part
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    const clipsHtml = clips.map((clip, idx) => {
         const targets = clip.targets || [];
         const doneCount = targets.filter(t => t.status === "success" || t.status === "failed").length;
 
@@ -2229,6 +2324,8 @@ function renderBatchPublishProgress(batchJob) {
                 statusPill = `<span class="progress-status-badge completed"><i class="fa-solid fa-circle-check"></i> Published</span>`;
             } else if (status === "failed") {
                 statusPill = `<span class="progress-status-badge cancelled"><i class="fa-solid fa-circle-xmark"></i> Failed</span>`;
+            } else if (status === "held") {
+                statusPill = `<span class="progress-status-badge queued" style="border-color: rgba(245, 158, 11, 0.4); color: #f59e0b;"><i class="fa-solid fa-pause"></i> Held</span>`;
             } else {
                 statusPill = `<span class="progress-status-badge queued">Queued</span>`;
             }
@@ -2278,6 +2375,8 @@ function renderBatchPublishProgress(batchJob) {
             </div>
         `;
     }).join("");
+
+    list.innerHTML = haltBannerHtml + clipsHtml;
 }
 
 function startPublishPoller(jobId) {
@@ -2736,6 +2835,33 @@ function switchSubTab(tab) {
     }
 }
 
+function hexToRgba(hex, alpha = 1) {
+    if (!hex) return `rgba(0,0,0,${alpha})`;
+    let c = hex.replace("#", "").trim();
+    if (c.length === 3) c = c.split("").map(x => x + x).join("");
+    if (c.length !== 6) return `rgba(0,0,0,${alpha})`;
+    const num = parseInt(c, 16);
+    return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
+}
+
+function formatOverlayCaptionHtml(text, s) {
+    if (!text) return "";
+    let formatted = escapeHtml(text);
+    if (s.text_transform === "uppercase") {
+        formatted = formatted.toUpperCase();
+    } else if (s.text_transform === "title") {
+        formatted = formatted.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+    }
+
+    const hlColor = s.highlight_color || "#FFE500";
+
+    // Highlight text wrapped in brackets [word] or asterisks *word*
+    formatted = formatted.replace(/\[([^\]]+)\]/g, `<span class="sub-highlight-word" style="color: ${hlColor} !important;">$1</span>`);
+    formatted = formatted.replace(/\*([^\*]+)\*/g, `<span class="sub-highlight-word" style="color: ${hlColor} !important;">$1</span>`);
+
+    return formatted;
+}
+
 function syncSubStyleControlsFromState() {
     const s = subState.styles;
     const elFont = document.getElementById("subFontName");
@@ -2743,60 +2869,124 @@ function syncSubStyleControlsFromState() {
     const elSizeVal = document.getElementById("subFontSizeVal");
     const elColor = document.getElementById("subTextColor");
     const elColorHex = document.getElementById("subTextColorHex");
+    const elHlColor = document.getElementById("subHighlightColor");
+    const elHlColorHex = document.getElementById("subHighlightColorHex");
     const elOutline = document.getElementById("subOutlineColor");
     const elOutlineHex = document.getElementById("subOutlineColorHex");
     const elOutlineW = document.getElementById("subOutlineWidth");
     const elOutlineWVal = document.getElementById("subOutlineWidthVal");
+    const elBoxStyle = document.getElementById("subBoxStyle");
+    const elBoxColor = document.getElementById("subBoxColor");
+    const elBoxOpacity = document.getElementById("subBoxOpacity");
+    const elBoxOpacityVal = document.getElementById("subBoxOpacityVal");
     const elTrans = document.getElementById("subTextTransform");
+    const elAlignH = document.getElementById("subAlignH");
 
     if (elFont) elFont.value = s.font_name || "Arial Black";
     if (elSize) elSize.value = s.font_size || 68;
     if (elSizeVal) elSizeVal.textContent = s.font_size || 68;
     if (elColor) elColor.value = s.text_color || "#FFFFFF";
     if (elColorHex) elColorHex.textContent = s.text_color || "#FFFFFF";
+    if (elHlColor) elHlColor.value = s.highlight_color || "#FFE500";
+    if (elHlColorHex) {
+        elHlColorHex.textContent = s.highlight_color || "#FFE500";
+        elHlColorHex.style.color = s.highlight_color || "#FFE500";
+    }
     if (elOutline) elOutline.value = s.outline_color || "#000000";
     if (elOutlineHex) elOutlineHex.textContent = s.outline_color || "#000000";
     if (elOutlineW) elOutlineW.value = s.outline_width !== undefined ? s.outline_width : 4;
     if (elOutlineWVal) elOutlineWVal.textContent = s.outline_width !== undefined ? s.outline_width : 4;
+    if (elBoxStyle) elBoxStyle.value = s.box_style || "none";
+    if (elBoxColor) elBoxColor.value = s.box_color || "#000000";
+    const opacityPct = Math.round((s.box_opacity !== undefined ? s.box_opacity : 0.70) * 100);
+    if (elBoxOpacity) elBoxOpacity.value = opacityPct;
+    if (elBoxOpacityVal) elBoxOpacityVal.textContent = opacityPct;
     if (elTrans) elTrans.value = s.text_transform || "uppercase";
+    if (elAlignH) elAlignH.value = s.align_h || "center";
 
-    setSubPosition(s.position_preset || "bottom", false);
+    const posPct = s.position_percent !== undefined ? s.position_percent : 78;
+    setSubPositionPercent(posPct, false);
 }
 
 function applySubPreset(preset) {
+    // Reset active buttons in preset grid
+    const chips = document.querySelectorAll(".sub-preset-chip");
+    chips.forEach(c => c.classList.remove("active"));
+    const clickedChip = Array.from(chips).find(c => c.getAttribute("onclick") && c.getAttribute("onclick").includes(`'${preset}'`));
+    if (clickedChip) clickedChip.classList.add("active");
+
     if (preset === "hormozi") {
-        subState.styles.font_name = "Impact";
-        subState.styles.font_size = 72;
-        subState.styles.text_color = "#FFE500";
-        subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 5;
-        subState.styles.position_preset = "bottom";
-        subState.styles.text_transform = "uppercase";
-    } else if (preset === "clean") {
         subState.styles.font_name = "Montserrat ExtraBold";
-        subState.styles.font_size = 58;
-        subState.styles.text_color = "#FFFFFF";
-        subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 2.5;
-        subState.styles.position_preset = "bottom";
-        subState.styles.text_transform = "title";
-    } else if (preset === "neon") {
-        subState.styles.font_name = "Impact";
         subState.styles.font_size = 70;
-        subState.styles.text_color = "#22C55E";
+        subState.styles.text_color = "#FFFFFF";
+        subState.styles.highlight_color = "#FFE500";
         subState.styles.outline_color = "#000000";
         subState.styles.outline_width = 4.5;
-        subState.styles.position_preset = "bottom";
+        subState.styles.box_style = "none";
+        subState.styles.position_percent = 78;
         subState.styles.text_transform = "uppercase";
-    } else if (preset === "cyan") {
-        subState.styles.font_name = "Bebas Neue";
-        subState.styles.font_size = 76;
-        subState.styles.text_color = "#06B6D4";
+        subState.styles.align_h = "center";
+    } else if (preset === "mrbeast") {
+        subState.styles.font_name = "Impact";
+        subState.styles.font_size = 74;
+        subState.styles.text_color = "#FFFFFF";
+        subState.styles.highlight_color = "#FFE500";
         subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 4.5;
-        subState.styles.position_preset = "middle";
+        subState.styles.outline_width = 5.5;
+        subState.styles.box_style = "none";
+        subState.styles.position_percent = 75;
         subState.styles.text_transform = "uppercase";
+        subState.styles.align_h = "center";
+    } else if (preset === "abdaal") {
+        subState.styles.font_name = "Roboto Bold";
+        subState.styles.font_size = 56;
+        subState.styles.text_color = "#FFFFFF";
+        subState.styles.highlight_color = "#22C55E";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 0;
+        subState.styles.box_style = "pill";
+        subState.styles.box_color = "#000000";
+        subState.styles.box_opacity = 0.70;
+        subState.styles.position_percent = 78;
+        subState.styles.text_transform = "title";
+        subState.styles.align_h = "center";
+    } else if (preset === "gadzhi") {
+        subState.styles.font_name = "Montserrat ExtraBold";
+        subState.styles.font_size = 60;
+        subState.styles.text_color = "#FFFFFF";
+        subState.styles.highlight_color = "#F59E0B";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 1.5;
+        subState.styles.box_style = "box";
+        subState.styles.box_color = "#0b1120";
+        subState.styles.box_opacity = 0.80;
+        subState.styles.position_percent = 72;
+        subState.styles.text_transform = "uppercase";
+        subState.styles.align_h = "center";
+    } else if (preset === "neon") {
+        subState.styles.font_name = "Montserrat ExtraBold";
+        subState.styles.font_size = 66;
+        subState.styles.text_color = "#00F2FE";
+        subState.styles.highlight_color = "#FF007F";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 4.0;
+        subState.styles.box_style = "none";
+        subState.styles.position_percent = 78;
+        subState.styles.text_transform = "uppercase";
+        subState.styles.align_h = "center";
+    } else if (preset === "clean") {
+        subState.styles.font_name = "Arial Black";
+        subState.styles.font_size = 64;
+        subState.styles.text_color = "#FFFFFF";
+        subState.styles.highlight_color = "#FFE500";
+        subState.styles.outline_color = "#000000";
+        subState.styles.outline_width = 3.0;
+        subState.styles.box_style = "none";
+        subState.styles.position_percent = 80;
+        subState.styles.text_transform = "uppercase";
+        subState.styles.align_h = "center";
     }
+
     syncSubStyleControlsFromState();
     updateSubOverlay();
     updateFullCaptionPreview();
@@ -2808,6 +2998,12 @@ function updateSubStyle(key, value) {
     if (key === "text_color") {
         const hex = document.getElementById("subTextColorHex");
         if (hex) hex.textContent = value.toUpperCase();
+    } else if (key === "highlight_color") {
+        const hex = document.getElementById("subHighlightColorHex");
+        if (hex) {
+            hex.textContent = value.toUpperCase();
+            hex.style.color = value;
+        }
     } else if (key === "outline_color") {
         const hex = document.getElementById("subOutlineColorHex");
         if (hex) hex.textContent = value.toUpperCase();
@@ -2818,19 +3014,37 @@ function updateSubStyle(key, value) {
     }
 }
 
-function setSubPosition(pos, updateOverlayNow = true) {
-    subState.styles.position_preset = pos;
+function setSubPositionPercent(pct, updateOverlayNow = true) {
+    const val = parseInt(pct, 10);
+    subState.styles.position_percent = val;
+    const slider = document.getElementById("subPositionPercent");
+    const valSpan = document.getElementById("subPosPercentVal");
+    if (slider) slider.value = val;
+    if (valSpan) valSpan.textContent = val;
+
     const btnTop = document.getElementById("subPosTop");
     const btnMid = document.getElementById("subPosMiddle");
+    const btnSafe = document.getElementById("subPosSafe");
     const btnBot = document.getElementById("subPosBottom");
 
-    if (btnTop) btnTop.classList.toggle("active", pos === "top");
-    if (btnMid) btnMid.classList.toggle("active", pos === "middle");
-    if (btnBot) btnBot.classList.toggle("active", pos === "bottom");
+    if (btnTop) btnTop.classList.toggle("active", val <= 30);
+    if (btnMid) btnMid.classList.toggle("active", val > 30 && val <= 65);
+    if (btnSafe) btnSafe.classList.toggle("active", val === 78);
+    if (btnBot) btnBot.classList.toggle("active", val > 65 && val !== 78);
 
     if (updateOverlayNow) {
         updateSubOverlay();
     }
+}
+
+function updateSubPositionPercent(val) {
+    setSubPositionPercent(val, true);
+}
+
+function setSubPosition(pos, updateOverlayNow = true) {
+    if (pos === "top") setSubPositionPercent(20, updateOverlayNow);
+    else if (pos === "middle") setSubPositionPercent(50, updateOverlayNow);
+    else setSubPositionPercent(78, updateOverlayNow);
 }
 
 function updateSubOverlay() {
@@ -2854,19 +3068,12 @@ function updateSubOverlay() {
     if (activeCue && activeCue.text) {
         textToShow = activeCue.text;
     } else if (subState.cues.length > 0) {
-        // If between cues while paused, display closest or placeholder preview
         textToShow = subState.cues[0].text;
     } else {
-        textToShow = "SUBTITLE PREVIEW";
+        textToShow = "SUBTITLE [PREVIEW]";
     }
 
-    if (s.text_transform === "uppercase") {
-        textToShow = textToShow.toUpperCase();
-    } else if (s.text_transform === "title") {
-        textToShow = textToShow.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-    }
-
-    overlay.textContent = textToShow;
+    overlay.innerHTML = formatOverlayCaptionHtml(textToShow, s);
 
     // Font family mapping
     let fontFam = s.font_name || "Arial Black";
@@ -2874,6 +3081,7 @@ function updateSubOverlay() {
     else if (fontFam.includes("Montserrat")) fontFam = "'Montserrat', sans-serif";
     else if (fontFam.includes("Bebas")) fontFam = "'Bebas Neue', sans-serif";
     else if (fontFam.includes("Roboto")) fontFam = "'Roboto', sans-serif";
+    else if (fontFam.includes("Inter")) fontFam = "'Inter', sans-serif";
     else fontFam = "'Arial Black', sans-serif";
 
     overlay.style.fontFamily = fontFam;
@@ -2881,31 +3089,65 @@ function updateSubOverlay() {
     overlay.style.color = s.text_color || "#FFFFFF";
 
     // Outline / Stroke emulation for CSS overlay
-    const strokeW = parseFloat(s.outline_width) || 3;
+    const strokeW = parseFloat(s.outline_width) !== undefined ? parseFloat(s.outline_width) : 4;
     const strokeC = s.outline_color || "#000000";
-    overlay.style.textShadow = `
-        -${strokeW}px -${strokeW}px 0 ${strokeC},
-         ${strokeW}px -${strokeW}px 0 ${strokeC},
-        -${strokeW}px  ${strokeW}px 0 ${strokeC},
-         ${strokeW}px  ${strokeW}px 0 ${strokeC},
-         0px ${strokeW + 1}px 4px rgba(0,0,0,0.8)
-    `;
+    if (strokeW > 0) {
+        overlay.style.textShadow = `
+            -${strokeW}px -${strokeW}px 0 ${strokeC},
+             ${strokeW}px -${strokeW}px 0 ${strokeC},
+            -${strokeW}px  ${strokeW}px 0 ${strokeC},
+             ${strokeW}px  ${strokeW}px 0 ${strokeC},
+             0px ${strokeW + 1}px 4px rgba(0,0,0,0.8)
+        `;
+    } else {
+        overlay.style.textShadow = "0 2px 8px rgba(0,0,0,0.5)";
+    }
 
     // Scale font size down to preview window (roughly 1/3 of 1080p canvas)
     const previewScale = 0.32;
     const computedFontSize = Math.max(14, Math.round((parseInt(s.font_size) || 68) * previewScale));
     overlay.style.fontSize = `${computedFontSize}px`;
 
-    // Positioning
-    overlay.style.top = "auto";
-    overlay.style.bottom = "auto";
-    if (s.position_preset === "top") {
-        overlay.style.top = "14%";
-    } else if (s.position_preset === "middle") {
-        overlay.style.top = "46%";
+    // Box Style Background
+    const boxStyle = s.box_style || "none";
+    const boxColor = s.box_color || "#000000";
+    const opacity = s.box_opacity !== undefined ? parseFloat(s.box_opacity) : 0.70;
+    if (boxStyle === "pill") {
+        overlay.style.background = hexToRgba(boxColor, opacity);
+        overlay.style.borderRadius = "999px";
+        overlay.style.padding = "4px 14px";
+        overlay.style.display = "inline-block";
+        overlay.style.left = "8%";
+        overlay.style.right = "8%";
+    } else if (boxStyle === "box") {
+        overlay.style.background = hexToRgba(boxColor, opacity);
+        overlay.style.borderRadius = "6px";
+        overlay.style.padding = "6px 14px";
+        overlay.style.display = "inline-block";
+        overlay.style.left = "8%";
+        overlay.style.right = "8%";
+    } else if (boxStyle === "banner") {
+        overlay.style.background = hexToRgba(boxColor, opacity);
+        overlay.style.borderRadius = "0";
+        overlay.style.padding = "8px 14px";
+        overlay.style.display = "block";
+        overlay.style.left = "0";
+        overlay.style.right = "0";
     } else {
-        overlay.style.bottom = "12%";
+        overlay.style.background = "transparent";
+        overlay.style.padding = "0";
+        overlay.style.borderRadius = "0";
+        overlay.style.display = "inline-block";
+        overlay.style.left = "5%";
+        overlay.style.right = "5%";
     }
+
+    // Positioning
+    const posPercent = s.position_percent !== undefined ? parseFloat(s.position_percent) : 78;
+    overlay.style.top = `${posPercent}%`;
+    overlay.style.bottom = "auto";
+    overlay.style.transform = "translateY(-50%)";
+    overlay.style.textAlign = s.align_h || "center";
 }
 
 function toggleSubVideoPlay() {
@@ -2962,7 +3204,7 @@ function onSubVideoTimeUpdate() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// ONE-BY-ONE CUE EDITING
+// ONE-BY-ONE CUE EDITING WITH WORD-BY-WORD CLICK HIGHLIGHT
 // ──────────────────────────────────────────────────────────────────────────────
 
 function renderSubCuesList() {
@@ -2983,6 +3225,21 @@ function renderSubCuesList() {
     }
 
     container.innerHTML = subState.cues.map((cue, index) => {
+        const rawText = cue.text || "";
+        const words = rawText.split(/\s+/).filter(Boolean);
+        const wordChipsHtml = words.length > 0 ? `
+            <div style="margin-top: 6px;">
+                <span style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 700; margin-bottom: 3px; display: block;">Click Word to Toggle Highlight:</span>
+                <div class="cue-words-selector">
+                    ${words.map((w, wIdx) => {
+                        const isHl = (w.startsWith("[") && w.endsWith("]")) || (w.startsWith("*") && w.endsWith("*"));
+                        const clean = w.replace(/[\[\]\*]/g, "");
+                        return `<button type="button" class="cue-word-chip ${isHl ? 'highlighted' : ''}" onclick="toggleCueWordHighlight(${index}, ${wIdx})" title="Click to toggle highlight">${escapeHtml(clean)}</button>`;
+                    }).join("")}
+                </div>
+            </div>
+        ` : "";
+
         return `
             <div class="sub-cue-card" data-index="${index}" data-start="${cue.start}" data-end="${cue.end}">
                 <div class="sub-cue-header">
@@ -2992,15 +3249,53 @@ function renderSubCuesList() {
                         <input type="number" step="0.1" min="0" class="sub-cue-time-input" value="${cue.start}" onchange="onSubCueTimeChange(${index}, 'start', this.value)">
                         <label style="font-size: 11px;">Out:</label>
                         <input type="number" step="0.1" min="0" class="sub-cue-time-input" value="${cue.end}" onchange="onSubCueTimeChange(${index}, 'end', this.value)">
-                        <button type="button" class="btn-secondary danger" style="padding: 3px 7px; font-size: 11px; margin-left: 6px;" onclick="deleteSubCue(${index})" title="Delete Cue">
+                        <button type="button" class="btn-secondary" style="padding: 3px 7px; font-size: 11px;" onclick="toggleCueHighlightAll(${index})" title="Highlight Entire Line">
+                            <i class="fa-solid fa-highlighter" style="color: #facc15;"></i>
+                        </button>
+                        <button type="button" class="btn-secondary danger" style="padding: 3px 7px; font-size: 11px; margin-left: 4px;" onclick="deleteSubCue(${index})" title="Delete Cue">
                             <i class="fa-solid fa-trash-can"></i>
                         </button>
                     </div>
                 </div>
-                <textarea class="sub-cue-textarea" placeholder="Subtitle text..." oninput="onSubCueTextChange(${index}, this.value)">${escapeHtml(cue.text || "")}</textarea>
+                <textarea class="sub-cue-textarea" placeholder="Subtitle text (wrap [words] to highlight)..." oninput="onSubCueTextChange(${index}, this.value)">${escapeHtml(rawText)}</textarea>
+                ${wordChipsHtml}
             </div>
         `;
     }).join("");
+}
+
+function toggleCueWordHighlight(cueIndex, wordIndex) {
+    if (!subState.cues[cueIndex]) return;
+    const rawText = subState.cues[cueIndex].text || "";
+    const words = rawText.split(/\s+/).filter(Boolean);
+    if (!words[wordIndex]) return;
+
+    let target = words[wordIndex];
+    if ((target.startsWith("[") && target.endsWith("]")) || (target.startsWith("*") && target.endsWith("*"))) {
+        words[wordIndex] = target.replace(/[\[\]\*]/g, "");
+    } else {
+        words[wordIndex] = `[${target}]`;
+    }
+
+    subState.cues[cueIndex].text = words.join(" ");
+    renderSubCuesList();
+    updateSubOverlay();
+    updateFullCaptionPreview();
+}
+
+function toggleCueHighlightAll(cueIndex) {
+    if (!subState.cues[cueIndex]) return;
+    let text = (subState.cues[cueIndex].text || "").trim();
+    if (!text) return;
+    if (text.startsWith("[") && text.endsWith("]")) {
+        text = text.slice(1, -1).trim();
+    } else {
+        text = `[${text.replace(/[\[\]\*]/g, "")}]`;
+    }
+    subState.cues[cueIndex].text = text;
+    renderSubCuesList();
+    updateSubOverlay();
+    updateFullCaptionPreview();
 }
 
 function onSubCueTimeChange(index, field, value) {

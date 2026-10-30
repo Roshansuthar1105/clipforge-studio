@@ -20,12 +20,61 @@ CLIPS_DIR = BASE_DIR / "clips"
 
 
 def hex_to_ass_color(hex_str: str, alpha: int = 0) -> str:
-    """Convert standard #RRGGBB to ASS &HAABBGGRR& format."""
-    hex_str = hex_str.strip().lstrip("#")
+    """Convert standard #RRGGBB or #RGB to ASS &HAABBGGRR& format."""
+    hex_str = str(hex_str).strip().lstrip("#")
+    if len(hex_str) == 3:
+        hex_str = "".join([c * 2 for c in hex_str])
     if len(hex_str) == 6:
         r, g, b = hex_str[0:2], hex_str[2:4], hex_str[4:6]
         return f"&H{alpha:02X}{b}{g}{r}&"
     return f"&H{alpha:02X}FFFFFF&"
+
+
+def process_highlight_markup(
+    text: str,
+    highlight_color_ass: str,
+    primary_color_ass: str,
+    text_transform: str = "none",
+    highlight_words: Optional[List[str]] = None,
+    cue_highlighted: bool = False,
+) -> str:
+    """
+    Process subtitle text for highlighting:
+    - If cue_highlighted is True, wraps the entire text in highlight_color.
+    - Replaces [word] or *word* markup with ASS inline color tags.
+    - Highlights specific words in highlight_words list.
+    - Applies text_transform (uppercase / title / none).
+    """
+    if not text:
+        return ""
+
+    if text_transform == "uppercase":
+        text = text.upper()
+    elif text_transform == "title":
+        text = re.sub(r"[A-Za-z]+('[A-Za-z]+)?", lambda mo: mo.group(0).capitalize(), text)
+
+    if cue_highlighted:
+        clean = text.replace("[", "").replace("]", "").replace("*", "")
+        return f"{{\\c{highlight_color_ass}}}{clean}{{\\c{primary_color_ass}}}"
+
+    # Handle highlight_words if provided
+    if highlight_words:
+        for hw in highlight_words:
+            if not hw:
+                continue
+            hw_target = hw.upper() if text_transform == "uppercase" else hw
+            pattern = re.compile(rf"\b({re.escape(hw_target)})\b", re.IGNORECASE)
+            text = pattern.sub(f"[{hw_target}]", text)
+
+    # Process bracket markup [highlighted text] and asterisk markup *highlighted text*
+    def _rep_bracket(match):
+        inner = match.group(1).strip()
+        return f"{{\\c{highlight_color_ass}}}{inner}{{\\c{primary_color_ass}}}"
+
+    text = re.sub(r"\[([^\]]+)\]", _rep_bracket, text)
+    text = re.sub(r"\*([^\*]+)\*", _rep_bracket, text)
+
+    return text
 
 
 def format_ass_timestamp(seconds: float) -> str:
@@ -62,34 +111,62 @@ def build_ass_content(
 ) -> str:
     """
     Generate Advanced SubStation Alpha (.ass) subtitle file content
-    with full custom styling (font, color, stroke, background, positioning).
+    with full custom styling (font, color, stroke, background, positioning, highlight).
     """
     style = style or {}
     font_name = style.get("font_name", "Arial Black")
     font_size = int(style.get("font_size", 68))
     primary_color = hex_to_ass_color(style.get("text_color", "#FFFFFF"))
+    highlight_color = hex_to_ass_color(style.get("highlight_color", "#FFE500"))
     outline_color = hex_to_ass_color(style.get("outline_color", "#000000"))
     outline_width = float(style.get("outline_width", 4.0))
     shadow_depth = float(style.get("shadow_depth", 1.5))
     text_transform = style.get("text_transform", "uppercase")
-    box_style = style.get("box_style", "none")  # none, box, pill
-
-    # Position alignment in ASS:
-    # 2 = Bottom Center, 5 = Middle Center, 8 = Top Center
-    pos_preset = style.get("position_preset", "bottom")
-    if pos_preset == "top":
-        alignment = 8
-        margin_v = int(style.get("margin_v", 180))
-    elif pos_preset == "middle":
-        alignment = 5
-        margin_v = int(style.get("margin_v", 0))
-    else:  # bottom default
-        alignment = 2
-        margin_v = int(style.get("margin_v", 220))
+    box_style = style.get("box_style", "none")  # none, box, pill, banner
+    box_opacity = float(style.get("box_opacity", 0.65))
 
     # Border style: 1 = outline + drop shadow, 3 = opaque box
-    border_style = 3 if box_style in ("box", "pill") else 1
-    back_color = hex_to_ass_color(style.get("box_color", "#000000"), alpha=120)
+    border_style = 3 if box_style in ("box", "pill", "banner") else 1
+    box_alpha = int(round(max(0.0, min(1.0, 1.0 - box_opacity)) * 255))
+    back_color = hex_to_ass_color(style.get("box_color", "#000000"), alpha=box_alpha)
+
+    # Position alignment in ASS:
+    # 1=B-Left, 2=B-Center, 3=B-Right, 4=M-Left, 5=M-Center, 6=M-Right, 7=T-Left, 8=T-Center, 9=T-Right
+    pos_preset = style.get("position_preset", "bottom")
+    align_h = style.get("align_h", "center").lower()
+    position_percent = style.get("position_percent")
+
+    if position_percent is not None:
+        try:
+            pct = float(position_percent)
+            if pct <= 35:
+                base_align = 8
+                margin_v = int(video_height * (pct / 100.0))
+            elif pct >= 65:
+                base_align = 2
+                margin_v = int(video_height * (1.0 - (pct / 100.0)))
+            else:
+                base_align = 5
+                margin_v = 0
+        except Exception:
+            base_align = 2
+            margin_v = int(style.get("margin_v", 220))
+    elif pos_preset == "top":
+        base_align = 8
+        margin_v = int(style.get("margin_v", 180))
+    elif pos_preset == "middle":
+        base_align = 5
+        margin_v = int(style.get("margin_v", 0))
+    else:  # bottom default
+        base_align = 2
+        margin_v = int(style.get("margin_v", 220))
+
+    if align_h == "left":
+        alignment = base_align - 1
+    elif align_h == "right":
+        alignment = base_align + 1
+    else:
+        alignment = base_align
 
     ass_header = f"""[Script Info]
 Title: ClipForge Subtitles
@@ -113,25 +190,31 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         end_str = format_ass_timestamp(float(cue.get("end", 0.0)))
         raw_text = str(cue.get("text", "")).strip()
 
-        if text_transform == "uppercase":
-            raw_text = raw_text.upper()
-        elif text_transform == "title":
-            raw_text = raw_text.title()
+        clean_text = process_highlight_markup(
+            raw_text,
+            highlight_color_ass=highlight_color,
+            primary_color_ass=primary_color,
+            text_transform=text_transform,
+            highlight_words=cue.get("highlight_words"),
+            cue_highlighted=bool(cue.get("highlighted")),
+        )
 
-        # Clean newlines for ASS
-        clean_text = raw_text.replace("\n", " ").replace("\\N", " ")
+        clean_text = clean_text.replace("\n", " ").replace("\\N", " ")
         events.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{clean_text}")
 
     return ass_header + "\n".join(events) + "\n"
 
 
 def build_srt_content(cues: List[Dict[str, Any]], text_transform: str = "none") -> str:
-    """Generate standard SRT subtitle text."""
+    """Generate standard SRT subtitle text, stripping inline markup for plain SRT."""
     lines = []
     for idx, cue in enumerate(cues, start=1):
         start = format_srt_timestamp(float(cue.get("start", 0.0)))
         end = format_srt_timestamp(float(cue.get("end", 0.0)))
         text = str(cue.get("text", "")).strip()
+        # Clean highlight markup brackets for plain SRT
+        text = re.sub(r"\[([^\]]+)\]", r"\1", text)
+        text = re.sub(r"\*([^\*]+)\*", r"\1", text)
         if text_transform == "uppercase":
             text = text.upper()
         elif text_transform == "title":

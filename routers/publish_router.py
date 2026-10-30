@@ -9,6 +9,7 @@ from publisher.jobs import (
     get_publish_job_status,
     start_batch_publish_job,
     get_batch_publish_job_status,
+    retry_batch_publish_job,
 )
 from publisher.history import get_publish_history, delete_publish_record
 
@@ -57,6 +58,30 @@ def get_batch_status(batch_id: str):
     if not status:
         raise HTTPException(status_code=404, detail="Batch publish job not found")
     return status
+
+
+@router.post("/batch/{batch_id}/retry")
+def retry_batch_job(batch_id: str):
+    """Retry failed part N and resume sequential batch upload."""
+    try:
+        updated = retry_batch_publish_job(batch_id, skip_failed=False)
+        return updated
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/batch/{batch_id}/skip")
+def skip_batch_failed_part(batch_id: str):
+    """Skip failed part N and proceed to next sequential part N+1."""
+    try:
+        updated = retry_batch_publish_job(batch_id, skip_failed=True)
+        return updated
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/history")

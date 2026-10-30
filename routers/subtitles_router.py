@@ -103,6 +103,15 @@ def apply_text_transform(text: str, transform: str) -> str:
     return text
 
 
+def clean_caption_text(raw: str) -> str:
+    """Strip bracket/asterisk highlight markers from caption text for social post descriptions."""
+    if not raw:
+        return ""
+    cleaned = re.sub(r"\[([^\]]+)\]", r"\1", raw)
+    cleaned = re.sub(r"\*([^\*]+)\*", r"\1", cleaned)
+    return cleaned.strip()
+
+
 def safe_replace_file(src: Path, dst: Path, max_attempts: int = 6) -> None:
     """Safely replace dst with src on Windows, handling filesystem locks and retries."""
     src_p = Path(src).resolve()
@@ -185,8 +194,9 @@ def update_clip_metadata_caption(clip_path: Path, full_caption: str, styles: Opt
             except Exception:
                 meta = {}
 
-        meta["caption"] = full_caption
-        meta["description"] = full_caption
+        clean_cap = clean_caption_text(full_caption)
+        meta["caption"] = clean_cap
+        meta["description"] = clean_cap
         meta["has_subtitles"] = True
         if styles:
             meta["styles"] = styles

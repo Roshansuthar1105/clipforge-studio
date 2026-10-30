@@ -156,6 +156,13 @@ class ClipRequest(BaseModel):
 
     title_y: int = 180
     part_y: int | None = None
+    title_font_size: int = 48
+    part_font_size: int = 34
+    title_font_color: str = "white"
+    part_font_color: str = "white"
+    title_box_color: str = "black@0.45"
+    part_box_color: str = "black@0.40"
+    part_format: str = "Part {part}"
 
     # "blur" for cinematic blurred 9:16 background, "black" for classic bars.
     background_style: str = "blur"
@@ -831,10 +838,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             title = formatted_title if request.show_title else ""
 
             # If user already embedded {part} into the title itself, don't duplicate a standalone "Part X" label
+            part_format_template = getattr(request, "part_format", None) or "Part {part}"
             if has_part_in_title:
                 part = ""
             elif request.show_parts:
-                part = f"Part {index + 1}"
+                part = part_format_template.replace("{part}", str(index + 1))
             else:
                 part = ""
 
@@ -844,16 +852,23 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             filename = f"{safe_stem}_part_{index + 1}.mp4"
             output_path = output_folder / filename
 
-            # Calculate dynamic vertical positions (moved down into safe zone to avoid phone notches / UI)
+            # Calculate dynamic vertical positions & styles
             title_y = request.title_y if getattr(request, "title_y", None) is not None else 180
+            title_size = int(getattr(request, "title_font_size", 48) or 48)
+            part_size = int(getattr(request, "part_font_size", 34) or 34)
+            title_color = getattr(request, "title_font_color", "white") or "white"
+            part_color = getattr(request, "part_font_color", "white") or "white"
+            title_box = getattr(request, "title_box_color", "black@0.45") or "black@0.45"
+            part_box = getattr(request, "part_box_color", "black@0.40") or "black@0.40"
+
             if request.part_y is not None:
                 part_y = request.part_y
             elif title and part:
-                part_y = title_y + 95  # 255 if title_y=180 (clean 23px visual gap below title box)
+                part_y = title_y + title_size + 45
             elif part:
-                part_y = title_y       # Primary position if only part is shown
+                part_y = title_y
             else:
-                part_y = title_y + 95
+                part_y = title_y + title_size + 45
 
             # Fit the video into a 9:16 frame.
             if request.background_style == "blur":
@@ -871,12 +886,12 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     filter_script += (
                         f";[{last_pad}]drawtext=text='{safe_title}':"
                         f"fontfile='{fontfile}':"
-                        "fontcolor=white:"
-                        "fontsize=48:"
+                        f"fontcolor={title_color}:"
+                        f"fontsize={title_size}:"
                         "x=(w-text_w)/2:"
                         f"y={title_y}:"
                         "box=1:"
-                        "boxcolor=black@0.45:"
+                        f"boxcolor={title_box}:"
                         "boxborderw=14[t1]"
                     )
                     last_pad = "t1"
@@ -886,12 +901,12 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     filter_script += (
                         f";[{last_pad}]drawtext=text='{safe_part}':"
                         f"fontfile='{fontfile}':"
-                        "fontcolor=white:"
-                        "fontsize=34:"
+                        f"fontcolor={part_color}:"
+                        f"fontsize={part_size}:"
                         "x=(w-text_w)/2:"
                         f"y={part_y}:"
                         "box=1:"
-                        "boxcolor=black@0.40:"
+                        f"boxcolor={part_box}:"
                         "boxborderw=10[t2]"
                     )
                     last_pad = "t2"
@@ -912,12 +927,12 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     filters += (
                         f",drawtext=text='{safe_title}':"
                         f"fontfile='{fontfile}':"
-                        "fontcolor=white:"
-                        "fontsize=48:"
+                        f"fontcolor={title_color}:"
+                        f"fontsize={title_size}:"
                         "x=(w-text_w)/2:"
                         f"y={title_y}:"
                         "box=1:"
-                        "boxcolor=black@0.35:"
+                        f"boxcolor={title_box}:"
                         "boxborderw=14"
                     )
 
@@ -926,12 +941,12 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     filters += (
                         f",drawtext=text='{safe_part}':"
                         f"fontfile='{fontfile}':"
-                        "fontcolor=white:"
-                        "fontsize=34:"
+                        f"fontcolor={part_color}:"
+                        f"fontsize={part_size}:"
                         "x=(w-text_w)/2:"
                         f"y={part_y}:"
                         "box=1:"
-                        "boxcolor=black@0.35:"
+                        f"boxcolor={part_box}:"
                         "boxborderw=10"
                     )
 
