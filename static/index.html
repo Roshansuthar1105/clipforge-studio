@@ -963,6 +963,46 @@
                             </div>
                         </div>
 
+                        <!-- Dynamic Word-Tracking & Typography Grid -->
+                        <div style="background: rgba(255, 229, 0, 0.05); border: 1px solid rgba(255, 229, 0, 0.25); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 14px;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <i class="fa-solid fa-bolt" style="color: #ffe500; font-size: 15px;"></i>
+                                    <div>
+                                        <span style="font-size: 12.5px; font-weight: 700; color: #fff;">Voice-Synced Active Word Tracking</span>
+                                        <span style="font-size: 11px; color: var(--text-dim); display: block;">CapCut / Alex Hormozi style: Exact spoken word illuminates as speech plays.</span>
+                                    </div>
+                                </div>
+                                <span class="badge" style="background: rgba(255, 229, 0, 0.15); color: #ffe500; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(255, 229, 0, 0.3);">100% FREE</span>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                <div class="sub-control-group" style="margin-bottom: 0;">
+                                    <label style="font-size: 11px; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; display: block;">Dynamic Highlighting Mode</label>
+                                    <select id="subHighlightMode" class="form-select" onchange="updateSubStyle('highlight_mode', this.value)">
+                                        <option value="active_word">⚡ Voice-Synced Active Word (CapCut / Hormozi)</option>
+                                        <option value="static">Static Full Line / Bracket Highlight</option>
+                                        <option value="disabled">Disabled (Plain Subtitles)</option>
+                                    </select>
+                                </div>
+
+                                <div class="sub-control-group" style="margin-bottom: 0;">
+                                    <label style="font-size: 11px; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; display: block;">Words Per Screen (Viral Bites)</label>
+                                    <div style="display: flex; gap: 6px;">
+                                        <select id="subWordsPerScreen" class="form-select" style="flex: 1;" onchange="onWordsPerScreenChange(this.value)">
+                                            <option value="3">3 Words (Hormozi Standard)</option>
+                                            <option value="2">2 Words (Ultra-Fast / TikTok Viral)</option>
+                                            <option value="4">4 Words (Relaxed Flow)</option>
+                                            <option value="0">Full Sentence (Traditional)</option>
+                                        </select>
+                                        <button type="button" class="btn-primary" style="padding: 5px 10px; font-size: 11px; white-space: nowrap; background: #6366f1;" onclick="triggerVoiceSyncRechunk()" title="Re-chunk speech into selected words per screen">
+                                            <i class="fa-solid fa-rotate"></i> Sync
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Typography & Style Grid -->
                         <div class="sub-control-grid">
                             <div class="sub-control-group">
@@ -983,18 +1023,30 @@
                             </div>
 
                             <div class="sub-control-group">
-                                <label>Base Text Color</label>
+                                <label>Inactive / Base Text Color</label>
                                 <div class="sub-color-row">
                                     <input id="subTextColor" type="color" class="sub-color-input" value="#FFFFFF" onchange="updateSubStyle('text_color', this.value); document.getElementById('subTextColorHex').textContent=this.value;">
                                     <span id="subTextColorHex" style="font-size: 12px; font-family: monospace; color: var(--text-dim);">#FFFFFF</span>
+                                    <div class="sub-quick-colors" style="display: flex; gap: 4px; margin-left: auto;">
+                                        <button type="button" class="sub-color-pill" style="background: #FFFFFF;" onclick="setSubTextColor('#FFFFFF')" title="White"></button>
+                                        <button type="button" class="sub-color-pill" style="background: #CBD5E1;" onclick="setSubTextColor('#CBD5E1')" title="Muted Gray"></button>
+                                        <button type="button" class="sub-color-pill" style="background: #E0F2FE;" onclick="setSubTextColor('#E0F2FE')" title="Ice Blue"></button>
+                                    </div>
                                 </div>
                             </div>
 
                             <div class="sub-control-group">
-                                <label>Highlight Word Color</label>
+                                <label>Active Spoken Word Color</label>
                                 <div class="sub-color-row">
                                     <input id="subHighlightColor" type="color" class="sub-color-input" value="#FFE500" onchange="updateSubStyle('highlight_color', this.value); document.getElementById('subHighlightColorHex').textContent=this.value;">
                                     <span id="subHighlightColorHex" style="font-size: 12px; font-family: monospace; color: #ffe500; font-weight: 700;">#FFE500</span>
+                                    <div class="sub-quick-colors" style="display: flex; gap: 4px; margin-left: auto;">
+                                        <button type="button" class="sub-color-pill" style="background: #FFE500;" onclick="setSubHighlightColor('#FFE500')" title="Vibrant Yellow"></button>
+                                        <button type="button" class="sub-color-pill" style="background: #22C55E;" onclick="setSubHighlightColor('#22C55E')" title="Neon Green"></button>
+                                        <button type="button" class="sub-color-pill" style="background: #00F2FE;" onclick="setSubHighlightColor('#00F2FE')" title="Cyber Cyan"></button>
+                                        <button type="button" class="sub-color-pill" style="background: #FF007F;" onclick="setSubHighlightColor('#FF007F')" title="Hot Pink"></button>
+                                        <button type="button" class="sub-color-pill" style="background: #F97316;" onclick="setSubHighlightColor('#F97316')" title="Viral Orange"></button>
+                                    </div>
                                 </div>
                             </div>
 

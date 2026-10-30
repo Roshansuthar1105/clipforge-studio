@@ -2676,12 +2676,15 @@ const subState = {
         font_name: "Arial Black",
         font_size: 68,
         text_color: "#FFFFFF",
+        highlight_color: "#FFE500",
         outline_color: "#000000",
         outline_width: 4,
         position_preset: "bottom",
         margin_v: 220,
         text_transform: "uppercase",
-        box_style: "none"
+        box_style: "none",
+        highlight_mode: "active_word",
+        words_per_screen: 3
     },
     activeTab: "bulk",
     groupContext: null,
@@ -2844,6 +2847,219 @@ function hexToRgba(hex, alpha = 1) {
     return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
 }
 
+function setSubHighlightColor(color) {
+    updateSubStyle("highlight_color", color);
+    const input = document.getElementById("subHighlightColor");
+    if (input) input.value = color;
+    const hex = document.getElementById("subHighlightColorHex");
+    if (hex) {
+        hex.textContent = color.toUpperCase();
+        hex.style.color = color;
+    }
+}
+
+function setSubTextColor(color) {
+    updateSubStyle("text_color", color);
+    const input = document.getElementById("subTextColor");
+    if (input) input.value = color;
+    const hex = document.getElementById("subTextColorHex");
+    if (hex) hex.textContent = color.toUpperCase();
+}
+
+function getCueWords(cue) {
+    if (!cue) return [];
+    if (Array.isArray(cue.words) && cue.words.length > 0) {
+        return cue.words;
+    }
+    const cleanText = (cue.text || "").replace(/[\[\]\*]/g, "").trim();
+    const tokens = cleanText.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return [];
+
+    const st = typeof cue.start === "number" ? cue.start : parseFloat(cue.start) || 0.0;
+    const en = typeof cue.end === "number" ? cue.end : parseFloat(cue.end) || (st + 1.5);
+    const dur = Math.max(0.1, en - st);
+    const weights = tokens.map(t => Math.max(2, t.replace(/[^A-Za-z0-9]/g, "").length || t.length));
+    const totalWeight = weights.reduce((acc, w) => acc + w, 0) || tokens.length;
+
+    let curTime = st;
+    return tokens.map((t, idx) => {
+        const wDur = Math.max(0.08, dur * (weights[idx] / totalWeight));
+        const wStart = Math.round(curTime * 100) / 100;
+        const wEnd = idx === tokens.length - 1 ? Math.round(en * 100) / 100 : Math.round(Math.min(en, curTime + wDur) * 100) / 100;
+        curTime += wDur;
+        return {
+            word: t,
+            start: wStart,
+            end: Math.max(Math.round((wStart + 0.05) * 100) / 100, wEnd)
+        };
+    });
+}
+
+function createVoiceSyncedWordChunksClient(cues, maxWords = 3) {
+    if (!Array.isArray(cues) || cues.length === 0) return [];
+    if (maxWords <= 0) {
+        return cues.map((c, idx) => ({
+            ...c,
+            id: idx,
+            words: getCueWords(c)
+        }));
+    }
+
+    const allWords = [];
+    for (const cue of cues) {
+        const words = getCueWords(cue);
+        for (const w of words) {
+            const wStr = (w.word || "").trim();
+            if (wStr) {
+                allWords.push({
+                    word: wStr,
+                    start: Math.round(parseFloat(w.start || 0) * 100) / 100,
+                    end: Math.round(parseFloat(w.end || 0) * 100) / 100
+                });
+            }
+        }
+    }
+
+    if (allWords.length === 0) return cues;
+
+    const chunks = [];
+    let curChunk = [];
+
+    const finalize = (cw, nextW) => {
+        if (!cw || cw.length === 0) return;
+        const st = cw[0].start;
+        let en = cw[cw.length - 1].end;
+        if (nextW && (nextW.start - en >= 0 && nextW.start - en < 0.35)) {
+            en = nextW.start;
+        }
+        chunks.push({
+            id: chunks.length,
+            start: Math.round(st * 100) / 100,
+            end: Math.round(Math.max(st + 0.1, en) * 100) / 100,
+            text: cw.map(x => x.word).join(" "),
+            words: [...cw]
+        });
+    };
+
+    for (let i = 0; i < allWords.length; i++) {
+        const w = allWords[i];
+        curChunk.push(w);
+        const nextW = (i + 1 < allWords.length) ? allWords[i + 1] : null;
+
+        let shouldBreak = false;
+        if (curChunk.length >= maxWords) shouldBreak = true;
+        else if (/[.?!—:]$/.test(w.word)) shouldBreak = true;
+        else if (nextW && (nextW.start - w.end >= 0.40)) shouldBreak = true;
+
+        if (shouldBreak) {
+            finalize(curChunk, nextW);
+            curChunk = [];
+        }
+    }
+    if (curChunk.length > 0) finalize(curChunk, null);
+
+    return chunks;
+}
+
+function onWordsPerScreenChange(val) {
+    const maxWords = parseInt(val, 10);
+    subState.styles.words_per_screen = maxWords;
+    if (subState.cues.length > 0) {
+        subState.cues = createVoiceSyncedWordChunksClient(subState.cues, maxWords);
+        renderSubCuesList();
+        updateSubOverlay();
+        updateFullCaptionPreview();
+    }
+}
+
+async function triggerVoiceSyncRechunk() {
+    if (!subState.clipName) return;
+    const wordsVal = parseInt(document.getElementById("subWordsPerScreen")?.value || subState.styles.words_per_screen || 3, 10);
+    const hlMode = document.getElementById("subHighlightMode")?.value || subState.styles.highlight_mode || "active_word";
+
+    showToast(`Re-chunking subtitles to ${wordsVal > 0 ? wordsVal + ' words/screen' : 'full sentence'} with voice sync...`, "info");
+
+    try {
+        const res = await apiRequest(`/api/clips/${encodeURIComponent(subState.clipName)}/subtitles/auto-sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                max_words: wordsVal,
+                highlight_mode: hlMode,
+                words_per_screen: wordsVal
+            })
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Auto-sync failed");
+        }
+
+        const data = await res.json();
+        subState.cues = Array.isArray(data.cues) ? data.cues : [];
+        if (data.styles && typeof data.styles === "object") {
+            subState.styles = { ...subState.styles, ...data.styles };
+        }
+
+        renderSubCuesList();
+        updateSubOverlay();
+        updateFullCaptionPreview();
+        showToast(data.message || `Successfully synced ${subState.cues.length} voice-synced chunks!`, "success");
+    } catch (err) {
+        console.error("Auto-sync error:", err);
+        // Fallback to client-side re-chunking
+        subState.cues = createVoiceSyncedWordChunksClient(subState.cues, wordsVal);
+        renderSubCuesList();
+        updateSubOverlay();
+        updateFullCaptionPreview();
+        showToast(`Synced ${subState.cues.length} chunks locally!`, "success");
+    }
+}
+
+function formatActiveWordCaptionHtml(cue, currentTime, s) {
+    if (!cue || !cue.text) return "";
+    const hlColor = s.highlight_color || "#FFE500";
+    const baseColor = s.text_color || "#FFFFFF";
+    const transform = s.text_transform || "uppercase";
+
+    const words = getCueWords(cue);
+    if (!words || words.length === 0) {
+        return formatOverlayCaptionHtml(cue.text, s);
+    }
+
+    // Determine active word index at currentTime
+    let activeIdx = -1;
+    for (let i = 0; i < words.length; i++) {
+        const w = words[i];
+        const nextStart = (i + 1 < words.length) ? words[i + 1].start : cue.end;
+        if (currentTime >= w.start && currentTime < nextStart) {
+            activeIdx = i;
+            break;
+        }
+    }
+    // Fallback if playback cursor is past last word or right at cue start
+    if (activeIdx === -1 && words.length > 0) {
+        if (currentTime >= words[words.length - 1].start) {
+            activeIdx = words.length - 1;
+        } else if (currentTime < words[0].start) {
+            activeIdx = -1;
+        }
+    }
+
+    return words.map((w, idx) => {
+        let clean = (w.word || "").replace(/[\[\]\*]/g, "");
+        if (transform === "uppercase") clean = clean.toUpperCase();
+        else if (transform === "title") clean = clean.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+
+        const escaped = escapeHtml(clean);
+        if (idx === activeIdx) {
+            return `<span class="sub-highlight-word active" style="color: ${hlColor} !important;">${escaped}</span>`;
+        } else {
+            return `<span class="sub-word inactive" style="color: ${baseColor};">${escaped}</span>`;
+        }
+    }).join(" ");
+}
+
 function formatOverlayCaptionHtml(text, s) {
     if (!text) return "";
     let formatted = escapeHtml(text);
@@ -2881,19 +3097,21 @@ function syncSubStyleControlsFromState() {
     const elBoxOpacityVal = document.getElementById("subBoxOpacityVal");
     const elTrans = document.getElementById("subTextTransform");
     const elAlignH = document.getElementById("subAlignH");
+    const elHlMode = document.getElementById("subHighlightMode");
+    const elWords = document.getElementById("subWordsPerScreen");
 
     if (elFont) elFont.value = s.font_name || "Arial Black";
     if (elSize) elSize.value = s.font_size || 68;
     if (elSizeVal) elSizeVal.textContent = s.font_size || 68;
     if (elColor) elColor.value = s.text_color || "#FFFFFF";
-    if (elColorHex) elColorHex.textContent = s.text_color || "#FFFFFF";
+    if (elColorHex) elColorHex.textContent = (s.text_color || "#FFFFFF").toUpperCase();
     if (elHlColor) elHlColor.value = s.highlight_color || "#FFE500";
     if (elHlColorHex) {
-        elHlColorHex.textContent = s.highlight_color || "#FFE500";
+        elHlColorHex.textContent = (s.highlight_color || "#FFE500").toUpperCase();
         elHlColorHex.style.color = s.highlight_color || "#FFE500";
     }
     if (elOutline) elOutline.value = s.outline_color || "#000000";
-    if (elOutlineHex) elOutlineHex.textContent = s.outline_color || "#000000";
+    if (elOutlineHex) elOutlineHex.textContent = (s.outline_color || "#000000").toUpperCase();
     if (elOutlineW) elOutlineW.value = s.outline_width !== undefined ? s.outline_width : 4;
     if (elOutlineWVal) elOutlineWVal.textContent = s.outline_width !== undefined ? s.outline_width : 4;
     if (elBoxStyle) elBoxStyle.value = s.box_style || "none";
@@ -2903,6 +3121,8 @@ function syncSubStyleControlsFromState() {
     if (elBoxOpacityVal) elBoxOpacityVal.textContent = opacityPct;
     if (elTrans) elTrans.value = s.text_transform || "uppercase";
     if (elAlignH) elAlignH.value = s.align_h || "center";
+    if (elHlMode) elHlMode.value = s.highlight_mode || "active_word";
+    if (elWords) elWords.value = s.words_per_screen !== undefined ? s.words_per_screen : 3;
 
     const posPct = s.position_percent !== undefined ? s.position_percent : 78;
     setSubPositionPercent(posPct, false);
@@ -2926,6 +3146,8 @@ function applySubPreset(preset) {
         subState.styles.position_percent = 78;
         subState.styles.text_transform = "uppercase";
         subState.styles.align_h = "center";
+        subState.styles.highlight_mode = "active_word";
+        subState.styles.words_per_screen = 3;
     } else if (preset === "mrbeast") {
         subState.styles.font_name = "Impact";
         subState.styles.font_size = 74;
@@ -2937,6 +3159,8 @@ function applySubPreset(preset) {
         subState.styles.position_percent = 75;
         subState.styles.text_transform = "uppercase";
         subState.styles.align_h = "center";
+        subState.styles.highlight_mode = "active_word";
+        subState.styles.words_per_screen = 2;
     } else if (preset === "abdaal") {
         subState.styles.font_name = "Roboto Bold";
         subState.styles.font_size = 56;
@@ -2950,10 +3174,12 @@ function applySubPreset(preset) {
         subState.styles.position_percent = 78;
         subState.styles.text_transform = "title";
         subState.styles.align_h = "center";
+        subState.styles.highlight_mode = "active_word";
+        subState.styles.words_per_screen = 4;
     } else if (preset === "gadzhi") {
         subState.styles.font_name = "Montserrat ExtraBold";
         subState.styles.font_size = 60;
-        subState.styles.text_color = "#FFFFFF";
+        subState.styles.text_color = "#CBD5E1";
         subState.styles.highlight_color = "#F59E0B";
         subState.styles.outline_color = "#000000";
         subState.styles.outline_width = 1.5;
@@ -2963,6 +3189,8 @@ function applySubPreset(preset) {
         subState.styles.position_percent = 72;
         subState.styles.text_transform = "uppercase";
         subState.styles.align_h = "center";
+        subState.styles.highlight_mode = "active_word";
+        subState.styles.words_per_screen = 3;
     } else if (preset === "neon") {
         subState.styles.font_name = "Montserrat ExtraBold";
         subState.styles.font_size = 66;
@@ -2974,6 +3202,8 @@ function applySubPreset(preset) {
         subState.styles.position_percent = 78;
         subState.styles.text_transform = "uppercase";
         subState.styles.align_h = "center";
+        subState.styles.highlight_mode = "active_word";
+        subState.styles.words_per_screen = 3;
     } else if (preset === "clean") {
         subState.styles.font_name = "Arial Black";
         subState.styles.font_size = 64;
@@ -2985,6 +3215,14 @@ function applySubPreset(preset) {
         subState.styles.position_percent = 80;
         subState.styles.text_transform = "uppercase";
         subState.styles.align_h = "center";
+        subState.styles.highlight_mode = "active_word";
+        subState.styles.words_per_screen = 3;
+    }
+
+    // Re-chunk cues to match preset's words per screen if available
+    if (subState.cues.length > 0) {
+        subState.cues = createVoiceSyncedWordChunksClient(subState.cues, subState.styles.words_per_screen);
+        renderSubCuesList();
     }
 
     syncSubStyleControlsFromState();
@@ -3054,8 +3292,9 @@ function updateSubOverlay() {
 
     const s = subState.styles;
     const currentTime = video ? video.currentTime : 0;
+    const hlMode = s.highlight_mode || "active_word";
 
-    // Find active cue
+    // Find active cue matching currentTime
     let activeCue = null;
     for (const cue of subState.cues) {
         if (currentTime >= cue.start && currentTime <= cue.end) {
@@ -3064,16 +3303,34 @@ function updateSubOverlay() {
         }
     }
 
-    let textToShow = "";
+    let innerHtml = "";
     if (activeCue && activeCue.text) {
-        textToShow = activeCue.text;
+        if (hlMode === "active_word") {
+            innerHtml = formatActiveWordCaptionHtml(activeCue, currentTime, s);
+        } else if (hlMode === "static") {
+            innerHtml = formatOverlayCaptionHtml(activeCue.text, s);
+        } else {
+            let plain = (activeCue.text || "").replace(/[\[\]\*]/g, "");
+            if (s.text_transform === "uppercase") plain = plain.toUpperCase();
+            else if (s.text_transform === "title") plain = plain.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+            innerHtml = escapeHtml(plain);
+        }
     } else if (subState.cues.length > 0) {
-        textToShow = subState.cues[0].text;
+        const firstCue = subState.cues[0];
+        if (hlMode === "active_word") {
+            innerHtml = formatActiveWordCaptionHtml(firstCue, firstCue.start + 0.05, s);
+        } else if (hlMode === "static") {
+            innerHtml = formatOverlayCaptionHtml(firstCue.text, s);
+        } else {
+            let plain = (firstCue.text || "").replace(/[\[\]\*]/g, "");
+            if (s.text_transform === "uppercase") plain = plain.toUpperCase();
+            innerHtml = escapeHtml(plain);
+        }
     } else {
-        textToShow = "SUBTITLE [PREVIEW]";
+        innerHtml = `<span class="sub-highlight-word active" style="color: ${s.highlight_color || '#FFE500'} !important;">CAPCUT</span> <span style="color: ${s.text_color || '#FFFFFF'};">VIRAL REEL</span>`;
     }
 
-    overlay.innerHTML = formatOverlayCaptionHtml(textToShow, s);
+    overlay.innerHTML = innerHtml;
 
     // Font family mapping
     let fontFam = s.font_name || "Arial Black";

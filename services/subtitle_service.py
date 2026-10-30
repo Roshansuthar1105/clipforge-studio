@@ -12,6 +12,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Any, Dict, List
 
+from services.transcription_service import synthesize_word_timestamps
+
 logger = logging.getLogger("clipforge.subtitles")
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -103,16 +105,12 @@ def format_srt_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def build_ass_content(
-    cues: List[Dict[str, Any]],
+def _generate_ass_header(
     style: Optional[Dict[str, Any]] = None,
     video_width: int = 1080,
     video_height: int = 1920
-) -> str:
-    """
-    Generate Advanced SubStation Alpha (.ass) subtitle file content
-    with full custom styling (font, color, stroke, background, positioning, highlight).
-    """
+) -> tuple[str, str, str, str]:
+    """Helper to generate standard ASS header and return colors and text_transform."""
     style = style or {}
     font_name = style.get("font_name", "Arial Black")
     font_size = int(style.get("font_size", 68))
@@ -183,6 +181,128 @@ Style: Default,{font_name},{font_size},{primary_color},&H000000FF&,{outline_colo
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+    return ass_header, primary_color, highlight_color, text_transform
+
+
+def build_active_word_ass_content(
+    cues: List[Dict[str, Any]],
+    style: Optional[Dict[str, Any]] = None,
+    video_width: int = 1080,
+    video_height: int = 1920
+) -> str:
+    """
+    Generate Advanced SubStation Alpha (.ass) subtitle file content with micro-dialogue events
+    for voice-synced word-by-word active spoken word tracking (CapCut / Alex Hormozi style).
+    - As each word is spoken, it illuminates in highlight_color (e.g. #FFE500 yellow).
+    - Inactive / already said words remain in clean primary_color (e.g. #FFFFFF white).
+    - Zero horizontal or vertical text jitter; line boundaries remain 100% stable.
+    """
+    ass_header, primary_color, highlight_color, text_transform = _generate_ass_header(
+        style, video_width, video_height
+    )
+
+    events: List[str] = []
+    for cue in cues:
+        cue_start = float(cue.get("start", 0.0))
+        cue_end = float(cue.get("end", 0.0))
+        raw_text = str(cue.get("text", "")).strip()
+        if not raw_text or cue_end <= cue_start:
+            continue
+
+        # Clean any legacy markup brackets for word tracking
+        clean_text = raw_text.replace("[", "").replace("]", "").replace("*", "")
+        tokens = [t for t in clean_text.split() if t]
+        if not tokens:
+            continue
+
+        # Retrieve or synthesize word timestamps
+        words = cue.get("words") or []
+        if not words or len(words) != len(tokens):
+            words = synthesize_word_timestamps(clean_text, cue_start, cue_end)
+
+        if not words:
+            continue
+
+        # Format each word token according to text_transform
+        transformed_tokens: List[str] = []
+        for idx, w in enumerate(words):
+            raw_w = str(w.get("word", "")).replace("[", "").replace("]", "").replace("*", "").strip()
+            if not raw_w and idx < len(tokens):
+                raw_w = tokens[idx]
+            if text_transform == "uppercase":
+                transformed_tokens.append(raw_w.upper())
+            elif text_transform == "title":
+                transformed_tokens.append(re.sub(r"[A-Za-z]+('[A-Za-z]+)?", lambda mo: mo.group(0).capitalize(), raw_w))
+            else:
+                transformed_tokens.append(raw_w)
+
+        num_words = len(words)
+        first_word_start = float(words[0].get("start", cue_start))
+
+        # 1. If there is a silence gap before the first word, display full line in primary_color
+        if cue_start < first_word_start - 0.05:
+            full_base = " ".join(transformed_tokens)
+            events.append(
+                f"Dialogue: 0,{format_ass_timestamp(cue_start)},{format_ass_timestamp(first_word_start)},Default,,0,0,0,,{full_base}"
+            )
+
+        # 2. Emit a micro-event for each active spoken word
+        for i in range(num_words):
+            w_cur = words[i]
+            w_start = float(w_cur.get("start", cue_start))
+            w_end = float(w_cur.get("end", cue_end))
+
+            ev_start = max(cue_start, w_start)
+            if i + 1 < num_words:
+                next_start = float(words[i + 1].get("start", w_end))
+                # Next word's start defines boundary to prevent unhighlighted gap
+                ev_end = max(ev_start + 0.05, next_start)
+            else:
+                # Last word stays illuminated until cue_end
+                ev_end = max(ev_start + 0.05, cue_end, w_end)
+
+            if ev_end <= ev_start:
+                continue
+
+            # Build line text: active word wrapped in highlight color tag, rest in primary color
+            line_parts = []
+            for j in range(num_words):
+                w_str = transformed_tokens[j]
+                if j == i:
+                    line_parts.append(f"{{\\c{highlight_color}}}{w_str}{{\\c{primary_color}}}")
+                else:
+                    line_parts.append(w_str)
+
+            line_str = " ".join(line_parts).replace("\n", " ").replace("\\N", " ")
+            events.append(
+                f"Dialogue: 0,{format_ass_timestamp(ev_start)},{format_ass_timestamp(ev_end)},Default,,0,0,0,,{line_str}"
+            )
+
+    return ass_header + "\n".join(events) + "\n"
+
+
+def build_ass_content(
+    cues: List[Dict[str, Any]],
+    style: Optional[Dict[str, Any]] = None,
+    video_width: int = 1080,
+    video_height: int = 1920
+) -> str:
+    """
+    Generate Advanced SubStation Alpha (.ass) subtitle file content
+    with full custom styling. Supports active word micro-events, static line highlighting,
+    or plain subtitles based on style['highlight_mode'].
+    """
+    style = style or {}
+    highlight_mode = style.get("highlight_mode", "active_word")
+
+    # If active word tracking is requested (CapCut / Hormozi style)
+    if highlight_mode in ("active_word", "voice_synced"):
+        return build_active_word_ass_content(cues, style=style, video_width=video_width, video_height=video_height)
+
+    # Standard static ASS generation
+    ass_header, primary_color, highlight_color, text_transform = _generate_ass_header(
+        style, video_width, video_height
+    )
 
     events = []
     for cue in cues:
@@ -190,14 +310,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         end_str = format_ass_timestamp(float(cue.get("end", 0.0)))
         raw_text = str(cue.get("text", "")).strip()
 
-        clean_text = process_highlight_markup(
-            raw_text,
-            highlight_color_ass=highlight_color,
-            primary_color_ass=primary_color,
-            text_transform=text_transform,
-            highlight_words=cue.get("highlight_words"),
-            cue_highlighted=bool(cue.get("highlighted")),
-        )
+        if highlight_mode == "disabled":
+            # Strip highlight brackets for clean plain subtitles
+            clean_text = raw_text.replace("[", "").replace("]", "").replace("*", "")
+            if text_transform == "uppercase":
+                clean_text = clean_text.upper()
+            elif text_transform == "title":
+                clean_text = re.sub(r"[A-Za-z]+('[A-Za-z]+)?", lambda mo: mo.group(0).capitalize(), clean_text)
+        else:
+            clean_text = process_highlight_markup(
+                raw_text,
+                highlight_color_ass=highlight_color,
+                primary_color_ass=primary_color,
+                text_transform=text_transform,
+                highlight_words=cue.get("highlight_words"),
+                cue_highlighted=bool(cue.get("highlighted")),
+            )
 
         clean_text = clean_text.replace("\n", " ").replace("\\N", " ")
         events.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{clean_text}")

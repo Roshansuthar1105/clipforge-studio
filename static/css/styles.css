@@ -2472,6 +2472,38 @@ button, input, select, textarea {
   display: inline-block;
 }
 
+.sub-highlight-word.active {
+  color: var(--sub-hl-color, #ffe500) !important;
+  font-weight: 900 !important;
+  display: inline-block;
+  transform: scale(1.06);
+  transition: transform 0.06s ease, color 0.06s ease;
+  filter: drop-shadow(0 0 8px rgba(255, 229, 0, 0.45));
+}
+
+.sub-word.inactive {
+  display: inline-block;
+  opacity: 0.95;
+  transition: opacity 0.06s ease;
+}
+
+.sub-color-pill {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+  outline: none;
+}
+
+.sub-color-pill:hover {
+  transform: scale(1.25);
+  border-color: #ffffff;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.5);
+}
+
 .sub-preset-chip.active {
   background: var(--primary);
   border-color: #a5b4fc;

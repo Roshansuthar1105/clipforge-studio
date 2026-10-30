@@ -34,6 +34,7 @@ from services.transcription_service import (
     get_clip_subtitles,
     save_clip_subtitles,
     slice_transcript_for_clip,
+    create_voice_synced_word_chunks,
     _find_clip_path,
     get_groq_api_key,
     CLIPS_DIR,
@@ -222,6 +223,13 @@ class SubtitleSaveRequest(BaseModel):
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
+class SubtitleAutoSyncRequest(BaseModel):
+    max_words: int = Field(default=3, description="Words per screen: 2, 3, 4, or 0 (full sentence)")
+    highlight_mode: str = Field(default="active_word", description="active_word, static, or disabled")
+    words_per_screen: Optional[int] = 3
+    mode: Optional[str] = None  # hinglish, english, or None
+
+
 class SubtitleBurnRequest(BaseModel):
     cues: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
@@ -298,6 +306,8 @@ def save_subtitles_for_clip(clip_name: str, payload: SubtitleSaveRequest):
     """Save user-edited subtitle cues and styling for a clip."""
     unquoted = urllib.parse.unquote(clip_name)
     styles = payload.styles or {}
+    styles.setdefault("highlight_mode", "active_word")
+    styles.setdefault("words_per_screen", 3)
     text_transform = styles.get("text_transform", "none")
 
     # Apply preview text transform so saved cues reflect what user configured
@@ -319,6 +329,85 @@ def save_subtitles_for_clip(clip_name: str, payload: SubtitleSaveRequest):
         update_clip_metadata_caption(input_clip, full_caption, styles)
 
     return {"success": True, "message": "Subtitles saved successfully."}
+
+
+@router.post("/clips/{clip_name:path}/subtitles/auto-sync")
+def auto_sync_clip_subtitles_endpoint(clip_name: str, payload: SubtitleAutoSyncRequest):
+    """
+    Generate or re-chunk voice-synced word timings on demand.
+    Slices words into 2-4 word visual bites (CapCut / Alex Hormozi style)
+    with millisecond accuracy for active spoken word tracking.
+    """
+    unquoted = urllib.parse.unquote(clip_name).replace("\\", "/").strip("/")
+    input_clip = CLIPS_DIR / unquoted
+    if not input_clip.exists() or not input_clip.is_file():
+        found = _find_clip_path(unquoted)
+        if found and found.is_file():
+            input_clip = found
+        else:
+            raise HTTPException(status_code=404, detail=f"Clip '{unquoted}' not found.")
+
+    max_w = payload.max_words if payload.max_words is not None else (payload.words_per_screen or 3)
+    hl_mode = payload.highlight_mode or "active_word"
+
+    # 1. Fetch current clip subtitles or parent transcript
+    sub_data = get_clip_subtitles(unquoted)
+    cues = sub_data.get("cues") or []
+    styles = sub_data.get("styles") or {}
+
+    # If no cues exist and groq key is available, auto-transcribe clip
+    if not cues and get_groq_api_key():
+        try:
+            logger.info("Auto-transcribing clip %s for voice sync...", input_clip.name)
+            clip_transcript = transcribe_video_with_groq(input_clip, video_id=input_clip.stem)
+            cues = clip_transcript.get("segments", [])
+        except Exception as exc:
+            logger.warning("Voice sync auto-transcribe failed: %s", exc)
+
+    if not cues:
+        raise HTTPException(
+            status_code=400,
+            detail="No speech cues found to auto-sync. Transcribe the video first or add cues in One-by-One tab."
+        )
+
+    # 2. Transliterate to Hinglish if requested and Devanagari detected
+    if payload.mode == "hinglish" and any(has_devanagari_characters(c.get("text", "")) for c in cues):
+        try:
+            cues = convert_cues_to_hinglish(cues)
+        except Exception as exc:
+            logger.warning("Hinglish conversion in auto-sync failed: %s", exc)
+
+    # 3. Chunk into voice-synced 2-4 word bites
+    chunked_cues = create_voice_synced_word_chunks(cues, max_words=max_w)
+
+    # 4. Update styles
+    styles["highlight_mode"] = hl_mode
+    styles["words_per_screen"] = max_w
+    text_transform = styles.get("text_transform", "uppercase")
+    if text_transform != "none":
+        for cue in chunked_cues:
+            if cue.get("text"):
+                cue["text"] = apply_text_transform(cue["text"], text_transform)
+
+    # 5. Persist to disk and update metadata caption
+    save_clip_subtitles(unquoted, {
+        "cues": chunked_cues,
+        "styles": styles
+    })
+
+    full_caption = " ".join([c.get("text", "").strip() for c in chunked_cues if c.get("text", "").strip()])
+    update_clip_metadata_caption(input_clip, full_caption, styles)
+
+    mode_label = f"{max_w}-word bite" if max_w > 0 else "full sentence"
+    return {
+        "success": True,
+        "cues": chunked_cues,
+        "styles": styles,
+        "caption": full_caption,
+        "max_words": max_w,
+        "highlight_mode": hl_mode,
+        "message": f"Successfully chunked speech into {len(chunked_cues)} voice-synced {mode_label}s."
+    }
 
 
 @router.post("/clips/{clip_name:path}/subtitles/translate")
@@ -471,6 +560,8 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
         raise HTTPException(status_code=400, detail="Cannot burn empty subtitle cues.")
 
     styles = payload.styles or {}
+    styles.setdefault("highlight_mode", "active_word")
+    styles.setdefault("words_per_screen", 3)
     text_transform = styles.get("text_transform", "none")
 
     # 1. Apply preview text transform to all cues so the saved captions match the preview
@@ -649,6 +740,11 @@ def _process_group_subtitle_job(
 
             # 2. Merge styles and apply preview text transform
             merged_styles = {**(sub_data.get("styles") or {}), **styles}
+            merged_hl = merged_styles.get("highlight_mode", "active_word")
+            if merged_hl in ("active_word", "voice_synced"):
+                max_w = int(merged_styles.get("words_per_screen", 3))
+                cues = create_voice_synced_word_chunks(cues, max_words=max_w)
+
             for cue in cues:
                 raw_text = cue.get("text", "")
                 if raw_text:

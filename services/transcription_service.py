@@ -36,6 +36,155 @@ def get_groq_api_key() -> str:
     return key
 
 
+def synthesize_word_timestamps(text: str, start: float, end: float) -> List[Dict[str, Any]]:
+    """
+    Synthesize word-level timestamps proportionally by character length
+    when Whisper word timestamps are missing or text was manually edited.
+    Guarantees millisecond timestamps for each individual word.
+    """
+    if not text:
+        return []
+    clean_text = text.replace("\n", " ").replace("\\N", " ").strip()
+    # Strip brackets/asterisks for timing calculation
+    clean_words = [w for w in clean_text.split() if w]
+    if not clean_words:
+        return []
+
+    start = max(0.0, float(start))
+    end = max(start + 0.1, float(end))
+    duration = end - start
+
+    # Weight proportional to length of word (min 2 chars)
+    weights = [max(2, len(re.sub(r'[^A-Za-z0-9]', '', w) or w)) for w in clean_words]
+    total_weight = sum(weights) or len(clean_words)
+
+    result: List[Dict[str, Any]] = []
+    cur_time = start
+    for idx, (w, weight) in enumerate(zip(clean_words, weights)):
+        w_dur = max(0.08, duration * (weight / total_weight))
+        w_start = round(cur_time, 2)
+        if idx == len(clean_words) - 1:
+            w_end = round(end, 2)
+        else:
+            w_end = round(min(end, cur_time + w_dur), 2)
+        result.append({
+            "word": w,
+            "start": w_start,
+            "end": max(round(w_start + 0.05, 2), w_end)
+        })
+        cur_time += w_dur
+
+    return result
+
+
+def create_voice_synced_word_chunks(
+    cues_or_words: List[Dict[str, Any]],
+    max_words: int = 3,
+    min_words: int = 1
+) -> List[Dict[str, Any]]:
+    """
+    Chunk word-level timestamps into 2-4 word visual bites (CapCut / Alex Hormozi style)
+    with precise speech synchronization and natural boundary pauses.
+    - max_words: Max words per screen (e.g. 2, 3, 4). Set to <= 0 for full sentence/traditional.
+    """
+    if not cues_or_words:
+        return []
+
+    # If full sentence mode requested (max_words <= 0), preserve cues but ensure words exist
+    if max_words <= 0:
+        full_cues: List[Dict[str, Any]] = []
+        for idx, cue in enumerate(cues_or_words):
+            c = dict(cue)
+            c["id"] = idx
+            if not c.get("words"):
+                c["words"] = synthesize_word_timestamps(
+                    c.get("text", ""),
+                    float(c.get("start", 0.0)),
+                    float(c.get("end", 0.0))
+                )
+            full_cues.append(c)
+        return full_cues
+
+    # Extract flat list of word-timestamp objects
+    all_words: List[Dict[str, Any]] = []
+    if cues_or_words and "word" in cues_or_words[0] and "start" in cues_or_words[0]:
+        for w in cues_or_words:
+            all_words.append({
+                "word": str(w.get("word", "")).strip(),
+                "start": round(float(w.get("start", 0.0)), 2),
+                "end": round(float(w.get("end", 0.0)), 2),
+            })
+    else:
+        for cue in cues_or_words:
+            c_words = cue.get("words")
+            c_text = str(cue.get("text", "")).strip()
+            c_start = float(cue.get("start", 0.0))
+            c_end = float(cue.get("end", 0.0))
+
+            if not c_words or len(c_words) == 0:
+                c_words = synthesize_word_timestamps(c_text, c_start, c_end)
+
+            for w in c_words:
+                w_str = str(w.get("word", "")).strip()
+                if w_str:
+                    all_words.append({
+                        "word": w_str,
+                        "start": round(float(w.get("start", c_start)), 2),
+                        "end": round(float(w.get("end", c_end)), 2),
+                    })
+
+    all_words = [w for w in all_words if w.get("word")]
+    if not all_words:
+        return []
+
+    chunks: List[Dict[str, Any]] = []
+    current_chunk: List[Dict[str, Any]] = []
+
+    def _finalize_chunk(chunk_words: List[Dict[str, Any]], next_word: Optional[Dict[str, Any]] = None):
+        if not chunk_words:
+            return
+        st = chunk_words[0]["start"]
+        en = chunk_words[-1]["end"]
+
+        # Natural boundary extension: if gap to next word is tiny (<0.35s), extend end to next word
+        # so there is zero black screen / subtitle flicker between word bites
+        if next_word is not None:
+            gap = next_word["start"] - en
+            if 0.0 <= gap < 0.35:
+                en = next_word["start"]
+
+        chunk_text = " ".join(item["word"].strip() for item in chunk_words)
+        chunks.append({
+            "id": len(chunks),
+            "start": round(st, 2),
+            "end": round(max(st + 0.1, en), 2),
+            "text": chunk_text,
+            "words": [dict(w) for w in chunk_words]
+        })
+
+    for i, word in enumerate(all_words):
+        current_chunk.append(word)
+        next_w = all_words[i + 1] if i + 1 < len(all_words) else None
+
+        should_break = False
+        if len(current_chunk) >= max_words:
+            should_break = True
+        elif word["word"].rstrip().endswith((".", "!", "?", "—", ":")):
+            should_break = True
+        elif next_w is not None and (next_w["start"] - word["end"] >= 0.40):
+            # Speaker took a natural breath or pause
+            should_break = True
+
+        if should_break:
+            _finalize_chunk(current_chunk, next_w)
+            current_chunk = []
+
+    if current_chunk:
+        _finalize_chunk(current_chunk, None)
+
+    return chunks
+
+
 def extract_audio_for_transcription(video_path: Path, output_audio: Path) -> Path:
     """
     Extract ultra-compact 32kbps 16kHz mono MP3 from video.
@@ -95,9 +244,19 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
 
         # Parse segments and words
         segments_raw = getattr(transcription, "segments", []) or []
+        top_words_raw = getattr(transcription, "words", []) or []
+        parsed_top_words = []
+        for tw in top_words_raw:
+            tw_dict = tw if isinstance(tw, dict) else (tw.model_dump() if hasattr(tw, "model_dump") else tw)
+            parsed_top_words.append({
+                "word": str(tw_dict.get("word", "")).strip(),
+                "start": round(float(tw_dict.get("start", 0.0)), 2),
+                "end": round(float(tw_dict.get("end", 0.0)), 2),
+            })
+
         parsed_segments: List[Dict[str, Any]] = []
         for idx, seg in enumerate(segments_raw):
-            seg_dict = seg if isinstance(seg, dict) else seg.model_dump()
+            seg_dict = seg if isinstance(seg, dict) else (seg.model_dump() if hasattr(seg, "model_dump") else seg)
             start = round(float(seg_dict.get("start", 0.0)), 2)
             end = round(float(seg_dict.get("end", 0.0)), 2)
             text = str(seg_dict.get("text", "")).strip()
@@ -111,6 +270,19 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                     "start": round(float(w_dict.get("start", 0.0)), 2),
                     "end": round(float(w_dict.get("end", 0.0)), 2),
                 })
+
+            # If segment words were not nested, match from top-level words
+            if not parsed_words and parsed_top_words:
+                matched = [
+                    w for w in parsed_top_words
+                    if (w["start"] >= start - 0.08 and w["start"] <= end + 0.08)
+                ]
+                if matched:
+                    parsed_words = matched
+
+            # If still missing, synthesize timestamps so word tracking never fails
+            if not parsed_words and text:
+                parsed_words = synthesize_word_timestamps(text, start, end)
 
             parsed_segments.append({
                 "id": idx,
@@ -446,6 +618,9 @@ def slice_transcript_for_clip(
                         "end": min(clip_duration, round(w_end - clip_start, 2)),
                     })
 
+            if not rel_words and seg.get("text"):
+                rel_words = synthesize_word_timestamps(seg["text"], rel_start, rel_end)
+
             sliced_cues.append({
                 "id": len(sliced_cues),
                 "start": rel_start,
@@ -498,7 +673,21 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
     if custom_path and custom_path.exists():
         try:
             with open(custom_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                saved = json.load(f)
+                cues = saved.get("cues", [])
+                for c in cues:
+                    if not c.get("words") and c.get("text"):
+                        c["words"] = synthesize_word_timestamps(
+                            c["text"], float(c.get("start", 0)), float(c.get("end", 0))
+                        )
+                styles = saved.get("styles", {})
+                if "highlight_mode" not in styles:
+                    styles["highlight_mode"] = "active_word"
+                if "words_per_screen" not in styles:
+                    styles["words_per_screen"] = 3
+                saved["cues"] = cues
+                saved["styles"] = styles
+                return saved
         except Exception:
             pass
 
@@ -564,10 +753,14 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
         try:
             logger.info("Transcribing clip %s directly...", clip_name)
             clip_transcript = transcribe_video_with_groq(clip_file, video_id=clip_file.stem)
-            cues = clip_transcript.get("segments", [])
+            raw_cues = clip_transcript.get("segments", [])
+            cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
+            styles = (meta or {}).get("styles", {})
+            styles.setdefault("highlight_mode", "active_word")
+            styles.setdefault("words_per_screen", 3)
             return {
                 "cues": cues,
-                "styles": (meta or {}).get("styles", {}),
+                "styles": styles,
                 "source_video_id": clip_file.stem,
                 "clip_start": 0.0,
                 "clip_end": round(float(clip_transcript.get("duration", 0.0)), 2),
@@ -576,17 +769,25 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             logger.warning("Direct clip transcription failed: %s", exc)
 
     if not transcript:
+        styles = (meta or {}).get("styles", {})
+        styles.setdefault("highlight_mode", "active_word")
+        styles.setdefault("words_per_screen", 3)
         return {
             "cues": [],
-            "styles": (meta or {}).get("styles", {}),
+            "styles": styles,
             "source_video_id": source_video_id,
             "has_groq_key": bool(get_groq_api_key())
         }
 
-    cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
+    raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
+    cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
+    styles = (meta or {}).get("styles", {})
+    styles.setdefault("highlight_mode", "active_word")
+    styles.setdefault("words_per_screen", 3)
+
     return {
         "cues": cues,
-        "styles": (meta or {}).get("styles", {}),
+        "styles": styles,
         "source_video_id": source_video_id,
         "clip_start": clip_start,
         "clip_end": clip_end,
