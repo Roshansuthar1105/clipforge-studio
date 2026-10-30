@@ -187,8 +187,8 @@ def create_voice_synced_word_chunks(
 
 def extract_audio_for_transcription(video_path: Path, output_audio: Path) -> Path:
     """
-    Extract ultra-compact 32kbps 16kHz mono MP3 from video.
-    Keeps a 1-hour video under 14MB, well below Groq's 25MB limit.
+    Extract ultra-compact 24kbps-32kbps 16kHz mono MP3 from video.
+    Keeps a 1-hour video under 11MB, well below Groq's 25MB limit.
     """
     cmd = [
         "ffmpeg", "-y",
@@ -198,16 +198,30 @@ def extract_audio_for_transcription(video_path: Path, output_audio: Path) -> Pat
         "-vn",
         "-ar", "16000",
         "-ac", "1",
-        "-b:a", "32k",
+        "-b:a", "24k",
         str(output_audio)
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
+    if output_audio.exists() and output_audio.stat().st_size > 23 * 1024 * 1024:
+        # Re-compress at 16k mono for extra-long videos (e.g. 2-3 hours)
+        cmd_small = [
+            "ffmpeg", "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-i", str(video_path),
+            "-vn",
+            "-ar", "16000",
+            "-ac", "1",
+            "-b:a", "16k",
+            str(output_audio)
+        ]
+        subprocess.run(cmd_small, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
     return output_audio
 
 
 def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Transcribe a full video using Groq Cloud whisper-large-v3.
+    Transcribe a full video using Groq Cloud whisper-large-v3-turbo / whisper-large-v3.
     Caches results to disk and MongoDB so the video is never transcribed twice.
     """
     if not video_id:
@@ -226,21 +240,36 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
         )
 
     from groq import Groq
-    client = Groq(api_key=api_key)
+    # Give a generous 300s timeout with retries to prevent connection timeouts on long videos
+    client = Groq(api_key=api_key, timeout=300.0, max_retries=3)
 
     temp_audio = TRANSCRIPTS_DIR / f"{video_id}_temp.mp3"
     try:
         logger.info("Extracting audio from %s for transcription...", video_path.name)
         extract_audio_for_transcription(video_path, temp_audio)
 
-        logger.info("Calling Groq Whisper API for %s...", video_path.name)
-        with open(temp_audio, "rb") as f:
-            transcription = client.audio.transcriptions.create(
-                file=(temp_audio.name, f.read()),
-                model="whisper-large-v3",
-                response_format="verbose_json",
-                timestamp_granularities=["segment", "word"],
-            )
+        audio_bytes = temp_audio.read_bytes()
+        transcription = None
+        whisper_models = ["whisper-large-v3-turbo", "whisper-large-v3"]
+        last_whisper_err = None
+        for wm in whisper_models:
+            try:
+                logger.info("Calling Groq Whisper (%s) for %s...", wm, video_path.name)
+                transcription = client.audio.transcriptions.create(
+                    file=(temp_audio.name, audio_bytes),
+                    model=wm,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment", "word"],
+                )
+                if transcription:
+                    logger.info("Groq transcription succeeded via %s for %s", wm, video_path.name)
+                    break
+            except Exception as w_err:
+                logger.warning("Groq Whisper model %s failed for %s: %s", wm, video_path.name, w_err)
+                last_whisper_err = w_err
+
+        if not transcription:
+            raise last_whisper_err or RuntimeError(f"Groq Whisper transcription failed for {video_path.name}")
 
         # Parse segments and words
         segments_raw = getattr(transcription, "segments", []) or []
@@ -305,17 +334,25 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
             "segments": parsed_segments,
         }
 
-        # 1. Hindi audio -> by default save & get Hinglish subtitles
+        # ALWAYS save base transcript immediately to disk and DB first
+        # This guarantees transcripts are never lost if subsequent transliteration or translation steps fail/timeout
+        save_transcript(video_id, transcript_data)
+        save_transcript(f"{video_id}_raw", transcript_data)
+
+        # 1. Hindi audio -> attempt auto-converting transcript to Hinglish by default
         if detected_lang in ("hi", "hindi", "urdu") or has_devanagari:
             logger.info("Detected Hindi audio in %s; auto-converting transcript to Hinglish by default", video_id)
-            save_transcript(f"{video_id}_raw", transcript_data)
-            transcript_data = convert_transcript_to_hinglish(transcript_data, video_id=video_id)
+            try:
+                hinglish_data = convert_transcript_to_hinglish(transcript_data, video_id=video_id)
+                if hinglish_data and hinglish_data.get("segments"):
+                    return hinglish_data
+            except Exception as h_err:
+                logger.warning("Auto-conversion to Hinglish failed for %s: %s; retaining base transcript", video_id, h_err)
             return transcript_data
 
-        # 2. Foreign language (neither Hindi nor English) -> by default use English translation
+        # 2. Foreign language (neither Hindi nor English) -> attempt translating to English by default
         elif detected_lang not in ("en", "english"):
             logger.info("Detected foreign language '%s' in %s; translating to English by default", detected_lang, video_id)
-            save_transcript(f"{video_id}_raw", transcript_data)
             try:
                 en_trans = translate_video_to_english_with_groq(video_path, video_id=video_id)
                 if en_trans and en_trans.get("segments"):
@@ -323,9 +360,8 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                     return en_trans
             except Exception as tr_err:
                 logger.warning("Auto-translation to English failed for %s (%s); keeping base transcript: %s", video_id, detected_lang, tr_err)
+            return transcript_data
 
-        # Save to disk and database
-        save_transcript(video_id, transcript_data)
         return transcript_data
 
     finally:
@@ -355,7 +391,7 @@ def translate_video_to_english_with_groq(video_path: Path, video_id: Optional[st
         raise ValueError("GROQ_API_KEY is not set.")
 
     from groq import Groq
-    client = Groq(api_key=api_key)
+    client = Groq(api_key=api_key, timeout=90.0, max_retries=2)
 
     temp_audio = TRANSCRIPTS_DIR / f"{video_id}_temp_en.mp3"
     try:
@@ -413,7 +449,7 @@ def translate_clip_to_english_with_groq(clip_path: Path) -> List[Dict[str, Any]]
         raise ValueError("GROQ_API_KEY is not set.")
 
     from groq import Groq
-    client = Groq(api_key=api_key)
+    client = Groq(api_key=api_key, timeout=90.0, max_retries=2)
 
     temp_audio = clip_path.with_name(f"{clip_path.stem}_temp_en.mp3")
     try:
@@ -475,7 +511,7 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
         return texts
 
     from groq import Groq
-    client = Groq(api_key=api_key)
+    client = Groq(api_key=api_key, timeout=90.0, max_retries=2)
 
     system_prompt = (
         "You are a strict Hinglish transliteration engine.\n"
@@ -491,9 +527,7 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
     models_to_try = [
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
-        "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile"
+        "openai/gpt-oss-20b"
     ]
 
     results: List[str] = []
@@ -627,36 +661,42 @@ def save_transcript(video_id: str, data: Dict[str, Any]) -> None:
 
 
 def get_stored_transcript(video_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve transcript from disk or DB."""
-    json_path = TRANSCRIPTS_DIR / f"{video_id}.json"
-    if json_path.exists():
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as exc:
-            logger.warning("Could not read transcript file %s: %s", json_path, exc)
+    """
+    Retrieve transcript from disk or DB.
+    Checks all candidate variations: exact id, _hinglish, _raw, and embedded YouTube IDs.
+    """
+    if not video_id:
+        return None
 
-    # Check for embedded YouTube ID e.g. [rBHpA9lXcS0] or _rBHpA9lXcS0
-    yt_match = re.search(r"\[([a-zA-Z0-9_-]{11})\]", str(video_id)) or re.search(r"_([a-zA-Z0-9_-]{11})$", str(video_id))
+    clean_vid = str(video_id).strip()
+    candidates = [clean_vid, f"{clean_vid}_hinglish", f"{clean_vid}_raw"]
+
+    # Extract YouTube 11-char ID if embedded in video_id
+    yt_match = re.search(r"\[([a-zA-Z0-9_-]{11})\]", clean_vid) or re.search(r"_([a-zA-Z0-9_-]{11})$", clean_vid)
     if yt_match:
-        alt_path = TRANSCRIPTS_DIR / f"{yt_match.group(1)}.json"
-        if alt_path.exists():
-            try:
-                with open(alt_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
+        yt_id = yt_match.group(1)
+        candidates.extend([yt_id, f"{yt_id}_hinglish", f"{yt_id}_raw"])
 
-    try:
-        db_doc = db.db_get_transcript(video_id)
-        if db_doc:
-            return db_doc
-        if yt_match:
-            alt_doc = db.db_get_transcript(yt_match.group(1))
-            if alt_doc:
-                return alt_doc
-    except Exception:
-        pass
+    # 1. Search disk files in priority order
+    for cand in candidates:
+        json_path = TRANSCRIPTS_DIR / f"{cand}.json"
+        if json_path.exists():
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if data and data.get("segments"):
+                        return data
+            except Exception as exc:
+                logger.warning("Could not read transcript file %s: %s", json_path, exc)
+
+    # 2. Search database in priority order
+    for cand in candidates:
+        try:
+            db_doc = db.db_get_transcript(cand)
+            if db_doc and db_doc.get("segments"):
+                return db_doc
+        except Exception:
+            pass
 
     return None
 
