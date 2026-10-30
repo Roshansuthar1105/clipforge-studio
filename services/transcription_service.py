@@ -339,15 +339,24 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
         save_transcript(video_id, transcript_data)
         save_transcript(f"{video_id}_raw", transcript_data)
 
-        # 1. Hindi audio -> attempt auto-converting transcript to Hinglish by default
+        # 1. Hindi audio -> only auto-convert full video transcript if it is a short clip (<= 35 segments).
+        # For long videos (> 35 segments, like full episodes/specials with hundreds of segments),
+        # keep base transcript so full transcription returns instantly without triggering Groq 429 rate limits.
+        # Sliced viral clips convert to Hinglish on-demand in 1 fast call!
         if detected_lang in ("hi", "hindi", "urdu") or has_devanagari:
-            logger.info("Detected Hindi audio in %s; auto-converting transcript to Hinglish by default", video_id)
-            try:
-                hinglish_data = convert_transcript_to_hinglish(transcript_data, video_id=video_id)
-                if hinglish_data and hinglish_data.get("segments"):
-                    return hinglish_data
-            except Exception as h_err:
-                logger.warning("Auto-conversion to Hinglish failed for %s: %s; retaining base transcript", video_id, h_err)
+            if len(parsed_segments) <= 35:
+                logger.info("Detected Hindi audio in short video %s (%d segments); auto-converting to Hinglish", video_id, len(parsed_segments))
+                try:
+                    hinglish_data = convert_transcript_to_hinglish(transcript_data, video_id=video_id)
+                    if hinglish_data and hinglish_data.get("segments"):
+                        return hinglish_data
+                except Exception as h_err:
+                    logger.warning("Auto-conversion to Hinglish failed for %s: %s; retaining base transcript", video_id, h_err)
+            else:
+                logger.info(
+                    "Detected Hindi audio in long video %s (%d segments, %.1fs). Retaining base transcript so detection remains instant without 429 rate limits. Clips will transliterate to Hinglish on-demand.",
+                    video_id, len(parsed_segments), transcript_data.get("duration", 0.0)
+                )
             return transcript_data
 
         # 2. Foreign language (neither Hindi nor English) -> attempt translating to English by default
@@ -391,7 +400,7 @@ def translate_video_to_english_with_groq(video_path: Path, video_id: Optional[st
         raise ValueError("GROQ_API_KEY is not set.")
 
     from groq import Groq
-    client = Groq(api_key=api_key, timeout=90.0, max_retries=2)
+    client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
 
     temp_audio = TRANSCRIPTS_DIR / f"{video_id}_temp_en.mp3"
     try:
@@ -449,7 +458,7 @@ def translate_clip_to_english_with_groq(clip_path: Path) -> List[Dict[str, Any]]
         raise ValueError("GROQ_API_KEY is not set.")
 
     from groq import Groq
-    client = Groq(api_key=api_key, timeout=90.0, max_retries=2)
+    client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
 
     temp_audio = clip_path.with_name(f"{clip_path.stem}_temp_en.mp3")
     try:
@@ -511,7 +520,7 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
         return texts
 
     from groq import Groq
-    client = Groq(api_key=api_key, timeout=90.0, max_retries=2)
+    client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
 
     system_prompt = (
         "You are a strict Hinglish transliteration engine.\n"
@@ -530,8 +539,11 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
         "openai/gpt-oss-20b"
     ]
 
+    import time
     results: List[str] = []
     for i in range(0, len(texts), batch_size):
+        if i > 0:
+            time.sleep(0.3)  # Gentle pacing to avoid Groq 30 RPM rate limits
         chunk = texts[i:i + batch_size]
         # If this entire chunk has no Devanagari, pass it through directly
         if not any(has_devanagari_characters(t) for t in chunk):
@@ -550,7 +562,7 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
                         {"role": "user", "content": user_msg}
                     ],
                     temperature=0.0,
-                    max_tokens=2048
+                    max_tokens=500
                 )
 
                 raw = res.choices[0].message.content.strip()
