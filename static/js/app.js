@@ -326,6 +326,7 @@ function toggleOverlayCustomizerVisibility() {
     if (drawer) {
         drawer.style.display = (showTitle || showParts) ? "block" : "none";
     }
+    updateOverlayLivePreview();
 }
 
 function toggleOverlaySettingsAccordion() {
@@ -339,6 +340,181 @@ function toggleOverlaySettingsAccordion() {
     }
 }
 
+function setTitleAlignment(align) {
+    const input = document.getElementById("titleAlignmentInput");
+    if (input) input.value = align;
+    const group = document.getElementById("titleAlignGroup");
+    if (group) {
+        group.querySelectorAll(".align-btn").forEach(btn => {
+            btn.classList.toggle("active", btn.getAttribute("data-align") === align);
+        });
+    }
+    updateOverlayLivePreview();
+}
+
+function setPartAlignment(align) {
+    const input = document.getElementById("partAlignmentInput");
+    if (input) input.value = align;
+    const group = document.getElementById("partAlignGroup");
+    if (group) {
+        group.querySelectorAll(".align-btn").forEach(btn => {
+            btn.classList.toggle("active", btn.getAttribute("data-align") === align);
+        });
+    }
+    updateOverlayLivePreview();
+}
+
+function setTitleYPreset(y) {
+    const input = document.getElementById("titleYInput");
+    if (input) {
+        input.value = y;
+        onTitleYChange(y);
+    }
+}
+
+function onTitleYChange(val) {
+    const display = document.getElementById("titleYVal");
+    if (display) display.textContent = val;
+    updateOverlayLivePreview();
+}
+
+function onTitleFontSizeChange(val) {
+    const display = document.getElementById("titleFontSizeVal");
+    if (display) display.textContent = val;
+    updateOverlayLivePreview();
+}
+
+function onPartFormatChange(val) {
+    updateOverlayLivePreview();
+}
+
+function onPartFontSizeChange(val) {
+    const display = document.getElementById("partFontSizeVal");
+    if (display) display.textContent = val;
+    updateOverlayLivePreview();
+}
+
+function onPartYChange(val) {
+    const display = document.getElementById("partYValDisplay");
+    if (display) {
+        const parsed = parseInt(val, 10);
+        display.textContent = isNaN(parsed) ? "Auto" : `${parsed}px`;
+    }
+    updateOverlayLivePreview();
+}
+
+function toggleMockupSafeZones() {
+    const layer = document.getElementById("mockupSafeZonesLayer");
+    const btn = document.getElementById("toggleSafeZonesBtn");
+    if (layer) {
+        const isHidden = layer.style.display === "none";
+        layer.style.display = isHidden ? "block" : "none";
+        if (btn) btn.classList.toggle("active", isHidden);
+    }
+}
+
+function onMockupPhoneClick(event) {
+    const phone = document.getElementById("reelMockupPhone");
+    if (!phone) return;
+    const rect = phone.getBoundingClientRect();
+    const clickY = event.clientY - rect.top;
+    if (clickY < 0 || clickY > rect.height) return;
+    const calculatedY = Math.max(60, Math.min(1700, Math.round((clickY / rect.height) * 1920)));
+    const input = document.getElementById("titleYInput");
+    if (input) {
+        input.value = calculatedY;
+        onTitleYChange(calculatedY);
+    }
+}
+
+function updateOverlayLivePreview() {
+    const titleBadge = document.getElementById("mockupTitleBadge");
+    const partBadge = document.getElementById("mockupPartBadge");
+    const bgLayer = document.getElementById("mockupBgLayer");
+
+    if (bgLayer) {
+        if (state.selectedStyle === "black") {
+            bgLayer.classList.remove("blur-style");
+            bgLayer.classList.add("black-style");
+        } else {
+            bgLayer.classList.remove("black-style");
+            bgLayer.classList.add("blur-style");
+        }
+    }
+
+    const showTitle = document.getElementById("showTitle") ? document.getElementById("showTitle").checked : true;
+    const showParts = document.getElementById("showParts") ? document.getElementById("showParts").checked : true;
+
+    const titleText = (document.getElementById("titleInput")?.value || "").trim() || "My Video Title";
+    const titleY = parseInt(document.getElementById("titleYInput")?.value || "180", 10);
+    const titleFontSize = parseInt(document.getElementById("titleFontSizeInput")?.value || "48", 10);
+    const titleAlign = document.getElementById("titleAlignmentInput")?.value || "center";
+
+    if (titleBadge) {
+        if (!showTitle) {
+            titleBadge.style.display = "none";
+        } else {
+            titleBadge.style.display = "block";
+            titleBadge.textContent = titleText;
+            titleBadge.style.top = `${((titleY / 1920) * 100).toFixed(2)}%`;
+            titleBadge.style.fontSize = `${Math.max(7, Math.round((titleFontSize / 1080) * 210))}px`;
+
+            if (titleAlign === "left") {
+                titleBadge.style.left = "10px";
+                titleBadge.style.right = "auto";
+                titleBadge.style.transform = "none";
+                titleBadge.style.textAlign = "left";
+            } else if (titleAlign === "right") {
+                titleBadge.style.left = "auto";
+                titleBadge.style.right = "10px";
+                titleBadge.style.transform = "none";
+                titleBadge.style.textAlign = "right";
+            } else {
+                titleBadge.style.left = "50%";
+                titleBadge.style.right = "auto";
+                titleBadge.style.transform = "translateX(-50%)";
+                titleBadge.style.textAlign = "center";
+            }
+        }
+    }
+
+    const partFormat = document.getElementById("partFormatInput")?.value?.trim() || "Part {part}";
+    const partText = partFormat.replace(/\{part\}/gi, "1");
+    const partFontSize = parseInt(document.getElementById("partFontSizeInput")?.value || "34", 10);
+    const partYInputVal = document.getElementById("partYInput")?.value;
+    const explicitPartY = partYInputVal && partYInputVal.trim() !== "" ? parseInt(partYInputVal, 10) : null;
+    const partY = explicitPartY !== null && !isNaN(explicitPartY) ? explicitPartY : (titleY + titleFontSize + 45);
+    const partAlign = document.getElementById("partAlignmentInput")?.value || "center";
+
+    if (partBadge) {
+        if (!showParts) {
+            partBadge.style.display = "none";
+        } else {
+            partBadge.style.display = "block";
+            partBadge.textContent = partText;
+            partBadge.style.top = `${((partY / 1920) * 100).toFixed(2)}%`;
+            partBadge.style.fontSize = `${Math.max(6, Math.round((partFontSize / 1080) * 210))}px`;
+
+            if (partAlign === "left") {
+                partBadge.style.left = "10px";
+                partBadge.style.right = "auto";
+                partBadge.style.transform = "none";
+                partBadge.style.textAlign = "left";
+            } else if (partAlign === "right") {
+                partBadge.style.left = "auto";
+                partBadge.style.right = "10px";
+                partBadge.style.transform = "none";
+                partBadge.style.textAlign = "right";
+            } else {
+                partBadge.style.left = "50%";
+                partBadge.style.right = "auto";
+                partBadge.style.transform = "translateX(-50%)";
+                partBadge.style.textAlign = "center";
+            }
+        }
+    }
+}
+
 async function submitJob(isPreview = false) {
     const urlInput = document.getElementById("urlInput");
     const titleInput = document.getElementById("titleInput");
@@ -349,6 +525,8 @@ async function submitJob(isPreview = false) {
     const showTitleInput = document.getElementById("showTitle");
     const showPartsInput = document.getElementById("showParts");
     const keepSourceInput = document.getElementById("keepSource");
+    const titleAlignmentInput = document.getElementById("titleAlignmentInput");
+    const partAlignmentInput = document.getElementById("partAlignmentInput");
     const titleYInput = document.getElementById("titleYInput");
     const titleFontSizeInput = document.getElementById("titleFontSizeInput");
     const partFormatInput = document.getElementById("partFormatInput");
@@ -367,6 +545,8 @@ async function submitJob(isPreview = false) {
         show_title: showTitleInput ? showTitleInput.checked : true,
         show_parts: showPartsInput ? showPartsInput.checked : true,
         keep_source: keepSourceInput ? keepSourceInput.checked : true,
+        title_alignment: titleAlignmentInput ? titleAlignmentInput.value : "center",
+        part_alignment: partAlignmentInput ? partAlignmentInput.value : "center",
         is_preview: isPreview,
     };
 
@@ -2541,6 +2721,13 @@ function initForm() {
         });
     }
 
+    const titleInput = document.getElementById("titleInput");
+    if (titleInput) {
+        titleInput.addEventListener("input", () => {
+            updateOverlayLivePreview();
+        });
+    }
+
     const clipForm = document.getElementById("clipForm");
     if (clipForm) {
         clipForm.addEventListener("submit", (e) => {
@@ -2552,6 +2739,9 @@ function initForm() {
             }
         });
     }
+
+    // Initialize 9:16 overlay preview mockup
+    updateOverlayLivePreview();
 }
 
 function clearUrlInput() {
@@ -2589,6 +2779,7 @@ async function fetchVideoDetails(url) {
 
         if (titleInput && (!titleInput.value || titleInput.value === "My Best Highlights")) {
             titleInput.value = info.title || "My Best Highlights";
+            updateOverlayLivePreview();
         }
     } catch (err) {
         console.warn("Could not fetch YouTube preview:", err);
@@ -2601,6 +2792,7 @@ function selectStyle(style) {
     const bBlack = document.getElementById("styleBlack");
     if (bBlur) bBlur.classList.toggle("active", style === "blur");
     if (bBlack) bBlack.classList.toggle("active", style === "black");
+    updateOverlayLivePreview();
 }
 
 function setClipLengthPreset(seconds) {
@@ -2799,6 +2991,10 @@ async function submitViralJob() {
     const keepSource = document.getElementById("viralKeepSource")?.checked ?? true;
     const prependHook = document.getElementById("viralPrependHook")?.checked ?? true;
     const hookBadge = document.getElementById("viralHookBadge")?.value?.trim() || "WAIT FOR IT... 🤫";
+    const burnSubtitles = document.getElementById("viralBurnSubtitles")?.checked || false;
+    const titleAlignmentInput = document.getElementById("titleAlignmentInput");
+    const titleYInput = document.getElementById("titleYInput");
+    const titleFontSizeInput = document.getElementById("titleFontSizeInput");
 
     const payload = {
         url: url,
@@ -2815,6 +3011,10 @@ async function submitViralJob() {
         prepend_hook: prependHook,
         hook_duration: 3.5,
         hook_badge: hookBadge,
+        burn_subtitles: burnSubtitles,
+        title_alignment: titleAlignmentInput ? titleAlignmentInput.value : "center",
+        title_y: titleYInput ? parseInt(titleYInput.value, 10) || 180 : 180,
+        title_font_size: titleFontSizeInput ? parseInt(titleFontSizeInput.value, 10) || 48 : 48,
         is_preview: false,
     };
 
@@ -4458,6 +4658,11 @@ function syncModalHookSettings(el) {
     if (studioEl) studioEl.checked = el.checked;
 }
 
+function syncModalBurnSettings(el) {
+    const studioEl = document.getElementById("viralBurnSubtitles");
+    if (studioEl) studioEl.checked = el.checked;
+}
+
 function syncModalHookBadge(el) {
     const studioEl = document.getElementById("viralHookBadge");
     if (studioEl) studioEl.value = el.value;
@@ -4478,8 +4683,10 @@ async function createSingleViralReel(index) {
     const currentUrl = viralState.url || (urlInput ? urlInput.value.trim() : "");
     const hookToggle = document.getElementById("modalViralPrependHook") || document.getElementById("viralPrependHook");
     const hookBadgeInput = document.getElementById("modalViralHookBadge") || document.getElementById("viralHookBadge");
+    const burnToggle = document.getElementById("modalViralBurnSubtitles") || document.getElementById("viralBurnSubtitles");
     const prependHook = hookToggle ? hookToggle.checked : true;
     const hookBadge = hookBadgeInput ? hookBadgeInput.value.trim() : "WAIT FOR IT... 🤫";
+    const burnSubtitles = burnToggle ? burnToggle.checked : false;
 
     const payload = {
         url: currentUrl,
@@ -4493,6 +4700,7 @@ async function createSingleViralReel(index) {
         prepend_hook: prependHook,
         hook_duration: m.teaser_hook ? (m.teaser_hook.duration || 3.5) : 3.5,
         hook_badge: hookBadge,
+        burn_subtitles: burnSubtitles,
         count: 1,
         is_preview: false,
         background_style: state.selectedStyle || "blur",
@@ -4543,8 +4751,10 @@ async function createAllViralMomentsClips() {
     const currentUrl = viralState.url || (urlInput ? urlInput.value.trim() : "");
     const hookToggle = document.getElementById("modalViralPrependHook") || document.getElementById("viralPrependHook");
     const hookBadgeInput = document.getElementById("modalViralHookBadge") || document.getElementById("viralHookBadge");
+    const burnToggle = document.getElementById("modalViralBurnSubtitles") || document.getElementById("viralBurnSubtitles");
     const prependHook = hookToggle ? hookToggle.checked : true;
     const hookBadge = hookBadgeInput ? hookBadgeInput.value.trim() : "WAIT FOR IT... 🤫";
+    const burnSubtitles = burnToggle ? burnToggle.checked : false;
 
     const payload = {
         url: currentUrl,
@@ -4557,6 +4767,7 @@ async function createAllViralMomentsClips() {
         prepend_hook: prependHook,
         hook_duration: 3.5,
         hook_badge: hookBadge,
+        burn_subtitles: burnSubtitles,
         background_style: state.selectedStyle || "blur",
         show_title: true,
         show_parts: false

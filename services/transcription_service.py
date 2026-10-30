@@ -695,11 +695,22 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
                         c["words"] = synthesize_word_timestamps(
                             c["text"], float(c.get("start", 0)), float(c.get("end", 0))
                         )
+                # Auto-chunk into 2-4 word bites if cues are long full sentences
+                if cues and any(len(str(c.get("text", "")).split()) > 5 for c in cues):
+                    cues = create_voice_synced_word_chunks(cues, max_words=3)
+                    saved["cues"] = cues
+
                 styles = saved.get("styles", {})
-                if "highlight_mode" not in styles:
-                    styles["highlight_mode"] = "active_word"
-                if "words_per_screen" not in styles:
-                    styles["words_per_screen"] = 3
+                styles.setdefault("highlight_mode", "active_word")
+                styles.setdefault("words_per_screen", 3)
+                styles.setdefault("font_family", "Montserrat")
+                styles.setdefault("font_size", 42)
+                styles.setdefault("primary_color", "#FFFFFF")
+                styles.setdefault("highlight_color", "#FACC15")
+                styles.setdefault("outline_color", "#000000")
+                styles.setdefault("outline_width", 3.0)
+                styles.setdefault("text_transform", "uppercase")
+                styles.setdefault("margin_v", 320)
                 saved["cues"] = cues
                 saved["styles"] = styles
                 return saved
@@ -735,90 +746,101 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
     if not meta:
         meta = db.db_get_clip_metadata(Path(clip_name).name)
 
-    if not meta:
-        return {"cues": [], "styles": {}, "source_video_id": None}
-
-    DOWNLOAD_DIR = BASE_DIR / "downloads"
     source_video_id = meta.get("source_video_id") if meta else None
+    source_file_name = meta.get("source_file") if meta else ""
     clip_start = float(meta.get("clip_start", 0.0)) if meta else 0.0
     clip_end = float(meta.get("clip_end", 0.0)) if meta else 0.0
 
-    transcript = get_stored_transcript(source_video_id) if source_video_id else None
+    # 1. First attempt: retrieve existing cached transcript from parent video
+    transcript = None
+    if source_video_id:
+        transcript = get_stored_transcript(source_video_id)
+    if not transcript and source_file_name:
+        transcript = get_stored_transcript(Path(source_file_name).stem)
 
-    # If transcript is missing, try auto-transcribing parent video from downloads
-    if not transcript and source_video_id and DOWNLOAD_DIR.exists():
-        found_source = None
-        for f in DOWNLOAD_DIR.glob("**/*.*"):
-            if f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
-                if source_video_id in f.name:
-                    found_source = f
-                    break
-        if found_source and get_groq_api_key():
-            try:
-                logger.info("Auto-transcribing source video %s for clip %s", found_source.name, clip_name)
-                transcript = transcribe_video_with_groq(found_source, video_id=source_video_id)
-            except Exception as exc:
-                logger.warning("Auto-transcribe of source video failed: %s", exc)
+    # 2. If parent transcript exists, slice and chunk cues instantly
+    if transcript and transcript.get("segments"):
+        if meta and meta.get("has_prepended_hook") and float(meta.get("hook_duration", 0.0)) > 0:
+            h_st = float(meta.get("hook_start", clip_start))
+            h_dur = float(meta.get("hook_duration", 0.0))
+            raw_hook_cues = slice_transcript_for_clip(transcript, h_st, h_st + h_dur)
+            raw_body_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
+            for bc in raw_body_cues:
+                bc["start"] = round(bc["start"] + h_dur, 2)
+                bc["end"] = round(bc["end"] + h_dur, 2)
+                for w in bc.get("words", []):
+                    w["start"] = round(w["start"] + h_dur, 2)
+                    w["end"] = round(w["end"] + h_dur, 2)
+            raw_cues = raw_hook_cues + raw_body_cues
+        else:
+            raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
 
-    # If still no transcript, transcribe the clip directly as standalone fallback
+        cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
+        styles = (meta or {}).get("styles", {})
+        styles.setdefault("highlight_mode", "active_word")
+        styles.setdefault("words_per_screen", 3)
+        styles.setdefault("font_family", "Montserrat")
+        styles.setdefault("font_size", 42)
+        styles.setdefault("primary_color", "#FFFFFF")
+        styles.setdefault("highlight_color", "#FACC15")
+        styles.setdefault("outline_color", "#000000")
+        styles.setdefault("outline_width", 3.0)
+        styles.setdefault("text_transform", "uppercase")
+        styles.setdefault("margin_v", 320)
+
+        # Cache sliced subtitles to disk
+        save_clip_subtitles(clip_name, {"cues": cues, "styles": styles})
+        return {
+            "cues": cues,
+            "styles": styles,
+            "source_video_id": source_video_id or (clip_file.stem if clip_file else "clip"),
+            "clip_start": clip_start,
+            "clip_end": clip_end,
+            "has_groq_key": bool(get_groq_api_key())
+        }
+
+    # 3. If parent transcript is missing, transcribe this 30-60s clip DIRECTLY (takes 1-2s)
     if not clip_file or not clip_file.exists():
         clip_file = _find_clip_path(clip_name)
 
-    if not transcript and clip_file and clip_file.exists() and get_groq_api_key():
+    if clip_file and clip_file.exists() and get_groq_api_key():
         try:
-            logger.info("Transcribing clip %s directly...", clip_name)
+            logger.info("Auto-transcribing clip %s directly for subtitles...", clip_file.name)
             clip_transcript = transcribe_video_with_groq(clip_file, video_id=clip_file.stem)
             raw_cues = clip_transcript.get("segments", [])
             cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
             styles = (meta or {}).get("styles", {})
             styles.setdefault("highlight_mode", "active_word")
             styles.setdefault("words_per_screen", 3)
+            styles.setdefault("font_family", "Montserrat")
+            styles.setdefault("font_size", 42)
+            styles.setdefault("primary_color", "#FFFFFF")
+            styles.setdefault("highlight_color", "#FACC15")
+            styles.setdefault("outline_color", "#000000")
+            styles.setdefault("outline_width", 3.0)
+            styles.setdefault("text_transform", "uppercase")
+            styles.setdefault("margin_v", 320)
+
+            # Persist to disk so subsequent loads are instant
+            save_clip_subtitles(clip_name, {"cues": cues, "styles": styles})
             return {
                 "cues": cues,
                 "styles": styles,
                 "source_video_id": clip_file.stem,
                 "clip_start": 0.0,
                 "clip_end": round(float(clip_transcript.get("duration", 0.0)), 2),
+                "has_groq_key": True
             }
         except Exception as exc:
             logger.warning("Direct clip transcription failed: %s", exc)
 
-    if not transcript:
-        styles = (meta or {}).get("styles", {})
-        styles.setdefault("highlight_mode", "active_word")
-        styles.setdefault("words_per_screen", 3)
-        return {
-            "cues": [],
-            "styles": styles,
-            "source_video_id": source_video_id,
-            "has_groq_key": bool(get_groq_api_key())
-        }
-
-    if meta and meta.get("has_prepended_hook") and float(meta.get("hook_duration", 0.0)) > 0:
-        h_st = float(meta.get("hook_start", clip_start))
-        h_dur = float(meta.get("hook_duration", 0.0))
-        raw_hook_cues = slice_transcript_for_clip(transcript, h_st, h_st + h_dur)
-        raw_body_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
-        for bc in raw_body_cues:
-            bc["start"] = round(bc["start"] + h_dur, 2)
-            bc["end"] = round(bc["end"] + h_dur, 2)
-            for w in bc.get("words", []):
-                w["start"] = round(w["start"] + h_dur, 2)
-                w["end"] = round(w["end"] + h_dur, 2)
-        raw_cues = raw_hook_cues + raw_body_cues
-    else:
-        raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
-    cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
     styles = (meta or {}).get("styles", {})
     styles.setdefault("highlight_mode", "active_word")
     styles.setdefault("words_per_screen", 3)
-
     return {
-        "cues": cues,
+        "cues": [],
         "styles": styles,
-        "source_video_id": source_video_id,
-        "clip_start": clip_start,
-        "clip_end": clip_end,
+        "source_video_id": source_video_id or (clip_file.stem if clip_file else "clip"),
         "has_groq_key": bool(get_groq_api_key())
     }
 

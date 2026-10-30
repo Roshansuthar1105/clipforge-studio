@@ -166,6 +166,12 @@ class ClipRequest(BaseModel):
     part_box_color: str = "black@0.40"
     part_format: str = "Part {part}"
 
+    # Alignment & Horizontal Coordinates (center, left, right)
+    title_alignment: str = "center"
+    part_alignment: str = "center"
+    title_x: Optional[int] = None
+    part_x: Optional[int] = None
+
     # "blur" for cinematic blurred 9:16 background, "black" for classic bars.
     background_style: str = "blur"
 
@@ -180,6 +186,9 @@ class ClipRequest(BaseModel):
     prepend_hook: bool = False
     hook_duration: float = 3.5
     hook_badge: str = "WAIT FOR IT..."
+
+    # Subtitle Automation (Auto-burn animated word subtitles into reel)
+    burn_subtitles: bool = False
 
     def model_post_init(self, __context):
         if self.count is not None:
@@ -958,6 +967,27 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             total_render_duration = clip_duration + (hook_info["duration"] if hook_info else 0.0)
             source_has_audio = has_audio_stream(source_path)
 
+            # Compute horizontal text alignment expressions (center, left, right)
+            title_align = (getattr(request, "title_alignment", "center") or "center").lower()
+            if getattr(request, "title_x", None) is not None:
+                title_x_expr = str(request.title_x)
+            elif title_align == "left":
+                title_x_expr = "60"
+            elif title_align == "right":
+                title_x_expr = "w-text_w-60"
+            else:
+                title_x_expr = "(w-text_w)/2"
+
+            part_align = (getattr(request, "part_alignment", "center") or "center").lower()
+            if getattr(request, "part_x", None) is not None:
+                part_x_expr = str(request.part_x)
+            elif part_align == "left":
+                part_x_expr = "60"
+            elif part_align == "right":
+                part_x_expr = "w-text_w-60"
+            else:
+                part_x_expr = "(w-text_w)/2"
+
             if hook_info:
                 # -------------------------------------------------------------
                 # DUAL-INPUT PIPELINE: Input 0 = Hook Teaser, Input 1 = Main Body
@@ -1004,7 +1034,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={title_x_expr}:"
                             f"y={title_y}:"
                             "box=1:"
                             f"boxcolor={title_box}:"
@@ -1019,7 +1049,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={part_x_expr}:"
                             f"y={part_y}:"
                             "box=1:"
                             f"boxcolor={part_box}:"
@@ -1073,7 +1103,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={title_x_expr}:"
                             f"y={title_y}:"
                             "box=1:"
                             f"boxcolor={title_box}:"
@@ -1088,7 +1118,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={part_x_expr}:"
                             f"y={part_y}:"
                             "box=1:"
                             f"boxcolor={part_box}:"
@@ -1151,7 +1181,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={title_x_expr}:"
                             f"y={title_y}:"
                             "box=1:"
                             f"boxcolor={title_box}:"
@@ -1166,7 +1196,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={part_x_expr}:"
                             f"y={part_y}:"
                             "box=1:"
                             f"boxcolor={part_box}:"
@@ -1192,7 +1222,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={title_x_expr}:"
                             f"y={title_y}:"
                             "box=1:"
                             f"boxcolor={title_box}:"
@@ -1206,7 +1236,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             f"fontfile='{fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
-                            "x=(w-text_w)/2:"
+                            f"x={part_x_expr}:"
                             f"y={part_y}:"
                             "box=1:"
                             f"boxcolor={part_box}:"
@@ -1280,11 +1310,21 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 }
                 meta_path = output_path.with_name(f"{filename}.meta.json")
 
-                # Auto-slice parent transcript into clip subtitles if transcript already exists
+                # Auto-generate or slice voice-synced subtitles for this clip
                 try:
-                    from services.transcription_service import get_stored_transcript, slice_transcript_for_clip
+                    from services.transcription_service import (
+                        get_stored_transcript,
+                        slice_transcript_for_clip,
+                        create_voice_synced_word_chunks,
+                        transcribe_video_with_groq,
+                        get_groq_api_key,
+                    )
                     parent_tr = get_stored_transcript(eff_video_id)
-                    if parent_tr:
+                    if not parent_tr and source_path:
+                        parent_tr = get_stored_transcript(source_path.stem)
+
+                    cues = []
+                    if parent_tr and parent_tr.get("segments"):
                         if hook_info:
                             # 1. Slice hook teaser cues
                             hook_cues = slice_transcript_for_clip(
@@ -1305,15 +1345,59 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                                 for w in bc.get("words", []):
                                     w["start"] = round(w["start"] + h_dur_offset, 2)
                                     w["end"] = round(w["end"] + h_dur_offset, 2)
-                            cues = hook_cues + body_cues
+                            raw_combined = hook_cues + body_cues
                         else:
-                            cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
+                            raw_combined = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
 
-                        if cues:
-                            sub_file = output_path.with_name(f"{filename}.subtitles.json")
-                            with open(sub_file, "w", encoding="utf-8") as sf:
-                                json.dump({"clip_name": filename, "cues": cues}, sf, indent=2, ensure_ascii=False)
-                            clip_meta["has_subtitles"] = True
+                        cues = create_voice_synced_word_chunks(raw_combined, max_words=3)
+
+                    # If parent transcript was missing, transcribe this 30-60s clip directly via Groq Whisper (1-2s)
+                    if not cues and output_path.exists() and get_groq_api_key():
+                        try:
+                            logger.info("Auto-transcribing rendered viral clip %s directly...", filename)
+                            clip_tr = transcribe_video_with_groq(output_path, video_id=output_path.stem)
+                            if clip_tr and clip_tr.get("segments"):
+                                cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=3)
+                        except Exception as c_err:
+                            logger.warning("Direct clip auto-transcribe failed: %s", c_err)
+
+                    if cues:
+                        sub_file = output_path.with_name(f"{filename}.subtitles.json")
+                        default_styles = {
+                            "font_family": "Montserrat",
+                            "font_size": 42,
+                            "primary_color": "#FFFFFF",
+                            "highlight_color": "#FACC15",
+                            "outline_color": "#000000",
+                            "outline_width": 3.0,
+                            "text_transform": "uppercase",
+                            "highlight_mode": "active_word",
+                            "words_per_screen": 3,
+                            "margin_v": 320
+                        }
+                        with open(sub_file, "w", encoding="utf-8") as sf:
+                            json.dump({
+                                "clip_name": filename,
+                                "cues": cues,
+                                "styles": default_styles
+                            }, sf, indent=2, ensure_ascii=False)
+                        clip_meta["has_subtitles"] = True
+
+                        # Optional: Auto-burn animated subtitles directly into reel if requested
+                        if getattr(request, "burn_subtitles", False):
+                            try:
+                                from services.subtitle_service import burn_subtitles_to_clip
+                                temp_burn = output_path.with_name(f"{output_path.stem}_burn_temp.mp4")
+                                burn_subtitles_to_clip(output_path, temp_burn, cues, default_styles)
+                                if temp_burn.exists() and temp_burn.stat().st_size > 0:
+                                    import time
+                                    time.sleep(0.1)
+                                    output_path.unlink(missing_ok=True)
+                                    temp_burn.rename(output_path)
+                                    clip_meta["subtitles_burned"] = True
+                                    logger.info("Successfully auto-burned subtitles into %s", filename)
+                            except Exception as b_err:
+                                logger.warning("Auto-burn subtitles on %s failed: %s", filename, b_err)
                 except Exception as sub_err:
                     logger.debug("Auto-slice subtitles for clip skipped: %s", sub_err)
 
@@ -1551,6 +1635,9 @@ def create_job(request: ClipRequest, authorization: Optional[str] = Header(None)
             "prepend_hook": getattr(request, "prepend_hook", False),
             "hook_duration": getattr(request, "hook_duration", 3.5),
             "hook_badge": getattr(request, "hook_badge", "WAIT FOR IT..."),
+            "burn_subtitles": getattr(request, "burn_subtitles", False),
+            "title_alignment": getattr(request, "title_alignment", "center"),
+            "part_alignment": getattr(request, "part_alignment", "center"),
         },
     }
 
