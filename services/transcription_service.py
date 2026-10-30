@@ -574,10 +574,25 @@ def get_stored_transcript(video_id: str) -> Optional[Dict[str, Any]]:
         except Exception as exc:
             logger.warning("Could not read transcript file %s: %s", json_path, exc)
 
+    # Check for embedded YouTube ID e.g. [rBHpA9lXcS0] or _rBHpA9lXcS0
+    yt_match = re.search(r"\[([a-zA-Z0-9_-]{11})\]", str(video_id)) or re.search(r"_([a-zA-Z0-9_-]{11})$", str(video_id))
+    if yt_match:
+        alt_path = TRANSCRIPTS_DIR / f"{yt_match.group(1)}.json"
+        if alt_path.exists():
+            try:
+                with open(alt_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+
     try:
         db_doc = db.db_get_transcript(video_id)
         if db_doc:
             return db_doc
+        if yt_match:
+            alt_doc = db.db_get_transcript(yt_match.group(1))
+            if alt_doc:
+                return alt_doc
     except Exception:
         pass
 

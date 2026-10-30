@@ -17,6 +17,7 @@ const state = {
     clips: [],
     accounts: [],
     selectedStyle: "blur",
+    studioMode: "parts",
     currentPreviewData: null,
     modalVideoUrl: null,
     modalVideoName: null,
@@ -708,7 +709,10 @@ function renderJobsList() {
         return `
             <tr>
                 <td>
-                    <div style="font-weight: 700; color: #fff;">${escapeHtml(title)}</div>
+                    <div style="font-weight: 700; color: #fff; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                        <span>${escapeHtml(title)}</span>
+                        ${req.slicing_mode === 'ai_viral' ? '<span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); font-size: 10px; padding: 2px 7px;"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Viral</span>' : ''}
+                    </div>
                     <div style="font-size: 11.5px; color: var(--text-dim); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                         ${escapeHtml(req.url || "Local Download")}
                     </div>
@@ -1604,13 +1608,16 @@ async function loadDownloads() {
                             <span style="color: var(--accent-cyan); font-weight: 600;"><i class="fa-solid fa-bolt"></i> Cached</span>
                         </div>
                         <div class="clip-actions-row">
-                            <button type="button" class="btn-primary" style="flex: 1.4; padding: 7px 12px; font-size: 12px; background: linear-gradient(135deg, #0284c7, #06b6d4);" onclick="sliceSourceInStudio(this)">
-                                <i class="fa-solid fa-scissors"></i> Slice in Studio
+                            <button type="button" class="btn-primary" style="flex: 1.2; padding: 7px 10px; font-size: 11.5px; background: linear-gradient(135deg, #a855f7, #6366f1); border-color: #9333ea;" onclick="detectViralForDownloadCard(this)" title="Detect Viral Moments with AI (Opus Clip style)">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i> AI Moments
                             </button>
-                            <a href="${url}" download="${escapeHtml(dl.name)}" class="btn-secondary" style="padding: 7px 10px; font-size: 12px; text-align: center;" title="Download Video File">
+                            <button type="button" class="btn-secondary" style="flex: 1; padding: 7px 10px; font-size: 11.5px;" onclick="sliceSourceInStudio(this)" title="Open in Studio to slice manually">
+                                <i class="fa-solid fa-scissors"></i> Slice
+                            </button>
+                            <a href="${url}" download="${escapeHtml(dl.name)}" class="btn-secondary" style="padding: 7px 9px; font-size: 12px; text-align: center;" title="Download Video File">
                                 <i class="fa-solid fa-download"></i>
                             </a>
-                            <button type="button" class="btn-secondary danger" style="padding: 7px 10px; font-size: 12px;" onclick="deleteDownloadCard(this)" title="Delete Downloaded Video">
+                            <button type="button" class="btn-secondary danger" style="padding: 7px 9px; font-size: 12px;" onclick="deleteDownloadCard(this)" title="Delete Downloaded Video">
                                 <i class="fa-solid fa-trash-can"></i>
                             </button>
                         </div>
@@ -1628,6 +1635,14 @@ function previewDownloadCard(el) {
     const card = el.closest(".download-card");
     if (!card) return;
     openPhoneModal(card.dataset.url, card.dataset.title);
+}
+
+function detectViralForDownloadCard(el) {
+    const card = el.closest(".download-card");
+    if (!card) return;
+    const sourceFile = card.dataset.name;
+    const ytUrl = card.dataset.yturl;
+    openViralMomentsModal(sourceFile, ytUrl);
 }
 
 function sliceSourceInStudio(el) {
@@ -2530,7 +2545,11 @@ function initForm() {
     if (clipForm) {
         clipForm.addEventListener("submit", (e) => {
             e.preventDefault();
-            submitJob(false);
+            if (state.studioMode === "viral") {
+                submitViralJob();
+            } else {
+                submitJob(false);
+            }
         });
     }
 }
@@ -2604,6 +2623,224 @@ function setMaxClipsPreset(count) {
     chips?.forEach(c => {
         c.classList.toggle("active", c.textContent.trim() === `${count}`);
     });
+}
+
+function setStudioSlicingMode(mode) {
+    state.studioMode = mode; // "parts" or "viral"
+    const cardParts = document.getElementById("modeCardParts");
+    const cardViral = document.getElementById("modeCardViral");
+    const panelParts = document.getElementById("panelOptionParts");
+    const panelViral = document.getElementById("panelOptionViral");
+
+    if (mode === "viral") {
+        if (cardParts) cardParts.classList.remove("active");
+        if (cardViral) cardViral.classList.add("active");
+        if (panelParts) panelParts.style.display = "none";
+        if (panelViral) panelViral.style.display = "block";
+    } else {
+        if (cardParts) cardParts.classList.add("active");
+        if (cardViral) cardViral.classList.remove("active");
+        if (panelParts) panelParts.style.display = "block";
+        if (panelViral) panelViral.style.display = "none";
+    }
+}
+
+function setViralMaxClipsPreset(count) {
+    const input = document.getElementById("viralMaxClips");
+    if (input) input.value = count;
+    document.querySelectorAll(".viral-clips-preset").forEach(btn => {
+        btn.classList.toggle("active", parseInt(btn.dataset.val, 10) === count);
+    });
+}
+
+function setViralDurationPreset(seconds) {
+    const input = document.getElementById("viralClipLength");
+    if (input) input.value = seconds;
+    document.querySelectorAll(".viral-dur-preset").forEach(btn => {
+        btn.classList.toggle("active", parseInt(btn.dataset.val, 10) === seconds);
+    });
+}
+
+async function scanViralMomentsInStudio() {
+    const urlInput = document.getElementById("urlInput");
+    const url = urlInput ? urlInput.value.trim() : "";
+    if (!url) {
+        showToast("Please enter a valid YouTube video URL first", "warning");
+        if (urlInput) urlInput.focus();
+        return;
+    }
+
+    const maxClips = parseInt(document.getElementById("viralMaxClips")?.value || "5", 10);
+    const container = document.getElementById("viralStudioMomentsList");
+    const loading = document.getElementById("viralStudioLoadingState");
+    const scanBtn = document.getElementById("scanViralStudioBtn");
+
+    if (scanBtn) scanBtn.disabled = true;
+    if (loading) loading.style.display = "block";
+    if (container) {
+        container.style.display = "none";
+        container.innerHTML = "";
+    }
+
+    try {
+        viralState.url = url;
+        const res = await apiRequest("/api/viral-moments/detect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                url: url,
+                max_moments: maxClips
+            })
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Failed to scan viral moments");
+        }
+
+        const data = await res.json();
+        viralState.moments = Array.isArray(data.moments) ? data.moments : [];
+        viralState.videoTitle = data.video_title || url;
+        viralState.duration = data.duration || 0;
+
+        renderViralMomentsInStudio();
+        showToast(`Found ${viralState.moments.length} viral high-retention moments!`, "success");
+
+    } catch (err) {
+        console.error("Studio viral scan error:", err);
+        showToast(err.message || "Detection failed", "error");
+    } finally {
+        if (scanBtn) scanBtn.disabled = false;
+        if (loading) loading.style.display = "none";
+    }
+}
+
+function renderViralMomentsInStudio() {
+    const container = document.getElementById("viralStudioMomentsList");
+    if (!container) return;
+
+    if (!viralState.moments || viralState.moments.length === 0) {
+        container.style.display = "none";
+        return;
+    }
+
+    container.style.display = "flex";
+    container.innerHTML = `
+        <div style="font-size: 12px; font-weight: 700; color: #cbd5e1; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; display: flex; align-items: center; justify-content: space-between;">
+            <span><i class="fa-solid fa-fire" style="color: #4ade80;"></i> Detected High-Retention Viral Moments (${viralState.moments.length})</span>
+            <span style="font-size: 11px; color: var(--text-dim); text-transform: none;">Click "Create This Reel" on any card or generate all below</span>
+        </div>
+    ` + viralState.moments.map((m, index) => {
+        const score = m.virality_score || 85;
+        const isHigh = score >= 90;
+        const scoreClass = isHigh ? "high" : "medium";
+        const scoreIcon = isHigh ? '<i class="fa-solid fa-fire" style="color: #4ade80;"></i>' : '<i class="fa-solid fa-bolt" style="color: #fbbf24;"></i>';
+
+        return `
+            <div class="viral-moment-card" data-index="${index}" style="background: rgba(15, 23, 42, 0.75);">
+                <div class="viral-moment-header">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <span class="virality-score-badge ${scoreClass}">
+                            ${scoreIcon} ${score}/100 VIRAL
+                        </span>
+                        <span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); font-size: 11px;">
+                            ${escapeHtml(m.category || "Viral Hook")}
+                        </span>
+                        <span class="viral-timing-badge">
+                            <i class="fa-regular fa-clock"></i> ${escapeHtml(m.timestamp_display || `${m.duration}s`)}
+                        </span>
+                    </div>
+                    <button type="button" class="btn-primary" style="font-size: 11.5px; padding: 5px 12px; background: linear-gradient(135deg, #a855f7, #6366f1); border-color: #9333ea; font-weight: 700; white-space: nowrap;" onclick="createSingleViralReel(${index})" title="Create this single 9:16 vertical reel">
+                        <i class="fa-solid fa-scissors"></i> Create This Reel
+                    </button>
+                </div>
+
+                <div style="font-weight: 800; font-size: 14.5px; color: #fff; line-height: 1.35; margin-top: 4px;">
+                    ${escapeHtml(m.headline || "Viral Moment")}
+                </div>
+
+                ${m.hook ? `
+                    <div class="viral-hook-quote" style="font-size: 12.5px; padding: 6px 10px;">
+                        "${escapeHtml(m.hook)}"
+                    </div>
+                ` : ""}
+
+                <div class="viral-reason-text">
+                    <i class="fa-solid fa-lightbulb" style="color: #facc15;"></i>
+                    <span><strong>Why it works:</strong> ${escapeHtml(m.reason || "Strong curiosity hook with clear retention payoff.")}</span>
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+async function submitViralJob() {
+    const urlInput = document.getElementById("urlInput");
+    const url = urlInput ? urlInput.value.trim() : "";
+    if (!url) {
+        showToast("Please enter a valid YouTube video URL first", "warning");
+        if (urlInput) urlInput.focus();
+        return;
+    }
+
+    const viralMaxClips = parseInt(document.getElementById("viralMaxClips")?.value || "5", 10);
+    const viralDuration = parseInt(document.getElementById("viralClipLength")?.value || "45", 10);
+    const showHeadline = document.getElementById("viralShowHeadline")?.checked ?? true;
+    const keepSource = document.getElementById("viralKeepSource")?.checked ?? true;
+
+    const payload = {
+        url: url,
+        title: "Viral Highlights",
+        count: viralMaxClips,
+        max_clips: viralMaxClips,
+        clip_length: viralDuration,
+        aspect_ratio: "9:16",
+        background_style: state.selectedStyle || "blur",
+        show_title: showHeadline,
+        show_parts: false,
+        keep_source: keepSource,
+        slicing_mode: "ai_viral",
+        is_preview: false,
+    };
+
+    if (viralState.moments && viralState.moments.length > 0) {
+        payload.moments = viralState.moments.slice(0, viralMaxClips);
+    }
+
+    try {
+        const submitBtn = document.getElementById("submitViralBtn");
+        if (submitBtn) submitBtn.disabled = true;
+
+        showProgressCard(true);
+        updateProgressUI(5, "queued", "Dispatched AI Viral Moment generator to background server...");
+
+        const res = await apiRequest("/api/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || "Failed to start viral generation job");
+        }
+
+        const jobId = data.job_id || data.id;
+        state.activeJobId = jobId;
+        localStorage.setItem("clipforge_active_job", jobId);
+
+        showToast("AI Viral Reels job dispatched! Groq Whisper & LLM running in background...", "success");
+        pollJob(jobId);
+        loadJobsList();
+        switchView("jobs");
+
+    } catch (err) {
+        console.error("Submit viral job error:", err);
+        showToast(err.message || "Failed to submit viral job", "error");
+    } finally {
+        const submitBtn = document.getElementById("submitViralBtn");
+        if (submitBtn) submitBtn.disabled = false;
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -4014,5 +4251,291 @@ function pollSubtitleJob(jobId, ctx) {
             }
         }, 1200);
     });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AI VIRAL MOMENT DETECTOR (OPUS CLIP ENGINE)
+// ──────────────────────────────────────────────────────────────────────────────
+
+const viralState = {
+    url: "",
+    sourceFile: "",
+    videoTitle: "",
+    duration: 0,
+    moments: [],
+    isLoading: false,
+};
+
+function openViralMomentsModal(sourceFile = null, url = null) {
+    const urlInput = document.getElementById("urlInput");
+    const currentUrl = url || (urlInput ? urlInput.value.trim() : "");
+    const currentSource = sourceFile || "";
+
+    if (!currentUrl && !currentSource) {
+        showToast("Please paste a YouTube URL first or pick a downloaded video.", "warning");
+        if (urlInput) urlInput.focus();
+        return;
+    }
+
+    viralState.url = currentUrl;
+    viralState.sourceFile = currentSource;
+    viralState.moments = [];
+
+    const modal = document.getElementById("viralMomentsModal");
+    const titleEl = document.getElementById("viralSourceTitle");
+    const metaEl = document.getElementById("viralSourceMeta");
+    const container = document.getElementById("viralMomentsListContainer");
+    const errBanner = document.getElementById("viralErrorBanner");
+
+    if (titleEl) {
+        titleEl.textContent = currentSource ? PathBasename(currentSource) : (currentUrl || "YouTube Video Source");
+    }
+    if (metaEl) metaEl.textContent = "Analyzing audio & psychological retention hooks...";
+    if (container) container.innerHTML = "";
+    if (errBanner) errBanner.style.display = "none";
+
+    if (modal) modal.classList.add("active");
+
+    runViralMomentDetection(false);
+}
+
+function closeViralMomentsModal() {
+    const modal = document.getElementById("viralMomentsModal");
+    if (modal) modal.classList.remove("active");
+}
+
+async function runViralMomentDetection(forceRefresh = false) {
+    if (viralState.isLoading) return;
+    viralState.isLoading = true;
+
+    const loadingState = document.getElementById("viralLoadingState");
+    const container = document.getElementById("viralMomentsListContainer");
+    const errBanner = document.getElementById("viralErrorBanner");
+    const titleEl = document.getElementById("viralSourceTitle");
+    const metaEl = document.getElementById("viralSourceMeta");
+    const countBadge = document.getElementById("viralCountBadge");
+    const stepTitle = document.getElementById("viralLoadingStepTitle");
+    const stepDesc = document.getElementById("viralLoadingStepDesc");
+
+    if (loadingState) loadingState.style.display = "block";
+    if (container) container.style.display = "none";
+    if (errBanner) errBanner.style.display = "none";
+    if (countBadge) countBadge.textContent = "0";
+
+    if (stepTitle) stepTitle.textContent = "Transcribing with Groq Whisper & Scoring Hooks...";
+    if (stepDesc) stepDesc.textContent = "Extracting audio transcript and analyzing curiosity gaps, punchlines, and retention with Llama 3.3 70B (100% Free)...";
+
+    try {
+        const res = await apiRequest("/api/viral-moments/detect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                url: viralState.url,
+                source_file: viralState.sourceFile,
+                max_moments: 5
+            })
+        });
+
+        if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.detail || "Failed to detect viral moments");
+        }
+
+        const data = await res.json();
+        viralState.moments = Array.isArray(data.moments) ? data.moments : [];
+        viralState.videoTitle = data.video_title || viralState.url;
+        viralState.duration = data.duration || 0;
+
+        if (titleEl) titleEl.textContent = viralState.videoTitle;
+        if (metaEl) {
+            const mins = Math.floor(viralState.duration / 60);
+            const secs = Math.floor(viralState.duration % 60);
+            metaEl.textContent = `Duration: ${mins}:${secs.toString().padStart(2, "0")} • Found ${viralState.moments.length} viral hooks`;
+        }
+
+        if (countBadge) countBadge.textContent = viralState.moments.length;
+
+        renderViralMomentsList();
+
+    } catch (err) {
+        console.error("Viral detection error:", err);
+        if (errBanner) {
+            errBanner.style.display = "block";
+            errBanner.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> <strong>Detection Error:</strong> ${escapeHtml(err.message)}`;
+        }
+    } finally {
+        viralState.isLoading = false;
+        if (loadingState) loadingState.style.display = "none";
+        if (container) container.style.display = "flex";
+    }
+}
+
+function renderViralMomentsList() {
+    const container = document.getElementById("viralMomentsListContainer");
+    if (!container) return;
+
+    if (viralState.moments.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: 40px 10px; color: var(--text-dim);">
+                <i class="fa-solid fa-face-meh" style="font-size: 32px; opacity: 0.5; margin-bottom: 8px;"></i>
+                <p style="font-size: 13.5px;">No clear viral moments detected in this video length. Try a longer video or custom slice range.</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = viralState.moments.map((m, index) => {
+        const score = m.virality_score || 85;
+        const isHigh = score >= 90;
+        const scoreClass = isHigh ? "high" : "medium";
+        const scoreIcon = isHigh ? '<i class="fa-solid fa-fire" style="color: #4ade80;"></i>' : '<i class="fa-solid fa-bolt" style="color: #fbbf24;"></i>';
+
+        return `
+            <div class="viral-moment-card" data-index="${index}">
+                <div class="viral-moment-header">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <span class="virality-score-badge ${scoreClass}">
+                            ${scoreIcon} ${score}/100 VIRAL
+                        </span>
+                        <span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); font-size: 11px;">
+                            ${escapeHtml(m.category || "Viral Hook")}
+                        </span>
+                        <span class="viral-timing-badge">
+                            <i class="fa-regular fa-clock"></i> ${escapeHtml(m.timestamp_display || `${m.duration}s`)}
+                        </span>
+                    </div>
+                    <button type="button" class="btn-primary" style="font-size: 11.5px; padding: 6px 14px; background: linear-gradient(135deg, #a855f7, #6366f1); border-color: #9333ea; font-weight: 700; white-space: nowrap;" onclick="createSingleViralReel(${index})" title="Create this 9:16 vertical reel">
+                        <i class="fa-solid fa-scissors"></i> Create This Reel
+                    </button>
+                </div>
+
+                <div style="font-weight: 800; font-size: 15px; color: #fff; line-height: 1.35; margin-top: 2px;">
+                    ${escapeHtml(m.headline || "Viral Moment")}
+                </div>
+
+                ${m.hook ? `
+                    <div class="viral-hook-quote">
+                        "${escapeHtml(m.hook)}"
+                    </div>
+                ` : ""}
+
+                <div class="viral-reason-text">
+                    <i class="fa-solid fa-lightbulb" style="color: #facc15;"></i>
+                    <span><strong>Why it works:</strong> ${escapeHtml(m.reason || "Strong psychological curiosity gap with fast retention payoff.")}</span>
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+function PathBasename(p) {
+    if (!p) return "";
+    return p.replace(/\\/g, "/").split("/").pop();
+}
+
+async function createSingleViralReel(index) {
+    const m = viralState.moments[index];
+    if (!m) return;
+
+    showToast(`Queuing reel: "${m.headline}" (${m.duration}s)...`, "info");
+
+    const urlInput = document.getElementById("urlInput");
+    const currentUrl = viralState.url || (urlInput ? urlInput.value.trim() : "");
+
+    const payload = {
+        url: currentUrl,
+        source_file: viralState.sourceFile,
+        title: m.headline,
+        start_seconds: Math.floor(m.start_time),
+        end_seconds: Math.ceil(m.end_time),
+        clip_length: Math.ceil(m.duration),
+        moments: [m],
+        slicing_mode: "ai_viral",
+        count: 1,
+        is_preview: false,
+        background_style: state.selectedStyle || "blur",
+        show_title: true,
+        show_parts: false
+    };
+
+    try {
+        const res = await apiRequest("/api/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Failed to create reel");
+        }
+
+        closeViralMomentsModal();
+        switchView("jobs");
+        showToast(`Started rendering 9:16 vertical reel for "${m.headline}"!`, "success");
+        loadJobs();
+
+    } catch (err) {
+        console.error("Create viral reel error:", err);
+        alert(`Failed to create reel: ${err.message}`);
+    }
+}
+
+async function createAllViralMomentsClips() {
+    if (viralState.moments.length === 0) {
+        alert("No viral moments to create.");
+        return;
+    }
+
+    const confirmed = confirm(
+        `Create all ${viralState.moments.length} detected viral reels in the background?\n\nEach clip will be rendered in 9:16 vertical format with its unique viral title stamp.`
+    );
+    if (!confirmed) return;
+
+    const btn = document.getElementById("createAllViralBtn");
+    const btnText = document.getElementById("createAllViralText");
+    if (btn) btn.disabled = true;
+    if (btnText) btnText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Queuing Batch...';
+
+    const urlInput = document.getElementById("urlInput");
+    const currentUrl = viralState.url || (urlInput ? urlInput.value.trim() : "");
+
+    const payload = {
+        url: currentUrl,
+        source_file: viralState.sourceFile,
+        title: viralState.videoTitle || "Viral Highlights",
+        max_clips: viralState.moments.length,
+        count: viralState.moments.length,
+        moments: viralState.moments,
+        slicing_mode: "ai_viral",
+        background_style: state.selectedStyle || "blur",
+        show_title: true,
+        show_parts: false
+    };
+
+    try {
+        const res = await apiRequest("/api/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Failed to queue viral clips batch");
+        }
+
+        closeViralMomentsModal();
+        switchView("jobs");
+        showToast(`Queued all ${viralState.moments.length} viral reels for background rendering!`, "success");
+        loadJobs();
+
+    } catch (err) {
+        console.error("Create all viral reels error:", err);
+        alert(`Failed to create viral reels batch: ${err.message}`);
+    } finally {
+        if (btn) btn.disabled = false;
+        if (btnText) btnText.innerHTML = `Create All Viral Reels (${viralState.moments.length})`;
+    }
 }
 

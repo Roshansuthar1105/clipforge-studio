@@ -167,148 +167,276 @@
                             </div>
                         </div>
 
-                        <!-- Slicing Parameters -->
-                        <div class="card-header" style="margin-top: 10px;">
-                            <div>
-                                <h3 class="card-title" style="font-size: 16px;"><i class="fa-solid fa-sliders" style="color: var(--primary);"></i> Clip Parameters & Presets</h3>
-                                <p class="card-subtitle">Choose clip duration, count, and frame styles.</p>
-                            </div>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group" style="flex: 1.5;">
-                                <label class="form-label">Clip Title Prefix</label>
-                                <input id="titleInput" class="form-input" type="text" value="My Best Highlights" placeholder="e.g. My Best Highlights or Episode part - {part}" required>
-                                <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">Supports <code>{part}</code> variable (e.g. <em>Highlights part - {part}</em>)</span>
-                            </div>
-
-                            <div class="form-group" style="flex: 1;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                    <label class="form-label" style="margin-bottom: 0;">Clip Length (Seconds)</label>
-                                    <div class="preset-chips">
-                                        <button type="button" class="preset-chip" onclick="setClipLengthPreset(15)">15s</button>
-                                        <button type="button" class="preset-chip active" onclick="setClipLengthPreset(30)">30s</button>
-                                        <button type="button" class="preset-chip" onclick="setClipLengthPreset(60)">60s</button>
-                                    </div>
-                                </div>
-                                <input id="clipLength" class="form-input" type="number" min="5" max="300" value="30">
-                            </div>
-
-                            <div class="form-group" style="flex: 1;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                    <label class="form-label" style="margin-bottom: 0;">Max Clips</label>
-                                    <div class="preset-chips">
-                                        <button type="button" class="preset-chip" onclick="setMaxClipsPreset(3)">3</button>
-                                        <button type="button" class="preset-chip active" onclick="setMaxClipsPreset(5)">5</button>
-                                        <button type="button" class="preset-chip" onclick="setMaxClipsPreset(10)">10</button>
-                                    </div>
-                                </div>
-                                <input id="maxClips" class="form-input" type="number" min="1" max="50" value="5">
-                            </div>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label class="form-label">Start Time (Seconds, 0 = Video Beginning)</label>
-                                <input id="startTime" class="form-input" type="number" min="0" value="0">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">End Time (Optional Seconds, empty = Full Video)</label>
-                                <input id="endTime" class="form-input" type="number" min="1" placeholder="Whole video">
-                            </div>
-                        </div>
-
-                        <!-- 9:16 Background Style Selection -->
-                        <div class="form-group" style="margin-top: 10px;">
-                            <label class="form-label">Background Style (9:16 Vertical Reel)</label>
+                        <!-- Slicing Mode Selector: Option 1 vs Option 2 -->
+                        <div class="studio-engine-selector" style="margin: 16px 0 20px 0;">
+                            <label class="form-label" style="font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                                <i class="fa-solid fa-layer-group" style="color: var(--primary);"></i> Choose Generation Engine
+                            </label>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-                                <div id="styleBlur" class="card style-card active" onclick="selectStyle('blur')">
-                                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                                        <div style="font-weight: 700; color: #fff; font-size: 13.5px;"><i class="fa-solid fa-wand-magic-sparkles" style="color: var(--primary);"></i> Dual-Blur Background</div>
-                                        <span class="style-badge recommended">Recommended</span>
+                                <!-- Option 1: Sequential Parts -->
+                                <div id="modeCardParts" class="mode-select-card active" onclick="setStudioSlicingMode('parts')">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <div class="mode-radio-circle"><div class="mode-radio-inner"></div></div>
+                                            <span style="font-weight: 800; font-size: 14.5px; color: #fff;">Option 1: Clip into Parts</span>
+                                        </div>
+                                        <span class="badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.35); font-size: 10px; font-weight: 700;">Sequential</span>
                                     </div>
-                                    <p style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">Dynamic blurred 1080x1920 background with centered crisp video. Perfect for TikTok, Shorts, and Reels.</p>
+                                    <p style="font-size: 12px; color: var(--text-dim); margin: 0 0 0 26px; line-height: 1.4;">
+                                        Slice video into continuous sequential parts (e.g. Part 1, Part 2, Part 3) with custom duration and part stamps.
+                                    </p>
                                 </div>
-                                <div id="styleBlack" class="card style-card" onclick="selectStyle('black')">
-                                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                                        <div style="font-weight: 700; color: #fff; font-size: 13.5px;"><i class="fa-solid fa-square" style="color: var(--text-dim);"></i> Classic Letterbox</div>
-                                        <span class="style-badge">Standard</span>
+
+                                <!-- Option 2: AI Viral Moment Detection -->
+                                <div id="modeCardViral" class="mode-select-card" onclick="setStudioSlicingMode('viral')">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <div class="mode-radio-circle"><div class="mode-radio-inner"></div></div>
+                                            <span style="font-weight: 800; font-size: 14.5px; color: #fff;">Option 2: AI Viral Moments</span>
+                                        </div>
+                                        <span class="badge" style="background: rgba(168, 85, 247, 0.25); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); font-size: 10px; font-weight: 700;">Opus Clip AI (Free)</span>
                                     </div>
-                                    <p style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">Clean black top and bottom matte bars with video centered. Classic cinematic styling.</p>
+                                    <p style="font-size: 12px; color: var(--text-dim); margin: 0 0 0 26px; line-height: 1.4;">
+                                        AI analyzes full transcript to discover the highest-retention hooks & punchlines (scores 70-99). Auto-generates viral shorts.
+                                    </p>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Checkbox Overlays -->
-                        <div style="display: flex; gap: 24px; flex-wrap: wrap; margin: 18px 0 10px 0;">
-                            <label class="checkbox-label">
-                                <input id="showTitle" type="checkbox" checked onchange="toggleOverlayCustomizerVisibility()">
-                                <span>Show Title Overlay Banner</span>
-                            </label>
-                            <label class="checkbox-label">
-                                <input id="showParts" type="checkbox" checked onchange="toggleOverlayCustomizerVisibility()">
-                                <span>Show Part Numbers ("Part 1", "Part 2")</span>
-                            </label>
-                            <label class="checkbox-label">
-                                <input id="keepSource" type="checkbox" checked>
-                                <span>Cache Source Video on Server (for instant re-slicing)</span>
-                            </label>
-                        </div>
-
-                        <!-- Adjustable Title & Part Customizer Drawer (Before Creation) -->
-                        <div id="overlaySettingsDrawer" class="overlay-settings-drawer" style="margin-bottom: 20px; background: rgba(15, 23, 42, 0.65); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px 16px;">
-                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; cursor: pointer;" onclick="toggleOverlaySettingsAccordion()">
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                    <i class="fa-solid fa-pen-ruler" style="color: var(--primary);"></i>
-                                    <span style="font-size: 13px; font-weight: 700; color: #fff;">Adjust Title & Part Text Appearance Before Creation</span>
-                                </div>
-                                <span id="overlayDrawerChevron" style="font-size: 12px; color: var(--text-dim); transition: transform 0.2s ease;"><i class="fa-solid fa-chevron-down"></i></span>
-                            </div>
-                            <div id="overlaySettingsBody">
-                                <div class="form-row" style="margin-bottom: 12px;">
-                                    <div class="form-group" style="flex: 1;">
-                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                            <label class="form-label" style="margin-bottom: 0;">Title Vertical Position: <span id="titleYVal">180</span>px</label>
-                                            <span style="font-size: 11px; color: var(--text-dim);">Top Safe Zone</span>
-                                        </div>
-                                        <input id="titleYInput" class="form-input" type="range" min="80" max="600" value="180" oninput="document.getElementById('titleYVal').textContent=this.value">
-                                    </div>
-                                    <div class="form-group" style="flex: 1;">
-                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                            <label class="form-label" style="margin-bottom: 0;">Title Font Size: <span id="titleFontSizeVal">48</span>px</label>
-                                            <span style="font-size: 11px; color: var(--text-dim);">Reels Standard</span>
-                                        </div>
-                                        <input id="titleFontSizeInput" class="form-input" type="range" min="28" max="72" value="48" oninput="document.getElementById('titleFontSizeVal').textContent=this.value">
-                                    </div>
-                                </div>
-                                <div class="form-row">
-                                    <div class="form-group" style="flex: 1.3;">
-                                        <label class="form-label">Part Format Template</label>
-                                        <input id="partFormatInput" class="form-input" type="text" value="Part {part}" placeholder="e.g. Part {part}, Pt. {part}, EP {part}">
-                                        <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">Use <code>{part}</code> to automatically insert clip numbers (e.g. <em>Part 1, Part 2</em>)</span>
-                                    </div>
-                                    <div class="form-group" style="flex: 1;">
-                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                            <label class="form-label" style="margin-bottom: 0;">Part Font Size: <span id="partFontSizeVal">34</span>px</label>
-                                        </div>
-                                        <input id="partFontSizeInput" class="form-input" type="range" min="20" max="56" value="34" oninput="document.getElementById('partFontSizeVal').textContent=this.value">
-                                    </div>
-                                    <div class="form-group" style="flex: 0.9;">
-                                        <label class="form-label">Part Y Position (px)</label>
-                                        <input id="partYInput" class="form-input" type="number" min="80" max="1800" placeholder="Auto (below title)">
-                                    </div>
+                        <!-- ==============================================================
+                             OPTION 1 PANEL: SEQUENTIAL PART SLICING (CURRENT FLOW)
+                             ============================================================== -->
+                        <div id="panelOptionParts" class="studio-mode-panel active">
+                            <div class="card-header" style="margin-top: 10px;">
+                                <div>
+                                    <h3 class="card-title" style="font-size: 16px;"><i class="fa-solid fa-sliders" style="color: var(--primary);"></i> Option 1: Sequential Part Slicing</h3>
+                                    <p class="card-subtitle">Choose clip duration, count, and frame styles for continuous sequential parts.</p>
                                 </div>
                             </div>
+
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 1.5;">
+                                    <label class="form-label">Clip Title Prefix</label>
+                                    <input id="titleInput" class="form-input" type="text" value="My Best Highlights" placeholder="e.g. My Best Highlights or Episode part - {part}" required>
+                                    <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">Supports <code>{part}</code> variable (e.g. <em>Highlights part - {part}</em>)</span>
+                                </div>
+
+                                <div class="form-group" style="flex: 1;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                        <label class="form-label" style="margin-bottom: 0;">Clip Length (Seconds)</label>
+                                        <div class="preset-chips">
+                                            <button type="button" class="preset-chip" onclick="setClipLengthPreset(15)">15s</button>
+                                            <button type="button" class="preset-chip active" onclick="setClipLengthPreset(30)">30s</button>
+                                            <button type="button" class="preset-chip" onclick="setClipLengthPreset(60)">60s</button>
+                                        </div>
+                                    </div>
+                                    <input id="clipLength" class="form-input" type="number" min="5" max="300" value="30">
+                                </div>
+
+                                <div class="form-group" style="flex: 1;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                        <label class="form-label" style="margin-bottom: 0;">Max Clips</label>
+                                        <div class="preset-chips">
+                                            <button type="button" class="preset-chip" onclick="setMaxClipsPreset(3)">3</button>
+                                            <button type="button" class="preset-chip active" onclick="setMaxClipsPreset(5)">5</button>
+                                            <button type="button" class="preset-chip" onclick="setMaxClipsPreset(10)">10</button>
+                                        </div>
+                                    </div>
+                                    <input id="maxClips" class="form-input" type="number" min="1" max="50" value="5">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Start Time (Seconds, 0 = Video Beginning)</label>
+                                    <input id="startTime" class="form-input" type="number" min="0" value="0">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">End Time (Optional Seconds, empty = Full Video)</label>
+                                    <input id="endTime" class="form-input" type="number" min="1" placeholder="Whole video">
+                                </div>
+                            </div>
+
+                            <!-- 9:16 Background Style Selection -->
+                            <div class="form-group" style="margin-top: 10px;">
+                                <label class="form-label">Background Style (9:16 Vertical Reel)</label>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                                    <div id="styleBlur" class="card style-card active" onclick="selectStyle('blur')">
+                                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                                            <div style="font-weight: 700; color: #fff; font-size: 13.5px;"><i class="fa-solid fa-wand-magic-sparkles" style="color: var(--primary);"></i> Dual-Blur Background</div>
+                                            <span class="style-badge recommended">Recommended</span>
+                                        </div>
+                                        <p style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">Dynamic blurred 1080x1920 background with centered crisp video. Perfect for TikTok, Shorts, and Reels.</p>
+                                    </div>
+                                    <div id="styleBlack" class="card style-card" onclick="selectStyle('black')">
+                                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                                            <div style="font-weight: 700; color: #fff; font-size: 13.5px;"><i class="fa-solid fa-square" style="color: var(--text-dim);"></i> Classic Letterbox</div>
+                                            <span class="style-badge">Standard</span>
+                                        </div>
+                                        <p style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">Clean black top and bottom matte bars with video centered. Classic cinematic styling.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Checkbox Overlays -->
+                            <div style="display: flex; gap: 24px; flex-wrap: wrap; margin: 18px 0 10px 0;">
+                                <label class="checkbox-label">
+                                    <input id="showTitle" type="checkbox" checked onchange="toggleOverlayCustomizerVisibility()">
+                                    <span>Show Title Overlay Banner</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input id="showParts" type="checkbox" checked onchange="toggleOverlayCustomizerVisibility()">
+                                    <span>Show Part Numbers ("Part 1", "Part 2")</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input id="keepSource" type="checkbox" checked>
+                                    <span>Cache Source Video on Server (for instant re-slicing)</span>
+                                </label>
+                            </div>
+
+                            <!-- Adjustable Title & Part Customizer Drawer (Before Creation) -->
+                            <div id="overlaySettingsDrawer" class="overlay-settings-drawer" style="margin-bottom: 20px; background: rgba(15, 23, 42, 0.65); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px 16px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; cursor: pointer;" onclick="toggleOverlaySettingsAccordion()">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <i class="fa-solid fa-pen-ruler" style="color: var(--primary);"></i>
+                                        <span style="font-size: 13px; font-weight: 700; color: #fff;">Adjust Title & Part Text Appearance Before Creation</span>
+                                    </div>
+                                    <span id="overlayDrawerChevron" style="font-size: 12px; color: var(--text-dim); transition: transform 0.2s ease;"><i class="fa-solid fa-chevron-down"></i></span>
+                                </div>
+                                <div id="overlaySettingsBody">
+                                    <div class="form-row" style="margin-bottom: 12px;">
+                                        <div class="form-group" style="flex: 1;">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                                <label class="form-label" style="margin-bottom: 0;">Title Vertical Position: <span id="titleYVal">180</span>px</label>
+                                                <span style="font-size: 11px; color: var(--text-dim);">Top Safe Zone</span>
+                                            </div>
+                                            <input id="titleYInput" class="form-input" type="range" min="80" max="600" value="180" oninput="document.getElementById('titleYVal').textContent=this.value">
+                                        </div>
+                                        <div class="form-group" style="flex: 1;">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                                <label class="form-label" style="margin-bottom: 0;">Title Font Size: <span id="titleFontSizeVal">48</span>px</label>
+                                                <span style="font-size: 11px; color: var(--text-dim);">Reels Standard</span>
+                                            </div>
+                                            <input id="titleFontSizeInput" class="form-input" type="range" min="28" max="72" value="48" oninput="document.getElementById('titleFontSizeVal').textContent=this.value">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group" style="flex: 1.3;">
+                                            <label class="form-label">Part Format Template</label>
+                                            <input id="partFormatInput" class="form-input" type="text" value="Part {part}" placeholder="e.g. Part {part}, Pt. {part}, EP {part}">
+                                            <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">Use <code>{part}</code> to automatically insert clip numbers (e.g. <em>Part 1, Part 2</em>)</span>
+                                        </div>
+                                        <div class="form-group" style="flex: 1;">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                                <label class="form-label" style="margin-bottom: 0;">Part Font Size: <span id="partFontSizeVal">34</span>px</label>
+                                            </div>
+                                            <input id="partFontSizeInput" class="form-input" type="range" min="20" max="56" value="34" oninput="document.getElementById('partFontSizeVal').textContent=this.value">
+                                        </div>
+                                        <div class="form-group" style="flex: 0.9;">
+                                            <label class="form-label">Part Y Position (px)</label>
+                                            <input id="partYInput" class="form-input" type="number" min="80" max="1800" placeholder="Auto (below title)">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Option 1 Action Submit Buttons -->
+                            <div style="display: flex; gap: 14px; margin-top: 10px;">
+                                <button id="previewBtn" type="button" class="btn-secondary" style="flex: 1;" onclick="submitJob(true)">
+                                    <i class="fa-solid fa-eye"></i> Quick Preview (1 Clip)
+                                </button>
+                                <button id="submitBtn" type="submit" class="btn-primary" style="flex: 2;">
+                                    <i class="fa-solid fa-play"></i> Create All Part Clips (Background Server Process)
+                                </button>
+                            </div>
                         </div>
 
-                        <!-- Action Submit Buttons -->
-                        <div style="display: flex; gap: 14px; margin-top: 10px;">
-                            <button id="previewBtn" type="button" class="btn-secondary" style="flex: 1;" onclick="submitJob(true)">
-                                <i class="fa-solid fa-eye"></i> Quick Preview (1 Clip)
-                            </button>
-                            <button id="submitBtn" type="submit" class="btn-primary" style="flex: 2;">
-                                <i class="fa-solid fa-play"></i> Create All Clips (Background Server Process)
-                            </button>
+                        <!-- ==============================================================
+                             OPTION 2 PANEL: AI VIRAL MOMENT DETECTION (OPUS CLIP ENGINE)
+                             ============================================================== -->
+                        <div id="panelOptionViral" class="studio-mode-panel" style="display: none;">
+                            <div class="card-header" style="margin-top: 10px;">
+                                <div>
+                                    <h3 class="card-title" style="font-size: 16px;"><i class="fa-solid fa-wand-magic-sparkles" style="color: #c084fc;"></i> Option 2: AI Viral Moment Detection (Opus Clip)</h3>
+                                    <p class="card-subtitle">100% Free: Groq Whisper transcribes speech & Llama 3.3 scores high-retention viral moments (70–99 virality score).</p>
+                                </div>
+                            </div>
+
+                            <!-- Viral Parameters -->
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 1;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                        <label class="form-label" style="margin-bottom: 0;">Max Viral Reels</label>
+                                        <div class="preset-chips">
+                                            <button type="button" class="preset-chip viral-clips-preset" data-val="3" onclick="setViralMaxClipsPreset(3)">3 Reels</button>
+                                            <button type="button" class="preset-chip viral-clips-preset active" data-val="5" onclick="setViralMaxClipsPreset(5)">5 Reels</button>
+                                            <button type="button" class="preset-chip viral-clips-preset" data-val="10" onclick="setViralMaxClipsPreset(10)">10 Reels</button>
+                                        </div>
+                                    </div>
+                                    <input id="viralMaxClips" class="form-input" type="number" min="1" max="20" value="5">
+                                </div>
+
+                                <div class="form-group" style="flex: 1;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                        <label class="form-label" style="margin-bottom: 0;">Target Duration (Seconds)</label>
+                                        <div class="preset-chips">
+                                            <button type="button" class="preset-chip viral-dur-preset" data-val="30" onclick="setViralDurationPreset(30)">30s</button>
+                                            <button type="button" class="preset-chip viral-dur-preset active" data-val="45" onclick="setViralDurationPreset(45)">45s</button>
+                                            <button type="button" class="preset-chip viral-dur-preset" data-val="60" onclick="setViralDurationPreset(60)">60s</button>
+                                        </div>
+                                    </div>
+                                    <input id="viralClipLength" class="form-input" type="number" min="15" max="90" value="45">
+                                </div>
+                            </div>
+
+                            <!-- Checkbox Options for Viral Generation -->
+                            <div style="display: flex; gap: 24px; flex-wrap: wrap; margin: 14px 0 16px 0;">
+                                <label class="checkbox-label">
+                                    <input id="viralShowHeadline" type="checkbox" checked>
+                                    <span>Overlay Click-Worthy AI Viral Headline on Video</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input id="viralKeepSource" type="checkbox" checked>
+                                    <span>Cache Source Video on Server (for instant re-slicing)</span>
+                                </label>
+                            </div>
+
+                            <!-- In-Studio Viral Scanner Banner & Live Preview -->
+                            <div style="margin-bottom: 18px; background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.28); border-radius: var(--radius-sm); padding: 12px 16px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <i class="fa-solid fa-sparkles" style="color: #c084fc; font-size: 18px;"></i>
+                                        <div>
+                                            <div style="font-size: 13.5px; font-weight: 700; color: #fff;">Preview & Review Viral Hooks Before Rendering</div>
+                                            <div style="font-size: 11.5px; color: var(--text-dim);">Scan audio now to inspect hooks, virality scores, and reasoning.</div>
+                                        </div>
+                                    </div>
+                                    <button id="scanViralStudioBtn" type="button" class="btn-secondary" style="font-size: 12px; padding: 7px 14px; font-weight: 700;" onclick="scanViralMomentsInStudio()">
+                                        <i class="fa-solid fa-wand-magic-sparkles" style="color: #c084fc;"></i> Scan & Preview Moments
+                                    </button>
+                                </div>
+
+                                <!-- Loading state for in-studio scan -->
+                                <div id="viralStudioLoadingState" style="display: none; padding: 24px 10px; text-align: center;">
+                                    <i class="fa-solid fa-wand-magic-sparkles fa-bounce" style="font-size: 28px; color: #c084fc; margin-bottom: 8px;"></i>
+                                    <div style="color: #fff; font-size: 13.5px; font-weight: 700;">Transcribing with Groq Whisper & Scoring Hooks with AI...</div>
+                                    <div style="color: var(--text-dim); font-size: 11.5px; margin-top: 3px;">Identifying high-retention psychological triggers (100% Free)...</div>
+                                </div>
+
+                                <!-- Dynamically populated list of moments cards right inside Studio -->
+                                <div id="viralStudioMomentsList" style="display: none; margin-top: 14px; display: flex; flex-direction: column; gap: 10px;">
+                                </div>
+                            </div>
+
+                            <!-- Option 2 Action Submit Buttons -->
+                            <div style="display: flex; gap: 14px; margin-top: 10px;">
+                                <button type="button" class="btn-secondary" style="flex: 1;" onclick="openViralMomentsModal()">
+                                    <i class="fa-solid fa-expand"></i> Open Viral Studio Modal
+                                </button>
+                                <button id="submitViralBtn" type="button" class="btn-primary" style="flex: 2; background: linear-gradient(135deg, #a855f7, #6366f1); border-color: #9333ea; font-weight: 800; box-shadow: 0 4px 16px rgba(168, 85, 247, 0.4);" onclick="submitViralJob()">
+                                    <i class="fa-solid fa-bolt"></i> Generate All AI Viral Reels (Background Server Process)
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </form>
@@ -1220,6 +1348,77 @@
                     <div id="subGroupProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #6366f1, #a855f7); transition: width 0.3s ease;"></div>
                 </div>
                 <span id="subGroupProgressPercent" style="font-size: 13px; font-weight: 700; color: #a5b4fc; font-family: monospace;">0%</span>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ==================================================================
+         MODAL 6: AI VIRAL MOMENTS STUDIO (Opus Clip Engine)
+         ================================================================== -->
+    <div id="viralMomentsModal" class="modal-overlay" onclick="closeViralMomentsModal()">
+        <div class="modal-card viral-moments-modal" onclick="event.stopPropagation()">
+            <div class="sub-studio-header">
+                <div>
+                    <h3 style="color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                        <i class="fa-solid fa-wand-magic-sparkles" style="color: #c084fc;"></i> AI Viral Moment Detector (Opus Clip Engine)
+                    </h3>
+                    <p style="font-size: 12px; color: var(--text-dim); margin-top: 3px;">
+                        Groq Whisper + Llama 3.3 70B: Identifies the top high-retention hooks and punchlines (100% Free).
+                    </p>
+                </div>
+                <button class="modal-close-btn" onclick="closeViralMomentsModal()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <!-- Video Info / Source Header -->
+            <div id="viralSourceInfoBar" style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+                    <i class="fa-solid fa-video" style="color: var(--primary); font-size: 16px;"></i>
+                    <div style="min-width: 0;">
+                        <div id="viralSourceTitle" style="color: #fff; font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Source Video Title</div>
+                        <div id="viralSourceMeta" style="color: var(--text-dim); font-size: 11px;">Duration: --:--</div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button type="button" class="btn-secondary" style="font-size: 11.5px; padding: 5px 10px;" onclick="runViralMomentDetection(true)" title="Re-analyze with AI">
+                        <i class="fa-solid fa-rotate"></i> Re-Scan
+                    </button>
+                </div>
+            </div>
+
+            <!-- Loading Spinner & Step Progress -->
+            <div id="viralLoadingState" style="display: none; padding: 40px 20px; text-align: center;">
+                <div style="font-size: 38px; color: #c084fc; margin-bottom: 14px;">
+                    <i class="fa-solid fa-wand-magic-sparkles fa-bounce"></i>
+                </div>
+                <h4 id="viralLoadingStepTitle" style="color: #fff; font-size: 16px; font-weight: 700; margin-bottom: 6px;">Analyzing Video for Viral Hooks...</h4>
+                <p id="viralLoadingStepDesc" style="color: var(--text-dim); font-size: 12.5px; max-width: 440px; margin: 0 auto 16px auto;">
+                    Transcribing audio with Whisper and scoring psychological retention triggers with Llama 3.3 70B...
+                </p>
+                <div style="width: 240px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 999px; overflow: hidden; margin: 0 auto;">
+                    <div style="width: 100%; height: 100%; background: linear-gradient(90deg, #a855f7, #6366f1); animation: shimmer 1.5s infinite linear;"></div>
+                </div>
+            </div>
+
+            <!-- Empty / Error Banner -->
+            <div id="viralErrorBanner" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #fca5a5; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 12.5px; margin-bottom: 12px;"></div>
+
+            <!-- Moments Cards Container -->
+            <div id="viralMomentsListContainer" class="viral-moments-list" style="display: flex; flex-direction: column; gap: 12px; max-height: 480px; overflow-y: auto; padding-right: 4px;">
+                <!-- Populated dynamically with viral moment cards -->
+            </div>
+
+            <!-- Footer Action Bar -->
+            <div class="sub-studio-footer" style="margin-top: 18px;">
+                <div style="font-size: 12px; color: var(--text-dim);">
+                    <i class="fa-solid fa-circle-check" style="color: #22c55e;"></i> Moments are auto-formatted into 9:16 reels with title stamps & active spoken word tracking.
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" class="btn-secondary" onclick="closeViralMomentsModal()">Close</button>
+                    <button id="createAllViralBtn" type="button" class="btn-primary" style="background: linear-gradient(135deg, #a855f7, #6366f1); border-color: #9333ea;" onclick="createAllViralMomentsClips()">
+                        <i class="fa-solid fa-play"></i> <span id="createAllViralText">Create All Viral Reels (<span id="viralCountBadge">0</span>)</span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>

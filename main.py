@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, urlunparse, quote, unquote
 import urllib.parse
 
 import yt_dlp
-from typing import Optional, Any, Callable
+from typing import Optional, Any, Callable, List, Dict
 import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -54,6 +54,7 @@ from routers.accounts_router import router as accounts_router
 from routers.publish_router import router as publish_router
 from routers.meta_publish_router import router as meta_publish_router
 from routers.subtitles_router import router as subtitles_router
+from routers.viral_router import router as viral_router
 
 app = FastAPI(title="ClipForge Studio")
 
@@ -108,6 +109,7 @@ app.include_router(accounts_router)
 app.include_router(publish_router)
 app.include_router(meta_publish_router)
 app.include_router(subtitles_router)
+app.include_router(viral_router)
 
 app.mount(
     "/static",
@@ -169,6 +171,10 @@ class ClipRequest(BaseModel):
 
     # When True, generate only the first clip (fast preview / test render).
     is_preview: bool = False
+
+    # AI Viral Moments Integration (Auto-Opus Clip)
+    slicing_mode: str = "fixed"  # "fixed" or "ai_viral"
+    moments: Optional[List[Dict[str, Any]]] = None
 
     def model_post_init(self, __context):
         if self.count is not None:
@@ -782,7 +788,38 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
 
         available_seconds = end - start
 
-        if request.is_preview:
+        # Check if AI Viral Moments mode or explicit moments provided
+        eff_video_id = video_id if "video_id" in locals() and video_id else (source_path.stem if source_path else "")
+        active_moments = None
+
+        if request.moments and len(request.moments) > 0:
+            active_moments = request.moments
+        elif getattr(request, "slicing_mode", "fixed") == "ai_viral" and source_path:
+            update_job(
+                job_id,
+                status="processing",
+                progress=36,
+                message="AI detecting viral hooks & retention moments with Groq Llama 3.3...",
+                files=[],
+            )
+            try:
+                from services.viral_moment_service import detect_viral_moments_for_video
+                viral_res = detect_viral_moments_for_video(
+                    source_path,
+                    video_id=eff_video_id,
+                    max_moments=request.max_clips
+                )
+                active_moments = viral_res.get("moments", [])
+                logger.info("Auto-detected %d viral moments for job %s", len(active_moments), job_id)
+            except Exception as v_err:
+                logger.warning("Auto viral moment detection failed, falling back to interval slicing: %s", v_err)
+                active_moments = None
+
+        if active_moments:
+            count = min(len(active_moments), request.max_clips if request.max_clips else len(active_moments))
+            if request.is_preview:
+                count = 1
+        elif request.is_preview:
             # Preview mode: render only the very first clip
             count = 1
         else:
@@ -816,18 +853,22 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 update_job(job_id, status="cancelled", message="Job cancelled by user", files=created_files)
                 return
 
-            clip_start = start + index * request.clip_length
+            current_moment = active_moments[index] if active_moments and index < len(active_moments) else None
 
-            if clip_start >= end:
-                break
-
-            clip_duration = min(
-                request.clip_length,
-                end - clip_start,
-            )
-
-            # Resolve title & part texts
-            raw_title = (request.title or "").strip()
+            if current_moment:
+                clip_start = float(current_moment.get("start_time", start))
+                clip_end_val = float(current_moment.get("end_time", clip_start + request.clip_length))
+                clip_duration = min(clip_end_val - clip_start, 180.0)
+                raw_title = str(current_moment.get("headline") or request.title or "Viral Clip").strip()
+            else:
+                clip_start = start + index * request.clip_length
+                if clip_start >= end:
+                    break
+                clip_duration = min(
+                    request.clip_length,
+                    end - clip_start,
+                )
+                raw_title = (request.title or "").strip()
             # Support {part} placeholder in title (e.g. "My Video part - {part}")
             has_part_in_title = bool(re.search(r"\{part\}", raw_title, re.IGNORECASE))
             if has_part_in_title:
@@ -841,15 +882,20 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             part_format_template = getattr(request, "part_format", None) or "Part {part}"
             if has_part_in_title:
                 part = ""
-            elif request.show_parts:
+            elif request.show_parts and not current_moment:
                 part = part_format_template.replace("{part}", str(index + 1))
+            elif request.show_parts and current_moment:
+                part = f"Viral #{index + 1}"
             else:
                 part = ""
 
             stem_base = re.sub(r"[_\-\s]*\{part\}", "", raw_title, flags=re.IGNORECASE).strip()
             stem_base = re.sub(r"[_\-\s]+part[_\-\s]*$", "", stem_base, flags=re.IGNORECASE).strip()
             safe_stem = safe_name(stem_base or "clip")
-            filename = f"{safe_stem}_part_{index + 1}.mp4"
+            if current_moment:
+                filename = f"{safe_stem}_viral_{index + 1}.mp4"
+            else:
+                filename = f"{safe_stem}_part_{index + 1}.mp4"
             output_path = output_folder / filename
 
             # Calculate dynamic vertical positions & styles
@@ -1005,8 +1051,27 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     "clip_start": float(clip_start),
                     "clip_end": float(clip_start + clip_duration),
                     "duration": float(clip_duration),
+                    "viral_headline": current_moment.get("headline", "") if current_moment else "",
+                    "virality_score": current_moment.get("virality_score") if current_moment else None,
+                    "hook": current_moment.get("hook", "") if current_moment else "",
+                    "reason": current_moment.get("reason", "") if current_moment else "",
                 }
                 meta_path = output_path.with_name(f"{filename}.meta.json")
+
+                # Auto-slice parent transcript into clip subtitles if transcript already exists
+                try:
+                    from services.transcription_service import get_stored_transcript, slice_transcript_for_clip
+                    parent_tr = get_stored_transcript(eff_video_id)
+                    if parent_tr:
+                        cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
+                        if cues:
+                            sub_file = output_path.with_name(f"{filename}.subtitles.json")
+                            with open(sub_file, "w", encoding="utf-8") as sf:
+                                json.dump({"clip_name": filename, "cues": cues}, sf, indent=2, ensure_ascii=False)
+                            clip_meta["has_subtitles"] = True
+                except Exception as sub_err:
+                    logger.debug("Auto-slice subtitles for clip skipped: %s", sub_err)
+
                 with open(meta_path, "w", encoding="utf-8") as f_meta:
                     import json
                     json.dump(clip_meta, f_meta, indent=2)
@@ -1236,6 +1301,8 @@ def create_job(request: ClipRequest, authorization: Optional[str] = Header(None)
             "background_style": request.background_style,
             "is_preview": request.is_preview,
             "source_file": request.source_file,
+            "slicing_mode": getattr(request, "slicing_mode", "fixed"),
+            "moments_count": len(request.moments) if request.moments else None,
         },
     }
 
