@@ -794,7 +794,20 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             "has_groq_key": bool(get_groq_api_key())
         }
 
-    raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
+    if meta and meta.get("has_prepended_hook") and float(meta.get("hook_duration", 0.0)) > 0:
+        h_st = float(meta.get("hook_start", clip_start))
+        h_dur = float(meta.get("hook_duration", 0.0))
+        raw_hook_cues = slice_transcript_for_clip(transcript, h_st, h_st + h_dur)
+        raw_body_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
+        for bc in raw_body_cues:
+            bc["start"] = round(bc["start"] + h_dur, 2)
+            bc["end"] = round(bc["end"] + h_dur, 2)
+            for w in bc.get("words", []):
+                w["start"] = round(w["start"] + h_dur, 2)
+                w["end"] = round(w["end"] + h_dur, 2)
+        raw_cues = raw_hook_cues + raw_body_cues
+    else:
+        raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
     cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
     styles = (meta or {}).get("styles", {})
     styles.setdefault("highlight_mode", "active_word")

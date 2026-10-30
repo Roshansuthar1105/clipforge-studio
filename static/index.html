@@ -389,8 +389,25 @@
                                 </div>
                             </div>
 
+                            <!-- AI Retention Hook Controls -->
+                            <div style="background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: var(--radius-sm); padding: 12px 14px; margin: 12px 0 14px 0;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                                    <label class="checkbox-label" style="font-weight: 700; color: #fef08a; margin-bottom: 0;">
+                                        <input id="viralPrependHook" type="checkbox" checked>
+                                        <span><i class="fa-solid fa-fire" style="color: #facc15;"></i> Prepend 1–6s AI Climax Hook (Retention Cold Open)</span>
+                                    </label>
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <span style="font-size: 11px; color: var(--text-dim);">Badge:</span>
+                                        <input id="viralHookBadge" type="text" value="WAIT FOR IT... 🤫" style="background: rgba(0,0,0,0.4); border: 1px solid rgba(234, 179, 8, 0.4); color: #fff; font-size: 11.5px; border-radius: 4px; padding: 3px 8px; width: 140px;" placeholder="Badge text">
+                                    </div>
+                                </div>
+                                <div style="font-size: 11px; color: var(--text-dim); margin-top: 5px; margin-left: 24px;">
+                                    AI extracts the punchiest 2–4s climax statement from later in the reel and flashes it at 00:00 to eliminate scroll-away.
+                                </div>
+                            </div>
+
                             <!-- Checkbox Options for Viral Generation -->
-                            <div style="display: flex; gap: 24px; flex-wrap: wrap; margin: 14px 0 16px 0;">
+                            <div style="display: flex; gap: 24px; flex-wrap: wrap; margin: 0 0 16px 0;">
                                 <label class="checkbox-label">
                                     <input id="viralShowHeadline" type="checkbox" checked>
                                     <span>Overlay Click-Worthy AI Viral Headline on Video</span>
@@ -1371,7 +1388,7 @@
             </div>
 
             <!-- Video Info / Source Header -->
-            <div id="viralSourceInfoBar" style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div id="viralSourceInfoBar" style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                 <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
                     <i class="fa-solid fa-video" style="color: var(--primary); font-size: 16px;"></i>
                     <div style="min-width: 0;">
@@ -1383,6 +1400,18 @@
                     <button type="button" class="btn-secondary" style="font-size: 11.5px; padding: 5px 10px;" onclick="runViralMomentDetection(true)" title="Re-analyze with AI">
                         <i class="fa-solid fa-rotate"></i> Re-Scan
                     </button>
+                </div>
+            </div>
+
+            <!-- Modal Retention Hook Settings Bar -->
+            <div style="background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.25); border-radius: var(--radius-sm); padding: 8px 14px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                <label class="checkbox-label" style="font-weight: 700; color: #fef08a; margin-bottom: 0; font-size: 12px;">
+                    <input id="modalViralPrependHook" type="checkbox" checked onchange="syncModalHookSettings(this)">
+                    <span><i class="fa-solid fa-fire" style="color: #facc15;"></i> Prepend 1–6s AI Climax Hook (Retention Cold Open)</span>
+                </label>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 11px; color: var(--text-dim);">Badge:</span>
+                    <input id="modalViralHookBadge" type="text" value="WAIT FOR IT... 🤫" style="background: rgba(0,0,0,0.4); border: 1px solid rgba(234, 179, 8, 0.4); color: #fff; font-size: 11px; border-radius: 4px; padding: 2px 7px; width: 130px;" oninput="syncModalHookBadge(this)">
                 </div>
             </div>
 

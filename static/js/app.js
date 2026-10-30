@@ -2759,6 +2759,16 @@ function renderViralMomentsInStudio() {
                     ${escapeHtml(m.headline || "Viral Moment")}
                 </div>
 
+                ${m.teaser_hook ? `
+                    <div style="margin: 8px 0; background: rgba(234, 179, 8, 0.08); border: 1px dashed rgba(234, 179, 8, 0.4); border-radius: 6px; padding: 7px 11px; font-size: 11.5px; color: #fef08a; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <div style="min-width: 0;">
+                            <span style="font-weight: 800; color: #facc15;"><i class="fa-solid fa-fire"></i> ${escapeHtml(m.teaser_hook.badge_text || "WAIT FOR IT...")}:</span>
+                            <span style="font-style: italic; color: #fff;">"${escapeHtml(m.teaser_hook.text || "")}"</span>
+                        </div>
+                        <span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4); font-size: 10.5px; white-space: nowrap;">⚡ ${m.teaser_hook.duration || 3.2}s Hook</span>
+                    </div>
+                ` : ""}
+
                 ${m.hook ? `
                     <div class="viral-hook-quote" style="font-size: 12.5px; padding: 6px 10px;">
                         "${escapeHtml(m.hook)}"
@@ -2787,6 +2797,8 @@ async function submitViralJob() {
     const viralDuration = parseInt(document.getElementById("viralClipLength")?.value || "45", 10);
     const showHeadline = document.getElementById("viralShowHeadline")?.checked ?? true;
     const keepSource = document.getElementById("viralKeepSource")?.checked ?? true;
+    const prependHook = document.getElementById("viralPrependHook")?.checked ?? true;
+    const hookBadge = document.getElementById("viralHookBadge")?.value?.trim() || "WAIT FOR IT... 🤫";
 
     const payload = {
         url: url,
@@ -2800,6 +2812,9 @@ async function submitViralJob() {
         show_parts: false,
         keep_source: keepSource,
         slicing_mode: "ai_viral",
+        prepend_hook: prependHook,
+        hook_duration: 3.5,
+        hook_badge: hookBadge,
         is_preview: false,
     };
 
@@ -4413,6 +4428,16 @@ function renderViralMomentsList() {
                     ${escapeHtml(m.headline || "Viral Moment")}
                 </div>
 
+                ${m.teaser_hook ? `
+                    <div style="margin: 8px 0; background: rgba(234, 179, 8, 0.08); border: 1px dashed rgba(234, 179, 8, 0.4); border-radius: 6px; padding: 7px 11px; font-size: 11.5px; color: #fef08a; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <div style="min-width: 0;">
+                            <span style="font-weight: 800; color: #facc15;"><i class="fa-solid fa-fire"></i> ${escapeHtml(m.teaser_hook.badge_text || "WAIT FOR IT...")}:</span>
+                            <span style="font-style: italic; color: #fff;">"${escapeHtml(m.teaser_hook.text || "")}"</span>
+                        </div>
+                        <span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4); font-size: 10.5px; white-space: nowrap;">⚡ ${m.teaser_hook.duration || 3.2}s Hook</span>
+                    </div>
+                ` : ""}
+
                 ${m.hook ? `
                     <div class="viral-hook-quote">
                         "${escapeHtml(m.hook)}"
@@ -4428,6 +4453,16 @@ function renderViralMomentsList() {
     }).join("");
 }
 
+function syncModalHookSettings(el) {
+    const studioEl = document.getElementById("viralPrependHook");
+    if (studioEl) studioEl.checked = el.checked;
+}
+
+function syncModalHookBadge(el) {
+    const studioEl = document.getElementById("viralHookBadge");
+    if (studioEl) studioEl.value = el.value;
+}
+
 function PathBasename(p) {
     if (!p) return "";
     return p.replace(/\\/g, "/").split("/").pop();
@@ -4441,6 +4476,10 @@ async function createSingleViralReel(index) {
 
     const urlInput = document.getElementById("urlInput");
     const currentUrl = viralState.url || (urlInput ? urlInput.value.trim() : "");
+    const hookToggle = document.getElementById("modalViralPrependHook") || document.getElementById("viralPrependHook");
+    const hookBadgeInput = document.getElementById("modalViralHookBadge") || document.getElementById("viralHookBadge");
+    const prependHook = hookToggle ? hookToggle.checked : true;
+    const hookBadge = hookBadgeInput ? hookBadgeInput.value.trim() : "WAIT FOR IT... 🤫";
 
     const payload = {
         url: currentUrl,
@@ -4451,6 +4490,9 @@ async function createSingleViralReel(index) {
         clip_length: Math.ceil(m.duration),
         moments: [m],
         slicing_mode: "ai_viral",
+        prepend_hook: prependHook,
+        hook_duration: m.teaser_hook ? (m.teaser_hook.duration || 3.5) : 3.5,
+        hook_badge: hookBadge,
         count: 1,
         is_preview: false,
         background_style: state.selectedStyle || "blur",
@@ -4499,6 +4541,10 @@ async function createAllViralMomentsClips() {
 
     const urlInput = document.getElementById("urlInput");
     const currentUrl = viralState.url || (urlInput ? urlInput.value.trim() : "");
+    const hookToggle = document.getElementById("modalViralPrependHook") || document.getElementById("viralPrependHook");
+    const hookBadgeInput = document.getElementById("modalViralHookBadge") || document.getElementById("viralHookBadge");
+    const prependHook = hookToggle ? hookToggle.checked : true;
+    const hookBadge = hookBadgeInput ? hookBadgeInput.value.trim() : "WAIT FOR IT... 🤫";
 
     const payload = {
         url: currentUrl,
@@ -4508,6 +4554,9 @@ async function createAllViralMomentsClips() {
         count: viralState.moments.length,
         moments: viralState.moments,
         slicing_mode: "ai_viral",
+        prepend_hook: prependHook,
+        hook_duration: 3.5,
+        hook_badge: hookBadge,
         background_style: state.selectedStyle || "blur",
         show_title: true,
         show_parts: false

@@ -34,6 +34,7 @@ VIRAL CRITERIA:
 3. Information Density: Fast-paced, high insight, drama, humor, or emotional punch. No boring filler or logistical preamble.
 4. Duration: Ideal clip length is 30 to 60 seconds (minimum 25s, maximum 75s).
 5. Timestamp Accuracy: start_time and end_time MUST strictly align with the transcript timestamps in seconds.
+6. Climax Teaser Hook (1 to 5s): Identify the single most shocking, dramatic, or curiosity-inducing sentence/climax inside this moment (usually in the middle or end) to be prepended as a 1-5 second teaser trailer at the start of the reel.
 
 OUTPUT FORMAT:
 Return ONLY a valid JSON object matching this exact schema:
@@ -47,7 +48,13 @@ Return ONLY a valid JSON object matching this exact schema:
       "start_time": 142.5,
       "end_time": 195.0,
       "duration": 52.5,
-      "category": "Contrarian | Story | Advice | Mindset | Humor"
+      "category": "Contrarian | Story | Advice | Mindset | Humor",
+      "teaser_hook": {
+        "start_time": 178.0,
+        "end_time": 181.5,
+        "text": "Exact quote of the punchline or climax",
+        "badge_text": "WAIT FOR IT... 🤫"
+      }
     }
   ]
 }
@@ -171,6 +178,44 @@ def detect_viral_moments_with_ai(
                 reason = str(m.get("reason", "Strong curiosity hook with clear payoff.")).strip()
                 category = str(m.get("category", "Advice")).strip()
 
+                # Process & validate 1-6s teaser_hook
+                raw_teaser = m.get("teaser_hook")
+                teaser_hook = None
+                if isinstance(raw_teaser, dict):
+                    try:
+                        h_st = float(raw_teaser.get("start_time", st))
+                        h_en = float(raw_teaser.get("end_time", h_st + 3.0))
+                        h_dur = round(h_en - h_st, 1)
+                        if h_dur < 1.0 or h_dur > 8.0:
+                            h_dur = 3.2
+                            h_en = h_st + h_dur
+                        # Clamp to clip boundaries
+                        if h_st < st or h_st >= en:
+                            h_st = max(st, en - 6.0)
+                            h_en = min(en, h_st + h_dur)
+                        badge = str(raw_teaser.get("badge_text", "WAIT FOR IT...")).strip() or "WAIT FOR IT..."
+                        teaser_text = str(raw_teaser.get("text", hook)).strip()
+                        teaser_hook = {
+                            "start_time": round(h_st, 2),
+                            "end_time": round(h_en, 2),
+                            "duration": round(max(1.0, h_en - h_st), 1),
+                            "text": teaser_text,
+                            "badge_text": badge
+                        }
+                    except Exception:
+                        teaser_hook = None
+
+                if not teaser_hook:
+                    # Default teaser to first 3.5s of the moment if not provided
+                    h_dur = round(min(3.5, max(1.5, dur)), 1)
+                    teaser_hook = {
+                        "start_time": round(st, 2),
+                        "end_time": round(st + h_dur, 2),
+                        "duration": h_dur,
+                        "text": hook[:100],
+                        "badge_text": "WAIT FOR IT..."
+                    }
+
                 mins_st, secs_st = int(st // 60), int(st % 60)
                 mins_en, secs_en = int(en // 60), int(en % 60)
 
@@ -184,6 +229,7 @@ def detect_viral_moments_with_ai(
                     "start_time": round(st, 2),
                     "end_time": round(en, 2),
                     "duration": dur,
+                    "teaser_hook": teaser_hook,
                     "timestamp_display": f"{mins_st:02d}:{secs_st:02d} - {mins_en:02d}:{secs_en:02d} ({int(dur)}s)",
                 })
 
@@ -272,6 +318,34 @@ def fallback_heuristic_viral_detection(
                 mins_st, secs_st = int(seg_start // 60), int(seg_start % 60)
                 mins_en, secs_en = int(seg_end // 60), int(seg_end % 60)
 
+                # Heuristic teaser hook selection (1.5s - 4.5s)
+                h_st = seg_start
+                h_en = min(seg_end, seg_start + 3.2)
+                h_text = seg_text_list[0] if seg_text_list else ""
+                # If multiple segments, check 2nd half for punchline/exclamations/curiosity
+                if len(seg_text_list) > 2:
+                    half_idx = len(seg_text_list) // 2
+                    for sub_idx in range(half_idx, len(seg_text_list)):
+                        sub_text = seg_text_list[sub_idx]
+                        sub_words = set(re.findall(r"\w+", sub_text.lower()))
+                        if sub_words.intersection(CURIOSITY_WORDS) or "!" in sub_text or "?" in sub_text:
+                            cand_seg = segments[i + sub_idx]
+                            cand_st = float(cand_seg.get("start", seg_start))
+                            cand_en = float(cand_seg.get("end", cand_st + 3.0))
+                            if cand_st >= seg_start and cand_en <= seg_end and 1.5 <= (cand_en - cand_st) <= 5.0:
+                                h_st = cand_st
+                                h_en = cand_en
+                                h_text = sub_text
+                                break
+
+                teaser_hook = {
+                    "start_time": round(h_st, 2),
+                    "end_time": round(h_en, 2),
+                    "duration": round(max(1.5, h_en - h_st), 1),
+                    "text": h_text[:100],
+                    "badge_text": "WAIT FOR IT..."
+                }
+
                 candidates.append({
                     "headline": headline,
                     "virality_score": score,
@@ -281,6 +355,7 @@ def fallback_heuristic_viral_detection(
                     "start_time": round(seg_start, 2),
                     "end_time": round(seg_end, 2),
                     "duration": round(dur, 1),
+                    "teaser_hook": teaser_hook,
                     "timestamp_display": f"{mins_st:02d}:{secs_st:02d} - {mins_en:02d}:{secs_en:02d} ({int(dur)}s)",
                 })
                 break

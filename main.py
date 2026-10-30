@@ -176,6 +176,11 @@ class ClipRequest(BaseModel):
     slicing_mode: str = "fixed"  # "fixed" or "ai_viral"
     moments: Optional[List[Dict[str, Any]]] = None
 
+    # AI Hook Integration (Prepend 1-6s Climax / Curiosity Teaser)
+    prepend_hook: bool = False
+    hook_duration: float = 3.5
+    hook_badge: str = "WAIT FOR IT..."
+
     def model_post_init(self, __context):
         if self.count is not None:
             self.max_clips = self.count
@@ -537,6 +542,22 @@ def probe_duration(video_path: Path) -> float:
         raise RuntimeError("The downloaded video has an invalid duration.")
 
     return duration
+
+
+def has_audio_stream(video_path: Path) -> bool:
+    """Check if video file contains at least one audio stream."""
+    try:
+        output = run_command([
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ])
+        return bool(output.strip())
+    except Exception:
+        return True
 
 
 def find_windows_font() -> Path:
@@ -916,87 +937,306 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             else:
                 part_y = title_y + title_size + 45
 
-            # Fit the video into a 9:16 frame.
-            if request.background_style == "blur":
-                # High-speed cinematic blur: downscale background to 180x320, apply light blur, and upscale to 1080x1920
-                filter_script = (
-                    "[0:v:0]split=2[bg][fg];"
-                    "[bg]scale=180:320:force_original_aspect_ratio=increase,"
-                    "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[blurred];"
-                    "[fg]scale=1080:1440:force_original_aspect_ratio=decrease[fg_scaled];"
-                    "[blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[base]"
-                )
-                last_pad = "base"
-                if title:
-                    safe_title = escape_drawtext(title)
-                    filter_script += (
-                        f";[{last_pad}]drawtext=text='{safe_title}':"
-                        f"fontfile='{fontfile}':"
-                        f"fontcolor={title_color}:"
-                        f"fontsize={title_size}:"
-                        "x=(w-text_w)/2:"
-                        f"y={title_y}:"
-                        "box=1:"
-                        f"boxcolor={title_box}:"
-                        "boxborderw=14[t1]"
-                    )
-                    last_pad = "t1"
+            # Check for AI Teaser Hook (Prepend 1-6s Cold Open)
+            prepend_hook = bool(getattr(request, "prepend_hook", False))
+            teaser_hook = current_moment.get("teaser_hook") if current_moment else None
+            hook_info = None
 
-                if part:
-                    safe_part = escape_drawtext(part)
-                    filter_script += (
-                        f";[{last_pad}]drawtext=text='{safe_part}':"
-                        f"fontfile='{fontfile}':"
-                        f"fontcolor={part_color}:"
-                        f"fontsize={part_size}:"
-                        "x=(w-text_w)/2:"
-                        f"y={part_y}:"
-                        "box=1:"
-                        f"boxcolor={part_box}:"
-                        "boxborderw=10[t2]"
-                    )
-                    last_pad = "t2"
+            if prepend_hook and teaser_hook and isinstance(teaser_hook, dict):
+                h_start = float(teaser_hook.get("start_time", clip_start))
+                h_end = float(teaser_hook.get("end_time", h_start + 3.2))
+                h_max = float(getattr(request, "hook_duration", 3.5) or 3.5)
+                h_dur = round(min(h_max, max(1.0, h_end - h_start)), 2)
+                h_badge = str(getattr(request, "hook_badge", None) or teaser_hook.get("badge_text", "WAIT FOR IT...")).strip()
+                hook_info = {
+                    "start": h_start,
+                    "duration": h_dur,
+                    "badge": h_badge,
+                    "text": str(teaser_hook.get("text", "")).strip(),
+                }
 
-                filter_args = ["-filter_complex", filter_script, "-map", f"[{last_pad}]"]
+            total_render_duration = clip_duration + (hook_info["duration"] if hook_info else 0.0)
+            source_has_audio = has_audio_stream(source_path)
+
+            if hook_info:
+                # -------------------------------------------------------------
+                # DUAL-INPUT PIPELINE: Input 0 = Hook Teaser, Input 1 = Main Body
+                # -------------------------------------------------------------
+                safe_badge = escape_drawtext(hook_info["badge"]) if hook_info["badge"] else ""
+
+                if request.background_style == "blur":
+                    # Hook teaser vertical format
+                    filter_script = (
+                        "[0:v:0]split=2[h_bg][h_fg];"
+                        "[h_bg]scale=180:320:force_original_aspect_ratio=increase,"
+                        "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[h_blurred];"
+                        "[h_fg]scale=1080:1440:force_original_aspect_ratio=decrease[h_scaled];"
+                        "[h_blurred][h_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[h_base]"
+                    )
+                    h_last = "h_base"
+                    if safe_badge:
+                        filter_script += (
+                            f";[{h_last}]drawtext=text='{safe_badge}':"
+                            f"fontfile='{fontfile}':"
+                            "fontcolor=yellow:"
+                            "fontsize=46:"
+                            "x=(w-text_w)/2:"
+                            "y=220:"
+                            "box=1:"
+                            "boxcolor=black@0.70:"
+                            "boxborderw=16[h_t]"
+                        )
+                        h_last = "h_t"
+
+                    # Main body vertical format
+                    filter_script += (
+                        ";[1:v:0]split=2[b_bg][b_fg];"
+                        "[b_bg]scale=180:320:force_original_aspect_ratio=increase,"
+                        "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[b_blurred];"
+                        "[b_fg]scale=1080:1440:force_original_aspect_ratio=decrease[b_scaled];"
+                        "[b_blurred][b_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[b_base]"
+                    )
+                    b_last = "b_base"
+                    if title:
+                        safe_title = escape_drawtext(title)
+                        filter_script += (
+                            f";[{b_last}]drawtext=text='{safe_title}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={title_color}:"
+                            f"fontsize={title_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={title_y}:"
+                            "box=1:"
+                            f"boxcolor={title_box}:"
+                            "boxborderw=14[b_t1]"
+                        )
+                        b_last = "b_t1"
+
+                    if part:
+                        safe_part = escape_drawtext(part)
+                        filter_script += (
+                            f";[{b_last}]drawtext=text='{safe_part}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={part_color}:"
+                            f"fontsize={part_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={part_y}:"
+                            "box=1:"
+                            f"boxcolor={part_box}:"
+                            "boxborderw=10[b_t2]"
+                        )
+                        b_last = "b_t2"
+
+                    if source_has_audio:
+                        filter_script += (
+                            f";[0:a]aformat=channel_layouts=stereo:sample_rates=48000[h_a];"
+                            f"[1:a]aformat=channel_layouts=stereo:sample_rates=48000[b_a];"
+                            f"[{h_last}][h_a][{b_last}][b_a]concat=n=2:v=1:a=1[v_out][a_out]"
+                        )
+                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]", "-map", "[a_out]"]
+                    else:
+                        filter_script += f";[{h_last}][{b_last}]concat=n=2:v=1:a=0[v_out]"
+                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]"]
+
+                else:
+                    # Classic centered letterbox with black padding
+                    filter_script = (
+                        "[0:v:0]scale=1080:1440:force_original_aspect_ratio=decrease,"
+                        "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
+                        "pad=1080:1920:0:240:black,setsar=1[h_base]"
+                    )
+                    h_last = "h_base"
+                    if safe_badge:
+                        filter_script += (
+                            f";[{h_last}]drawtext=text='{safe_badge}':"
+                            f"fontfile='{fontfile}':"
+                            "fontcolor=yellow:"
+                            "fontsize=46:"
+                            "x=(w-text_w)/2:"
+                            "y=220:"
+                            "box=1:"
+                            "boxcolor=black@0.70:"
+                            "boxborderw=16[h_t]"
+                        )
+                        h_last = "h_t"
+
+                    filter_script += (
+                        ";[1:v:0]scale=1080:1440:force_original_aspect_ratio=decrease,"
+                        "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
+                        "pad=1080:1920:0:240:black,setsar=1[b_base]"
+                    )
+                    b_last = "b_base"
+                    if title:
+                        safe_title = escape_drawtext(title)
+                        filter_script += (
+                            f";[{b_last}]drawtext=text='{safe_title}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={title_color}:"
+                            f"fontsize={title_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={title_y}:"
+                            "box=1:"
+                            f"boxcolor={title_box}:"
+                            "boxborderw=14[b_t1]"
+                        )
+                        b_last = "b_t1"
+
+                    if part:
+                        safe_part = escape_drawtext(part)
+                        filter_script += (
+                            f";[{b_last}]drawtext=text='{safe_part}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={part_color}:"
+                            f"fontsize={part_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={part_y}:"
+                            "box=1:"
+                            f"boxcolor={part_box}:"
+                            "boxborderw=10[b_t2]"
+                        )
+                        b_last = "b_t2"
+
+                    if source_has_audio:
+                        filter_script += (
+                            f";[0:a]aformat=channel_layouts=stereo:sample_rates=48000[h_a];"
+                            f"[1:a]aformat=channel_layouts=stereo:sample_rates=48000[b_a];"
+                            f"[{h_last}][h_a][{b_last}][b_a]concat=n=2:v=1:a=1[v_out][a_out]"
+                        )
+                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]", "-map", "[a_out]"]
+                    else:
+                        filter_script += f";[{h_last}][{b_last}]concat=n=2:v=1:a=0[v_out]"
+                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]"]
+
+                command = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-y",
+                    "-threads", "0",
+                    "-ss", str(hook_info["start"]),
+                    "-i", str(source_path),
+                    "-t", str(hook_info["duration"]),
+                    "-ss", str(clip_start),
+                    "-i", str(source_path),
+                    "-t", str(clip_duration),
+                    *filter_args,
+                    "-c:v", "libx264",
+                    "-profile:v", "main",
+                    "-level", "4.0",
+                    "-preset", "superfast",
+                    "-crf", "23",
+                    "-pix_fmt", "yuv420p",
+                ]
+                if source_has_audio:
+                    command.extend(["-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
+                command.extend(["-movflags", "+faststart", str(output_path)])
+
             else:
-                # Classic centered letterbox with black padding
-                filters = (
-                    "scale=1080:1440:"
-                    "force_original_aspect_ratio=decrease,"
-                    "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
-                    "pad=1080:1920:0:240:black,"
-                    "setsar=1"
-                )
+                # -------------------------------------------------------------
+                # STANDARD SINGLE-INPUT PIPELINE
+                # -------------------------------------------------------------
+                if request.background_style == "blur":
+                    # High-speed cinematic blur: downscale background to 180x320, apply light blur, and upscale to 1080x1920
+                    filter_script = (
+                        "[0:v:0]split=2[bg][fg];"
+                        "[bg]scale=180:320:force_original_aspect_ratio=increase,"
+                        "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[blurred];"
+                        "[fg]scale=1080:1440:force_original_aspect_ratio=decrease[fg_scaled];"
+                        "[blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[base]"
+                    )
+                    last_pad = "base"
+                    if title:
+                        safe_title = escape_drawtext(title)
+                        filter_script += (
+                            f";[{last_pad}]drawtext=text='{safe_title}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={title_color}:"
+                            f"fontsize={title_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={title_y}:"
+                            "box=1:"
+                            f"boxcolor={title_box}:"
+                            "boxborderw=14[t1]"
+                        )
+                        last_pad = "t1"
 
-                if title:
-                    safe_title = escape_drawtext(title)
-                    filters += (
-                        f",drawtext=text='{safe_title}':"
-                        f"fontfile='{fontfile}':"
-                        f"fontcolor={title_color}:"
-                        f"fontsize={title_size}:"
-                        "x=(w-text_w)/2:"
-                        f"y={title_y}:"
-                        "box=1:"
-                        f"boxcolor={title_box}:"
-                        "boxborderw=14"
+                    if part:
+                        safe_part = escape_drawtext(part)
+                        filter_script += (
+                            f";[{last_pad}]drawtext=text='{safe_part}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={part_color}:"
+                            f"fontsize={part_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={part_y}:"
+                            "box=1:"
+                            f"boxcolor={part_box}:"
+                            "boxborderw=10[t2]"
+                        )
+                        last_pad = "t2"
+
+                    filter_args = ["-filter_complex", filter_script, "-map", f"[{last_pad}]"]
+                else:
+                    # Classic centered letterbox with black padding
+                    filters = (
+                        "scale=1080:1440:"
+                        "force_original_aspect_ratio=decrease,"
+                        "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
+                        "pad=1080:1920:0:240:black,"
+                        "setsar=1"
                     )
 
-                if part:
-                    safe_part = escape_drawtext(part)
-                    filters += (
-                        f",drawtext=text='{safe_part}':"
-                        f"fontfile='{fontfile}':"
-                        f"fontcolor={part_color}:"
-                        f"fontsize={part_size}:"
-                        "x=(w-text_w)/2:"
-                        f"y={part_y}:"
-                        "box=1:"
-                        f"boxcolor={part_box}:"
-                        "boxborderw=10"
-                    )
+                    if title:
+                        safe_title = escape_drawtext(title)
+                        filters += (
+                            f",drawtext=text='{safe_title}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={title_color}:"
+                            f"fontsize={title_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={title_y}:"
+                            "box=1:"
+                            f"boxcolor={title_box}:"
+                            "boxborderw=14"
+                        )
 
-                filter_args = ["-vf", filters, "-map", "0:v:0"]
+                    if part:
+                        safe_part = escape_drawtext(part)
+                        filters += (
+                            f",drawtext=text='{safe_part}':"
+                            f"fontfile='{fontfile}':"
+                            f"fontcolor={part_color}:"
+                            f"fontsize={part_size}:"
+                            "x=(w-text_w)/2:"
+                            f"y={part_y}:"
+                            "box=1:"
+                            f"boxcolor={part_box}:"
+                            "boxborderw=10"
+                        )
+
+                    filter_args = ["-vf", filters, "-map", "0:v:0"]
+
+                command = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-y",
+                    "-threads", "0",
+                    "-ss", str(clip_start),
+                    "-i", str(source_path),
+                    "-t", str(clip_duration),
+                    *filter_args,
+                    "-map", "0:a?",
+                    "-c:v", "libx264",
+                    "-profile:v", "main",
+                    "-level", "4.0",
+                    "-preset", "superfast",
+                    "-crf", "23",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    "-ar", "48000",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    str(output_path),
+                ]
 
             clip_start_pct = 38 + (index / max(count, 1)) * 58
             clip_range_pct = 58 / max(count, 1)
@@ -1011,30 +1251,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         message=f"Creating clip {index + 1}/{count}: {int(processed_secs)}s/{int(total_clip_secs)}s ({int(sub_pct * 100)}%)",
                     )
 
-            command = [
-                "ffmpeg",
-                "-hide_banner",
-                "-y",
-                "-threads", "0",
-                "-ss", str(clip_start),
-                "-i", str(source_path),
-                "-t", str(clip_duration),
-                *filter_args,
-                "-map", "0:a?",
-                "-c:v", "libx264",
-                "-profile:v", "main",
-                "-level", "4.0",
-                "-preset", "superfast",
-                "-crf", "23",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-ar", "48000",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
-                str(output_path),
-            ]
-
-            run_ffmpeg_with_progress(command, clip_duration, on_progress=on_clip_progress, cancel_event=cancel_event)
+            run_ffmpeg_with_progress(command, total_render_duration, on_progress=on_clip_progress, cancel_event=cancel_event)
 
             if not output_path.exists() or output_path.stat().st_size == 0:
                 raise RuntimeError(
@@ -1050,11 +1267,16 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     "source_video_id": eff_video_id,
                     "clip_start": float(clip_start),
                     "clip_end": float(clip_start + clip_duration),
-                    "duration": float(clip_duration),
+                    "duration": float(total_render_duration),
                     "viral_headline": current_moment.get("headline", "") if current_moment else "",
                     "virality_score": current_moment.get("virality_score") if current_moment else None,
                     "hook": current_moment.get("hook", "") if current_moment else "",
                     "reason": current_moment.get("reason", "") if current_moment else "",
+                    "has_prepended_hook": bool(hook_info),
+                    "hook_start": float(hook_info["start"]) if hook_info else 0.0,
+                    "hook_duration": float(hook_info["duration"]) if hook_info else 0.0,
+                    "hook_badge": hook_info["badge"] if hook_info else "",
+                    "hook_text": hook_info["text"] if hook_info else "",
                 }
                 meta_path = output_path.with_name(f"{filename}.meta.json")
 
@@ -1063,7 +1285,30 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     from services.transcription_service import get_stored_transcript, slice_transcript_for_clip
                     parent_tr = get_stored_transcript(eff_video_id)
                     if parent_tr:
-                        cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
+                        if hook_info:
+                            # 1. Slice hook teaser cues
+                            hook_cues = slice_transcript_for_clip(
+                                parent_tr,
+                                float(hook_info["start"]),
+                                float(hook_info["start"] + hook_info["duration"])
+                            )
+                            # 2. Slice body cues and offset timestamps by hook_duration
+                            body_cues = slice_transcript_for_clip(
+                                parent_tr,
+                                float(clip_start),
+                                float(clip_start + clip_duration)
+                            )
+                            h_dur_offset = float(hook_info["duration"])
+                            for bc in body_cues:
+                                bc["start"] = round(bc["start"] + h_dur_offset, 2)
+                                bc["end"] = round(bc["end"] + h_dur_offset, 2)
+                                for w in bc.get("words", []):
+                                    w["start"] = round(w["start"] + h_dur_offset, 2)
+                                    w["end"] = round(w["end"] + h_dur_offset, 2)
+                            cues = hook_cues + body_cues
+                        else:
+                            cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
+
                         if cues:
                             sub_file = output_path.with_name(f"{filename}.subtitles.json")
                             with open(sub_file, "w", encoding="utf-8") as sf:
@@ -1303,6 +1548,9 @@ def create_job(request: ClipRequest, authorization: Optional[str] = Header(None)
             "source_file": request.source_file,
             "slicing_mode": getattr(request, "slicing_mode", "fixed"),
             "moments_count": len(request.moments) if request.moments else None,
+            "prepend_hook": getattr(request, "prepend_hook", False),
+            "hook_duration": getattr(request, "hook_duration", 3.5),
+            "hook_badge": getattr(request, "hook_badge", "WAIT FOR IT..."),
         },
     }
 
