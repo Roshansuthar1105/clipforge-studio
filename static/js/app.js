@@ -101,10 +101,21 @@ async function initDbStatus() {
 
 function initNavigation() {
     const hash = window.location.hash.replace("#", "") || "studio";
-    switchView(hash, false);
+    if (hash === "captions") {
+        switchView("library", false);
+    } else {
+        switchView(hash, false);
+    }
 
     window.addEventListener("hashchange", () => {
         const h = window.location.hash.replace("#", "") || "studio";
+        if (h === "captions") {
+            return;
+        }
+        const subModal = document.getElementById("subtitlesModal");
+        if (subModal && subModal.classList.contains("active")) {
+            closeSubtitleModal(false);
+        }
         switchView(h, false);
     });
 }
@@ -1358,20 +1369,6 @@ function renderGroupedClips() {
                             ? `<span class="notice-pill subtitles"><i class="fa-solid fa-closed-captioning"></i> Subtitled</span>` 
                             : `<span style="color: #64748b;">—</span>`}
                     </td>
-                    <td class="yt-visibility-cell">
-                        ${clip.is_published 
-                            ? `<div class="visibility-indicator published"><i class="fa-solid fa-globe"></i> <span>Public</span></div>
-                               <span class="visibility-sub">${escapeHtml((clip.publish_platforms || []).join(', ') || 'Published')}</span>`
-                            : `<div class="visibility-indicator ready"><i class="fa-solid fa-link"></i> <span>Ready</span></div>
-                               <span class="visibility-sub">Unlisted</span>`}
-                    </td>
-                    <td class="yt-date-cell">
-                        <span class="date-main">${escapeHtml(clip.formatted_date || '')}</span>
-                        <span class="date-sub">${clip.is_published ? 'Published' : 'Uploaded'}</span>
-                    </td>
-                    <td class="yt-views-cell">
-                        ${clip.views || 0}
-                    </td>
                     <td class="yt-size-cell">
                         ${clip.size_mb ? clip.size_mb + ' MB' : ''}
                     </td>
@@ -1434,12 +1431,9 @@ function renderGroupedClips() {
                                 <tr>
                                     <th class="yt-check-cell"></th>
                                     <th>Short</th>
-                                    <th>Notices</th>
-                                    <th>Visibility</th>
-                                    <th>Date</th>
-                                    <th>Views</th>
-                                    <th>Size</th>
-                                    <th style="text-align: right; padding-right: 18px;">Actions</th>
+                                    <th style="width: 120px;">Notices</th>
+                                    <th style="width: 90px; text-align: center;">Size</th>
+                                    <th style="width: 215px; text-align: right; padding-right: 18px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -2999,9 +2993,12 @@ async function submitViralJob() {
     const titleYInput = document.getElementById("titleYInput");
     const titleFontSizeInput = document.getElementById("titleFontSizeInput");
 
+    const resolvedVideoTitle = viralState.videoTitle || (state.currentPreviewData ? state.currentPreviewData.title : "") || (document.getElementById("previewTitle")?.textContent !== "Loading video..." ? document.getElementById("previewTitle")?.textContent : "") || (document.getElementById("titleInput") ? document.getElementById("titleInput").value : "") || "";
+
     const payload = {
         url: url,
         title: "Viral Highlights",
+        video_title: resolvedVideoTitle,
         count: viralMaxClips,
         max_clips: viralMaxClips,
         clip_length: viralDuration,
@@ -3129,11 +3126,11 @@ const subState = {
     cues: [],
     styles: {
         font_name: "Arial Black",
-        font_size: 68,
+        font_size: 48,
         text_color: "#FFFFFF",
         highlight_color: "#FFE500",
         outline_color: "#000000",
-        outline_width: 4,
+        outline_width: 0.5,
         position_preset: "bottom",
         margin_v: 220,
         text_transform: "uppercase",
@@ -3198,6 +3195,25 @@ async function openSubtitleModal(clipName, clipUrl, groupOptions = null) {
         }
     }
 
+    const burnGroupBtnHeader = document.getElementById("subBurnGroupExecuteBtnHeader");
+    const burnGroupCountHeader = document.getElementById("subGroupCountBadgeHeader");
+    if (burnGroupBtnHeader) {
+        if (group && group.groupClipCount > 1) {
+            burnGroupBtnHeader.style.display = "inline-flex";
+            if (burnGroupCountHeader) burnGroupCountHeader.textContent = group.groupClipCount;
+        } else {
+            burnGroupBtnHeader.style.display = "none";
+        }
+    }
+
+    // Save previous hash to return to when closing studio
+    if (window.location.hash && window.location.hash !== "#captions") {
+        subState.prevHash = window.location.hash.replace("#", "");
+    } else if (!subState.prevHash) {
+        subState.prevHash = "library";
+    }
+    window.location.hash = "captions";
+
     if (banner) {
         banner.style.display = "block";
         banner.style.background = "rgba(99, 102, 241, 0.15)";
@@ -3255,6 +3271,7 @@ async function openSubtitleModal(clipName, clipUrl, groupOptions = null) {
         syncSubStyleControlsFromState();
         renderSubCuesList();
         updateSubOverlay();
+        setTimeout(updateSubOverlay, 80);
         updateFullCaptionPreview();
 
     } catch (err) {
@@ -3269,11 +3286,14 @@ async function openSubtitleModal(clipName, clipUrl, groupOptions = null) {
     }
 }
 
-function closeSubtitleModal() {
+function closeSubtitleModal(updateHash = true) {
     const modal = document.getElementById("subtitlesModal");
     const video = document.getElementById("subModalVideo");
     if (video) video.pause();
     if (modal) modal.classList.remove("active");
+    if (updateHash) {
+        window.location.hash = subState.prevHash || "library";
+    }
 }
 
 function switchSubTab(tab) {
@@ -3537,6 +3557,7 @@ function syncSubStyleControlsFromState() {
     const s = subState.styles;
     const elFont = document.getElementById("subFontName");
     const elSize = document.getElementById("subFontSize");
+    const elSizeNum = document.getElementById("subFontSizeNum");
     const elSizeVal = document.getElementById("subFontSizeVal");
     const elColor = document.getElementById("subTextColor");
     const elColorHex = document.getElementById("subTextColorHex");
@@ -3545,6 +3566,7 @@ function syncSubStyleControlsFromState() {
     const elOutline = document.getElementById("subOutlineColor");
     const elOutlineHex = document.getElementById("subOutlineColorHex");
     const elOutlineW = document.getElementById("subOutlineWidth");
+    const elOutlineWNum = document.getElementById("subOutlineWidthNum");
     const elOutlineWVal = document.getElementById("subOutlineWidthVal");
     const elBoxStyle = document.getElementById("subBoxStyle");
     const elBoxColor = document.getElementById("subBoxColor");
@@ -3556,8 +3578,9 @@ function syncSubStyleControlsFromState() {
     const elWords = document.getElementById("subWordsPerScreen");
 
     if (elFont) elFont.value = s.font_name || "Arial Black";
-    if (elSize) elSize.value = s.font_size || 68;
-    if (elSizeVal) elSizeVal.textContent = s.font_size || 68;
+    if (elSize) elSize.value = s.font_size || 48;
+    if (elSizeNum) elSizeNum.value = s.font_size || 48;
+    if (elSizeVal) elSizeVal.textContent = s.font_size || 48;
     if (elColor) elColor.value = s.text_color || "#FFFFFF";
     if (elColorHex) elColorHex.textContent = (s.text_color || "#FFFFFF").toUpperCase();
     if (elHlColor) elHlColor.value = s.highlight_color || "#FFE500";
@@ -3567,8 +3590,9 @@ function syncSubStyleControlsFromState() {
     }
     if (elOutline) elOutline.value = s.outline_color || "#000000";
     if (elOutlineHex) elOutlineHex.textContent = (s.outline_color || "#000000").toUpperCase();
-    if (elOutlineW) elOutlineW.value = s.outline_width !== undefined ? s.outline_width : 4;
-    if (elOutlineWVal) elOutlineWVal.textContent = s.outline_width !== undefined ? s.outline_width : 4;
+    if (elOutlineW) elOutlineW.value = s.outline_width !== undefined ? s.outline_width : 0.5;
+    if (elOutlineWNum) elOutlineWNum.value = s.outline_width !== undefined ? s.outline_width : 0.5;
+    if (elOutlineWVal) elOutlineWVal.textContent = s.outline_width !== undefined ? s.outline_width : 0.5;
     if (elBoxStyle) elBoxStyle.value = s.box_style || "none";
     if (elBoxColor) elBoxColor.value = s.box_color || "#000000";
     const opacityPct = Math.round((s.box_opacity !== undefined ? s.box_opacity : 0.70) * 100);
@@ -3592,11 +3616,11 @@ function applySubPreset(preset) {
 
     if (preset === "hormozi") {
         subState.styles.font_name = "Montserrat ExtraBold";
-        subState.styles.font_size = 70;
+        subState.styles.font_size = 48;
         subState.styles.text_color = "#FFFFFF";
         subState.styles.highlight_color = "#FFE500";
         subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 4.5;
+        subState.styles.outline_width = 0.5;
         subState.styles.box_style = "none";
         subState.styles.position_percent = 78;
         subState.styles.text_transform = "uppercase";
@@ -3605,11 +3629,11 @@ function applySubPreset(preset) {
         subState.styles.words_per_screen = 3;
     } else if (preset === "mrbeast") {
         subState.styles.font_name = "Impact";
-        subState.styles.font_size = 74;
+        subState.styles.font_size = 48;
         subState.styles.text_color = "#FFFFFF";
         subState.styles.highlight_color = "#FFE500";
         subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 5.5;
+        subState.styles.outline_width = 0.5;
         subState.styles.box_style = "none";
         subState.styles.position_percent = 75;
         subState.styles.text_transform = "uppercase";
@@ -3618,11 +3642,11 @@ function applySubPreset(preset) {
         subState.styles.words_per_screen = 2;
     } else if (preset === "abdaal") {
         subState.styles.font_name = "Roboto Bold";
-        subState.styles.font_size = 56;
+        subState.styles.font_size = 48;
         subState.styles.text_color = "#FFFFFF";
         subState.styles.highlight_color = "#22C55E";
         subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 0;
+        subState.styles.outline_width = 0.5;
         subState.styles.box_style = "pill";
         subState.styles.box_color = "#000000";
         subState.styles.box_opacity = 0.70;
@@ -3633,11 +3657,11 @@ function applySubPreset(preset) {
         subState.styles.words_per_screen = 4;
     } else if (preset === "gadzhi") {
         subState.styles.font_name = "Montserrat ExtraBold";
-        subState.styles.font_size = 60;
+        subState.styles.font_size = 48;
         subState.styles.text_color = "#CBD5E1";
         subState.styles.highlight_color = "#F59E0B";
         subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 1.5;
+        subState.styles.outline_width = 0.5;
         subState.styles.box_style = "box";
         subState.styles.box_color = "#0b1120";
         subState.styles.box_opacity = 0.80;
@@ -3648,11 +3672,11 @@ function applySubPreset(preset) {
         subState.styles.words_per_screen = 3;
     } else if (preset === "neon") {
         subState.styles.font_name = "Montserrat ExtraBold";
-        subState.styles.font_size = 66;
+        subState.styles.font_size = 48;
         subState.styles.text_color = "#00F2FE";
         subState.styles.highlight_color = "#FF007F";
         subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 4.0;
+        subState.styles.outline_width = 0.5;
         subState.styles.box_style = "none";
         subState.styles.position_percent = 78;
         subState.styles.text_transform = "uppercase";
@@ -3661,11 +3685,11 @@ function applySubPreset(preset) {
         subState.styles.words_per_screen = 3;
     } else if (preset === "clean") {
         subState.styles.font_name = "Arial Black";
-        subState.styles.font_size = 64;
+        subState.styles.font_size = 48;
         subState.styles.text_color = "#FFFFFF";
         subState.styles.highlight_color = "#FFE500";
         subState.styles.outline_color = "#000000";
-        subState.styles.outline_width = 3.0;
+        subState.styles.outline_width = 0.5;
         subState.styles.box_style = "none";
         subState.styles.position_percent = 80;
         subState.styles.text_transform = "uppercase";
@@ -3710,10 +3734,18 @@ function updateSubStyle(key, value) {
 function setSubPositionPercent(pct, updateOverlayNow = true) {
     const val = parseInt(pct, 10);
     subState.styles.position_percent = val;
+    const pxY = Math.round((val / 100) * 1920);
+    subState.styles.margin_v = Math.round(1920 - pxY);
+
     const slider = document.getElementById("subPositionPercent");
     const valSpan = document.getElementById("subPosPercentVal");
+    const pxValSpan = document.getElementById("subPosYVal");
+    const pxInput = document.getElementById("subPosYInput");
+
     if (slider) slider.value = val;
     if (valSpan) valSpan.textContent = val;
+    if (pxValSpan) pxValSpan.textContent = pxY;
+    if (pxInput) pxInput.value = pxY;
 
     const btnTop = document.getElementById("subPosTop");
     const btnMid = document.getElementById("subPosMiddle");
@@ -3732,6 +3764,87 @@ function setSubPositionPercent(pct, updateOverlayNow = true) {
 
 function updateSubPositionPercent(val) {
     setSubPositionPercent(val, true);
+}
+
+function onSubPosYManualChange(pixelVal) {
+    let px = parseInt(pixelVal, 10);
+    if (isNaN(px)) return;
+    px = Math.max(100, Math.min(1820, px));
+    const pct = Math.round((px / 1920) * 100);
+    setSubPositionPercent(pct, true);
+    const pxInput = document.getElementById("subPosYInput");
+    if (pxInput) pxInput.value = px;
+    const pxValSpan = document.getElementById("subPosYVal");
+    if (pxValSpan) pxValSpan.textContent = px;
+}
+
+function onSubFontSizeManualChange(val) {
+    let sz = parseInt(val, 10);
+    if (isNaN(sz)) return;
+    sz = Math.max(20, Math.min(140, sz));
+    subState.styles.font_size = sz;
+    const slider = document.getElementById("subFontSize");
+    const num = document.getElementById("subFontSizeNum");
+    const valSpan = document.getElementById("subFontSizeVal");
+    if (slider) slider.value = sz;
+    if (num) num.value = sz;
+    if (valSpan) valSpan.textContent = sz;
+    updateSubOverlay();
+}
+
+function onSubFontSizeChange(val) {
+    const sz = parseInt(val, 10);
+    subState.styles.font_size = sz;
+    const num = document.getElementById("subFontSizeNum");
+    const valSpan = document.getElementById("subFontSizeVal");
+    if (num) num.value = sz;
+    if (valSpan) valSpan.textContent = sz;
+    updateSubOverlay();
+}
+
+function onSubOutlineWidthManualChange(val) {
+    let w = parseFloat(val);
+    if (isNaN(w)) return;
+    w = Math.max(0, Math.min(20, w));
+    subState.styles.outline_width = w;
+    const slider = document.getElementById("subOutlineWidth");
+    const num = document.getElementById("subOutlineWidthNum");
+    const valSpan = document.getElementById("subOutlineWidthVal");
+    if (slider) slider.value = w;
+    if (num) num.value = w;
+    if (valSpan) valSpan.textContent = w;
+    updateSubOverlay();
+}
+
+function onSubOutlineWidthChange(val) {
+    const w = parseFloat(val);
+    subState.styles.outline_width = w;
+    const num = document.getElementById("subOutlineWidthNum");
+    const valSpan = document.getElementById("subOutlineWidthVal");
+    if (num) num.value = w;
+    if (valSpan) valSpan.textContent = w;
+    updateSubOverlay();
+}
+
+function toggleSubSafeZones() {
+    const layer = document.getElementById("subSafeZonesLayer");
+    const btn = document.getElementById("toggleSubSafeZonesBtn");
+    if (layer) {
+        const isHidden = layer.style.display === "none";
+        layer.style.display = isHidden ? "block" : "none";
+        if (btn) btn.classList.toggle("active", isHidden);
+    }
+}
+
+function onSubMockupClick(event) {
+    const phone = document.getElementById("subMockupPhone") || document.querySelector(".sub-video-wrapper");
+    if (!phone) return;
+    const rect = phone.getBoundingClientRect();
+    const clickY = event.clientY - rect.top;
+    if (clickY < 0 || clickY > rect.height) return;
+    const calculatedY = Math.max(192, Math.min(1728, Math.round((clickY / rect.height) * 1920)));
+    const pct = Math.round((calculatedY / 1920) * 100);
+    setSubPositionPercent(pct, true);
 }
 
 function setSubPosition(pos, updateOverlayNow = true) {
@@ -3800,24 +3913,29 @@ function updateSubOverlay() {
     overlay.style.fontWeight = "900";
     overlay.style.color = s.text_color || "#FFFFFF";
 
-    // Outline / Stroke emulation for CSS overlay
-    const strokeW = parseFloat(s.outline_width) !== undefined ? parseFloat(s.outline_width) : 4;
+    // Dynamic Scale calculation based on actual rendered mockup phone width vs 1080 canvas
+    const wrapper = document.getElementById("subMockupPhone") || document.querySelector(".sub-video-wrapper");
+    const previewScale = (wrapper && wrapper.clientWidth > 0) ? (wrapper.clientWidth / 1080) : 0.35;
+
+    // Outline / Stroke emulation for CSS overlay (scaled proportionally)
+    const strokeW = parseFloat(s.outline_width) !== undefined ? parseFloat(s.outline_width) : 0.5;
+    const computedStrokeW = Math.max(0.5, Math.round(strokeW * previewScale * 2.2 * 10) / 10);
     const strokeC = s.outline_color || "#000000";
     if (strokeW > 0) {
         overlay.style.textShadow = `
-            -${strokeW}px -${strokeW}px 0 ${strokeC},
-             ${strokeW}px -${strokeW}px 0 ${strokeC},
-            -${strokeW}px  ${strokeW}px 0 ${strokeC},
-             ${strokeW}px  ${strokeW}px 0 ${strokeC},
-             0px ${strokeW + 1}px 4px rgba(0,0,0,0.8)
+            -${computedStrokeW}px -${computedStrokeW}px 0 ${strokeC},
+             ${computedStrokeW}px -${computedStrokeW}px 0 ${strokeC},
+            -${computedStrokeW}px  ${computedStrokeW}px 0 ${strokeC},
+             ${computedStrokeW}px  ${computedStrokeW}px 0 ${strokeC},
+             0px ${computedStrokeW + 0.5}px 3px rgba(0,0,0,0.85)
         `;
     } else {
         overlay.style.textShadow = "0 2px 8px rgba(0,0,0,0.5)";
     }
 
-    // Scale font size down to preview window (roughly 1/3 of 1080p canvas)
-    const previewScale = 0.32;
-    const computedFontSize = Math.max(14, Math.round((parseInt(s.font_size) || 68) * previewScale));
+    // Font size dynamically scaled to match 1080x1920 video
+    const baseFontSize = parseInt(s.font_size, 10) || 48;
+    const computedFontSize = Math.max(11, Math.round(baseFontSize * previewScale));
     overlay.style.fontSize = `${computedFontSize}px`;
 
     // Box Style Background
@@ -3827,21 +3945,21 @@ function updateSubOverlay() {
     if (boxStyle === "pill") {
         overlay.style.background = hexToRgba(boxColor, opacity);
         overlay.style.borderRadius = "999px";
-        overlay.style.padding = "4px 14px";
+        overlay.style.padding = `${Math.round(6 * previewScale)}px ${Math.round(20 * previewScale)}px`;
         overlay.style.display = "inline-block";
         overlay.style.left = "8%";
         overlay.style.right = "8%";
     } else if (boxStyle === "box") {
         overlay.style.background = hexToRgba(boxColor, opacity);
-        overlay.style.borderRadius = "6px";
-        overlay.style.padding = "6px 14px";
+        overlay.style.borderRadius = `${Math.round(8 * previewScale)}px`;
+        overlay.style.padding = `${Math.round(8 * previewScale)}px ${Math.round(20 * previewScale)}px`;
         overlay.style.display = "inline-block";
         overlay.style.left = "8%";
         overlay.style.right = "8%";
     } else if (boxStyle === "banner") {
         overlay.style.background = hexToRgba(boxColor, opacity);
         overlay.style.borderRadius = "0";
-        overlay.style.padding = "8px 14px";
+        overlay.style.padding = `${Math.round(10 * previewScale)}px ${Math.round(20 * previewScale)}px`;
         overlay.style.display = "block";
         overlay.style.left = "0";
         overlay.style.right = "0";
@@ -4187,10 +4305,14 @@ async function executeBurnSubtitles() {
     applyCurrentTransformToCues();
 
     const btn = document.getElementById("subBurnExecuteBtn");
+    const btnHeader = document.getElementById("subBurnExecuteBtnHeader");
     const btnText = document.getElementById("subBurnExecuteText");
+    const btnTextHeader = document.getElementById("subBurnExecuteTextHeader");
 
     if (btn) btn.disabled = true;
+    if (btnHeader) btnHeader.disabled = true;
     if (btnText) btnText.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Burning & Replacing Reel...';
+    if (btnTextHeader) btnTextHeader.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Burning...';
 
     // 2. Pause video and release src so browser releases Windows file lock
     const video = document.getElementById("subModalVideo");
@@ -4227,7 +4349,9 @@ async function executeBurnSubtitles() {
         }
     } finally {
         if (btn) btn.disabled = false;
-        if (btnText) btnText.innerHTML = '<i class="fa-solid fa-fire-flame-curved"></i> Burn to Video';
+        if (btnHeader) btnHeader.disabled = false;
+        if (btnText) btnText.innerHTML = '<i class="fa-solid fa-fire-flame-curved"></i> <span id="subBurnExecuteText">Burn to Video</span>';
+        if (btnTextHeader) btnTextHeader.innerHTML = 'Burn to Video';
     }
 }
 
@@ -4689,10 +4813,13 @@ async function createSingleViralReel(index) {
     const hookBadge = hookBadgeInput ? hookBadgeInput.value.trim() : "WAIT FOR IT... 🤫";
     const burnSubtitles = burnToggle ? burnToggle.checked : false;
 
+    const resolvedVideoTitle = viralState.videoTitle || (state.currentPreviewData ? state.currentPreviewData.title : "") || (document.getElementById("previewTitle")?.textContent !== "Loading video..." ? document.getElementById("previewTitle")?.textContent : "") || (document.getElementById("titleInput") ? document.getElementById("titleInput").value : "") || "";
+
     const payload = {
         url: currentUrl,
         source_file: viralState.sourceFile,
         title: m.headline,
+        video_title: resolvedVideoTitle,
         start_seconds: Math.floor(m.start_time),
         end_seconds: Math.ceil(m.end_time),
         clip_length: Math.ceil(m.duration),
@@ -4757,10 +4884,13 @@ async function createAllViralMomentsClips() {
     const hookBadge = hookBadgeInput ? hookBadgeInput.value.trim() : "WAIT FOR IT... 🤫";
     const burnSubtitles = burnToggle ? burnToggle.checked : false;
 
+    const resolvedVideoTitle = viralState.videoTitle || (state.currentPreviewData ? state.currentPreviewData.title : "") || (document.getElementById("previewTitle")?.textContent !== "Loading video..." ? document.getElementById("previewTitle")?.textContent : "") || (document.getElementById("titleInput") ? document.getElementById("titleInput").value : "") || "";
+
     const payload = {
         url: currentUrl,
         source_file: viralState.sourceFile,
         title: viralState.videoTitle || "Viral Highlights",
+        video_title: resolvedVideoTitle,
         max_clips: viralState.moments.length,
         count: viralState.moments.length,
         moments: viralState.moments,
@@ -4799,4 +4929,12 @@ async function createAllViralMomentsClips() {
         if (btnText) btnText.innerHTML = `Create All Viral Reels (${viralState.moments.length})`;
     }
 }
+
+// Window resize listener to keep 9:16 subtitle preview overlay scale physically exact
+window.addEventListener("resize", () => {
+    const modal = document.getElementById("subtitlesModal");
+    if (modal && modal.classList.contains("active")) {
+        updateSubOverlay();
+    }
+});
 

@@ -113,11 +113,11 @@ def _generate_ass_header(
     """Helper to generate standard ASS header and return colors and text_transform."""
     style = style or {}
     font_name = style.get("font_name", "Arial Black")
-    font_size = int(style.get("font_size", 68))
+    font_size = int(style.get("font_size", 48))
     primary_color = hex_to_ass_color(style.get("text_color", "#FFFFFF"))
     highlight_color = hex_to_ass_color(style.get("highlight_color", "#FFE500"))
     outline_color = hex_to_ass_color(style.get("outline_color", "#000000"))
-    outline_width = float(style.get("outline_width", 4.0))
+    outline_width = float(style.get("outline_width", 0.5))
     shadow_depth = float(style.get("shadow_depth", 1.5))
     text_transform = style.get("text_transform", "uppercase")
     box_style = style.get("box_style", "none")  # none, box, pill, banner

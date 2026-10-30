@@ -228,6 +228,7 @@ class SubtitleAutoSyncRequest(BaseModel):
     highlight_mode: str = Field(default="active_word", description="active_word, static, or disabled")
     words_per_screen: Optional[int] = 3
     mode: Optional[str] = None  # hinglish, english, or None
+    force_retranscribe: Optional[bool] = False
 
 
 class SubtitleBurnRequest(BaseModel):
@@ -360,14 +361,19 @@ def auto_sync_clip_subtitles_endpoint(clip_name: str, payload: SubtitleAutoSyncR
     cues = sub_data.get("cues") or []
     styles = sub_data.get("styles") or {}
 
-    # If no cues exist and groq key is available, auto-transcribe clip
-    if not cues and get_groq_api_key():
+    # If force_retranscribe or if no cues exist, transcribe directly with Groq Whisper for 100% voice sync
+    force_retranscribe = bool(getattr(payload, "force_retranscribe", False))
+    if (force_retranscribe or not cues) and input_clip.exists() and get_groq_api_key():
         try:
-            logger.info("Auto-transcribing clip %s for voice sync...", input_clip.name)
+            logger.info("Transcribing clip %s directly for precision voice sync...", input_clip.name)
             clip_transcript = transcribe_video_with_groq(input_clip, video_id=input_clip.stem)
-            cues = clip_transcript.get("segments", [])
+            raw_cues = clip_transcript.get("segments", [])
+            if raw_cues:
+                cues = raw_cues
+                if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(clip_transcript.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+                    cues = convert_cues_to_hinglish(cues)
         except Exception as exc:
-            logger.warning("Voice sync auto-transcribe failed: %s", exc)
+            logger.warning("Voice sync direct transcribe failed: %s", exc)
 
     if not cues:
         raise HTTPException(

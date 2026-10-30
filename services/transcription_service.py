@@ -669,40 +669,61 @@ def slice_transcript_for_clip(
     """
     Slice the parent transcript to match a specific clip's start & end time.
     Re-zeros timestamps relative to 00:00 of the clip.
+    Strictly filters out words spoken outside the clip boundaries and deduplicates words.
     """
     raw_segments = transcript.get("segments", [])
     clip_duration = round(clip_end - clip_start, 2)
     sliced_cues: List[Dict[str, Any]] = []
+    seen_words = set()
 
     for seg in raw_segments:
-        s_start = float(seg["start"])
-        s_end = float(seg["end"])
+        s_start = float(seg.get("start", 0.0))
+        s_end = float(seg.get("end", 0.0))
 
         # Check if segment overlaps with the clip range
-        if s_end > clip_start and s_start < clip_end:
-            rel_start = max(0.0, round(s_start - clip_start, 2))
-            rel_end = min(clip_duration, round(s_end - clip_start, 2))
+        if s_end <= clip_start or s_start >= clip_end:
+            continue
 
-            # Filter and re-zero word timestamps
-            rel_words = []
-            for w in seg.get("words", []):
-                w_start = float(w["start"])
-                w_end = float(w["end"])
-                if w_end > clip_start and w_start < clip_end:
-                    rel_words.append({
-                        "word": w["word"],
-                        "start": max(0.0, round(w_start - clip_start, 2)),
-                        "end": min(clip_duration, round(w_end - clip_start, 2)),
-                    })
+        raw_words = seg.get("words", [])
+        rel_words = []
+        if raw_words:
+            for w in raw_words:
+                w_st = float(w.get("start", 0.0))
+                w_en = float(w.get("end", 0.0))
+                w_dur = max(0.05, w_en - w_st)
 
-            if not rel_words and seg.get("text"):
-                rel_words = synthesize_word_timestamps(seg["text"], rel_start, rel_end)
+                # Overlap check with clip boundary
+                if w_en <= clip_start or w_st >= clip_end:
+                    continue
+                # If word starts before clip cut, require at least 40% inside clip
+                if w_st < clip_start and ((w_en - clip_start) / w_dur) < 0.40:
+                    continue
+                # If word ends after clip cut, require at least 40% inside clip
+                if w_en > clip_end and ((clip_end - w_st) / w_dur) < 0.40:
+                    continue
 
+                r_st = max(0.0, round(w_st - clip_start, 2))
+                r_en = min(clip_duration, round(w_en - clip_start, 2))
+                w_key = (w.get("word", "").strip(), round(w_st, 1))
+                if w_key in seen_words:
+                    continue
+                seen_words.add(w_key)
+                rel_words.append({
+                    "word": w.get("word", "").strip(),
+                    "start": r_st,
+                    "end": r_en,
+                })
+        elif seg.get("text"):
+            r_st = max(0.0, round(s_start - clip_start, 2))
+            r_en = min(clip_duration, round(s_end - clip_start, 2))
+            rel_words = synthesize_word_timestamps(seg["text"], r_st, r_en)
+
+        if rel_words:
             sliced_cues.append({
                 "id": len(sliced_cues),
-                "start": rel_start,
-                "end": rel_end,
-                "text": seg["text"],
+                "start": rel_words[0]["start"],
+                "end": rel_words[-1]["end"],
+                "text": " ".join(w["word"] for w in rel_words),
                 "words": rel_words,
             })
 
@@ -748,55 +769,60 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
                 break
 
     if custom_path and custom_path.exists():
-        try:
-            with open(custom_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-                cues = saved.get("cues", [])
+        if custom_path.stat().st_size == 0:
+            logger.info("Found 0-byte subtitle file %s; cleaning up to regenerate", custom_path)
+            custom_path.unlink(missing_ok=True)
+            custom_path = None
+        else:
+            try:
+                with open(custom_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                    cues = saved.get("cues", [])
 
-                # By default convert any saved Hindi Devanagari cues to Hinglish
-                if any(has_devanagari_characters(c.get("text", "")) for c in cues):
-                    logger.info("Found Hindi Devanagari in saved subtitles for %s; auto-converting to Hinglish by default", clip_name)
-                    cues = convert_cues_to_hinglish(cues)
+                    # By default convert any saved Hindi Devanagari cues to Hinglish
+                    if any(has_devanagari_characters(c.get("text", "")) for c in cues):
+                        logger.info("Found Hindi Devanagari in saved subtitles for %s; auto-converting to Hinglish by default", clip_name)
+                        cues = convert_cues_to_hinglish(cues)
+                        saved["cues"] = cues
+                        save_clip_subtitles(clip_name, saved)
+
+                        if clip_file:
+                            try:
+                                full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
+                                from routers.subtitles_router import update_clip_metadata_caption
+                                update_clip_metadata_caption(clip_file, full_caption, saved.get("styles", {}))
+                            except Exception:
+                                pass
+                    for c in cues:
+                        if not c.get("words") and c.get("text"):
+                            c["words"] = synthesize_word_timestamps(
+                                c["text"], float(c.get("start", 0)), float(c.get("end", 0))
+                            )
+                    # Auto-chunk into 2-4 word bites if cues are long full sentences
+                    if cues and any(len(str(c.get("text", "")).split()) > 5 for c in cues):
+                        cues = create_voice_synced_word_chunks(cues, max_words=3)
+                        saved["cues"] = cues
+
+                    styles = saved.get("styles", {})
+                    styles.setdefault("highlight_mode", "active_word")
+                    styles.setdefault("words_per_screen", 3)
+                    styles.setdefault("font_family", "Montserrat")
+                    styles.setdefault("font_size", 48)
+                    styles.setdefault("primary_color", "#FFFFFF")
+                    styles.setdefault("highlight_color", "#FACC15")
+                    styles.setdefault("outline_color", "#000000")
+                    styles.setdefault("outline_width", 0.5)
+                    styles.setdefault("text_transform", "uppercase")
+                    styles.setdefault("margin_v", 320)
                     saved["cues"] = cues
-                    try:
-                        with open(custom_path, "w", encoding="utf-8") as f_out:
-                            json.dump(saved, f_out, ensure_ascii=False, indent=2)
-                    except Exception as err:
-                        logger.warning("Could not persist converted Hinglish subtitles: %s", err)
+                    saved["styles"] = styles
 
-                    if clip_file:
-                        try:
-                            full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
-                            from routers.subtitles_router import update_clip_metadata_caption
-                            update_clip_metadata_caption(clip_file, full_caption, saved.get("styles", {}))
-                        except Exception:
-                            pass
-                for c in cues:
-                    if not c.get("words") and c.get("text"):
-                        c["words"] = synthesize_word_timestamps(
-                            c["text"], float(c.get("start", 0)), float(c.get("end", 0))
-                        )
-                # Auto-chunk into 2-4 word bites if cues are long full sentences
-                if cues and any(len(str(c.get("text", "")).split()) > 5 for c in cues):
-                    cues = create_voice_synced_word_chunks(cues, max_words=3)
-                    saved["cues"] = cues
-
-                styles = saved.get("styles", {})
-                styles.setdefault("highlight_mode", "active_word")
-                styles.setdefault("words_per_screen", 3)
-                styles.setdefault("font_family", "Montserrat")
-                styles.setdefault("font_size", 42)
-                styles.setdefault("primary_color", "#FFFFFF")
-                styles.setdefault("highlight_color", "#FACC15")
-                styles.setdefault("outline_color", "#000000")
-                styles.setdefault("outline_width", 3.0)
-                styles.setdefault("text_transform", "uppercase")
-                styles.setdefault("margin_v", 320)
-                saved["cues"] = cues
-                saved["styles"] = styles
-                return saved
-        except Exception:
-            pass
+                    # If cues exist and are valid, return them
+                    if cues:
+                        return saved
+            except Exception as e_load:
+                logger.warning("Could not read existing subtitle file %s: %s", custom_path, e_load)
+                custom_path = None
 
     # Look up metadata
     meta = None
@@ -832,72 +858,13 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
     clip_start = float(meta.get("clip_start", 0.0)) if meta else 0.0
     clip_end = float(meta.get("clip_end", 0.0)) if meta else 0.0
 
-    # 1. First attempt: retrieve existing cached transcript from parent video
-    transcript = None
-    if source_video_id:
-        transcript = get_stored_transcript(source_video_id)
-    if not transcript and source_file_name:
-        transcript = get_stored_transcript(Path(source_file_name).stem)
-
-    # 2. If parent transcript exists, slice and chunk cues instantly
-    if transcript and transcript.get("segments"):
-        if meta and meta.get("has_prepended_hook") and float(meta.get("hook_duration", 0.0)) > 0:
-            h_st = float(meta.get("hook_start", clip_start))
-            h_dur = float(meta.get("hook_duration", 0.0))
-            raw_hook_cues = slice_transcript_for_clip(transcript, h_st, h_st + h_dur)
-            raw_body_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
-            for bc in raw_body_cues:
-                bc["start"] = round(bc["start"] + h_dur, 2)
-                bc["end"] = round(bc["end"] + h_dur, 2)
-                for w in bc.get("words", []):
-                    w["start"] = round(w["start"] + h_dur, 2)
-                    w["end"] = round(w["end"] + h_dur, 2)
-            raw_cues = raw_hook_cues + raw_body_cues
-        else:
-            raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
-
-        cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
-
-        # 1. Hindi audio -> by default save & get Hinglish subtitles
-        if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(transcript.get("language", "")).lower() in ("hi", "hindi", "urdu"):
-            cues = convert_cues_to_hinglish(cues)
-        # 2. Foreign language (neither Hindi nor English) -> by default use English translation
-        elif str(transcript.get("language", "")).lower() not in ("en", "english"):
-            en_trans = get_stored_transcript(f"{source_video_id}_en")
-            if en_trans and en_trans.get("segments"):
-                raw_cues_en = slice_transcript_for_clip(en_trans, clip_start, clip_end)
-                if raw_cues_en:
-                    cues = create_voice_synced_word_chunks(raw_cues_en, max_words=3)
-        styles = (meta or {}).get("styles", {})
-        styles.setdefault("highlight_mode", "active_word")
-        styles.setdefault("words_per_screen", 3)
-        styles.setdefault("font_family", "Montserrat")
-        styles.setdefault("font_size", 42)
-        styles.setdefault("primary_color", "#FFFFFF")
-        styles.setdefault("highlight_color", "#FACC15")
-        styles.setdefault("outline_color", "#000000")
-        styles.setdefault("outline_width", 3.0)
-        styles.setdefault("text_transform", "uppercase")
-        styles.setdefault("margin_v", 320)
-
-        # Cache sliced subtitles to disk
-        save_clip_subtitles(clip_name, {"cues": cues, "styles": styles})
-        return {
-            "cues": cues,
-            "styles": styles,
-            "source_video_id": source_video_id or (clip_file.stem if clip_file else "clip"),
-            "clip_start": clip_start,
-            "clip_end": clip_end,
-            "has_groq_key": bool(get_groq_api_key())
-        }
-
-    # 3. If parent transcript is missing, transcribe this 30-60s clip DIRECTLY (takes 1-2s)
+    # 1. First priority for rendered clips: direct Groq Whisper transcription produces 100% exact voice sync
     if not clip_file or not clip_file.exists():
         clip_file = _find_clip_path(clip_name)
 
     if clip_file and clip_file.exists() and get_groq_api_key():
         try:
-            logger.info("Auto-transcribing clip %s directly for subtitles...", clip_file.name)
+            logger.info("Auto-transcribing clip %s directly for 100%% voice-audio sync...", clip_file.name)
             clip_transcript = transcribe_video_with_groq(clip_file, video_id=clip_file.stem)
             raw_cues = clip_transcript.get("segments", [])
             cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
@@ -917,11 +884,11 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             styles.setdefault("highlight_mode", "active_word")
             styles.setdefault("words_per_screen", 3)
             styles.setdefault("font_family", "Montserrat")
-            styles.setdefault("font_size", 42)
+            styles.setdefault("font_size", 48)
             styles.setdefault("primary_color", "#FFFFFF")
             styles.setdefault("highlight_color", "#FACC15")
             styles.setdefault("outline_color", "#000000")
-            styles.setdefault("outline_width", 3.0)
+            styles.setdefault("outline_width", 0.5)
             styles.setdefault("text_transform", "uppercase")
             styles.setdefault("margin_v", 320)
 
@@ -936,7 +903,73 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
                 "has_groq_key": True
             }
         except Exception as exc:
-            logger.warning("Direct clip transcription failed: %s", exc)
+            logger.warning("Direct clip transcription failed, falling back to parent slice: %s", exc)
+
+    # 2. Fallback: retrieve parent video transcript and slice cleanly
+    transcript = None
+    if source_video_id:
+        transcript = get_stored_transcript(source_video_id)
+    if not transcript and source_file_name:
+        transcript = get_stored_transcript(Path(source_file_name).stem)
+
+    if transcript and transcript.get("segments"):
+        if meta and meta.get("has_prepended_hook") and float(meta.get("hook_duration", 0.0)) > 0:
+            h_st = float(meta.get("hook_start", clip_start))
+            h_dur = float(meta.get("hook_duration", 0.0))
+            raw_hook = slice_transcript_for_clip(transcript, h_st, h_st + h_dur)
+            hook_chunks = create_voice_synced_word_chunks(raw_hook, max_words=3)
+            for hc in hook_chunks:
+                hc["end"] = min(h_dur, hc["end"])
+
+            raw_body = slice_transcript_for_clip(transcript, clip_start, clip_end)
+            body_chunks = create_voice_synced_word_chunks(raw_body, max_words=3)
+            for bc in body_chunks:
+                bc["start"] = round(bc["start"] + h_dur, 2)
+                bc["end"] = round(bc["end"] + h_dur, 2)
+                for w in bc.get("words", []):
+                    w["start"] = round(w["start"] + h_dur, 2)
+                    w["end"] = round(w["end"] + h_dur, 2)
+
+            cues = hook_chunks + body_chunks
+            for idx, c in enumerate(cues):
+                c["id"] = idx
+        else:
+            raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
+            cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
+
+        # 1. Hindi audio -> by default save & get Hinglish subtitles
+        if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(transcript.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+            cues = convert_cues_to_hinglish(cues)
+        # 2. Foreign language (neither Hindi nor English) -> by default use English translation
+        elif str(transcript.get("language", "")).lower() not in ("en", "english"):
+            en_trans = get_stored_transcript(f"{source_video_id}_en")
+            if en_trans and en_trans.get("segments"):
+                raw_cues_en = slice_transcript_for_clip(en_trans, clip_start, clip_end)
+                if raw_cues_en:
+                    cues = create_voice_synced_word_chunks(raw_cues_en, max_words=3)
+
+        styles = (meta or {}).get("styles", {})
+        styles.setdefault("highlight_mode", "active_word")
+        styles.setdefault("words_per_screen", 3)
+        styles.setdefault("font_family", "Montserrat")
+        styles.setdefault("font_size", 48)
+        styles.setdefault("primary_color", "#FFFFFF")
+        styles.setdefault("highlight_color", "#FACC15")
+        styles.setdefault("outline_color", "#000000")
+        styles.setdefault("outline_width", 0.5)
+        styles.setdefault("text_transform", "uppercase")
+        styles.setdefault("margin_v", 320)
+
+        # Cache sliced subtitles to disk
+        save_clip_subtitles(clip_name, {"cues": cues, "styles": styles})
+        return {
+            "cues": cues,
+            "styles": styles,
+            "source_video_id": source_video_id or (clip_file.stem if clip_file else "clip"),
+            "clip_start": clip_start,
+            "clip_end": clip_end,
+            "has_groq_key": bool(get_groq_api_key())
+        }
 
     styles = (meta or {}).get("styles", {})
     styles.setdefault("highlight_mode", "active_word")
@@ -950,7 +983,7 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
 
 
 def save_clip_subtitles(clip_name: str, data: Dict[str, Any]) -> None:
-    """Save user-edited subtitle cues & style settings for a clip."""
+    """Save user-edited subtitle cues & style settings for a clip atomically."""
     cues = data.get("cues", [])
     if cues and any(has_devanagari_characters(c.get("text", "")) for c in cues):
         logger.info("Devanagari detected in save_clip_subtitles for %s; converting to Hinglish by default", clip_name)
@@ -962,5 +995,7 @@ def save_clip_subtitles(clip_name: str, data: Dict[str, Any]) -> None:
     else:
         custom_path = CLIPS_DIR / f"{Path(clip_name).name}.subtitles.json"
     custom_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(custom_path, "w", encoding="utf-8") as f:
+    temp_path = custom_path.with_suffix(".tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    temp_path.replace(custom_path)

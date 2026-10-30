@@ -1115,40 +1115,101 @@
     </div>
 
     <!-- ==================================================================
-         MODAL 5: SUBTITLE & CAPTION STUDIO (Whisper + Bulk / 1-by-1 Edit)
+         FULL SCREEN DEDICATED PAGE: SUBTITLE & CAPTION STUDIO
          ================================================================== -->
-    <div id="subtitlesModal" class="modal-overlay" onclick="closeSubtitleModal()">
-        <div class="modal-card subtitle-modal" onclick="event.stopPropagation()">
-            <div class="sub-studio-header">
-                <div>
-                    <h3 style="color: #fff; font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
-                        <i class="fa-solid fa-closed-captioning" style="color: var(--primary);"></i> Subtitle & Caption Studio
-                    </h3>
-                    <p style="font-size: 12px; color: var(--text-dim); margin-top: 3px; display: flex; align-items: center; gap: 8px;">
-                        <span>Clip: <span id="subModalClipNameBadge" style="color: #fff; font-weight: 600;">clip.mp4</span></span>
-                        <span id="subModalGroupBadge" class="folder-badge accent" style="display: none; font-size: 11px;"><i class="fa-solid fa-layer-group"></i> Group Mode</span>
-                    </p>
+    <div id="subtitlesModal" class="subtitle-studio-page">
+        <div class="subtitle-studio-container">
+            <!-- Fullscreen Top Navigation Bar -->
+            <header class="sub-studio-topbar">
+                <div class="sub-studio-topbar-left">
+                    <button type="button" class="sub-topbar-back-btn" onclick="closeSubtitleModal()" title="Back to Media Library">
+                        <i class="fa-solid fa-arrow-left"></i> <span>Back to Library</span>
+                    </button>
+                    <div class="sub-topbar-divider"></div>
+                    <div class="sub-topbar-brand">
+                        <div class="sub-topbar-icon"><i class="fa-solid fa-closed-captioning"></i></div>
+                        <div>
+                            <div class="sub-topbar-title">Subtitle & Caption Studio</div>
+                            <div class="sub-topbar-meta">
+                                <span class="sub-clip-name-pill"><i class="fa-solid fa-film"></i> <span id="subModalClipNameBadge">clip.mp4</span></span>
+                                <span id="subModalGroupBadge" class="folder-badge accent" style="display: none;"><i class="fa-solid fa-layer-group"></i> Group Mode</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <button class="modal-close-btn" onclick="closeSubtitleModal()"><i class="fa-solid fa-xmark"></i></button>
-            </div>
 
-            <!-- Notice / Status Banner for Groq Key or Auto-transcription -->
-            <div id="subStatusBanner" style="display: none; padding: 9px 14px; border-radius: var(--radius-sm); font-size: 12.5px; margin-bottom: 12px;"></div>
+                <div class="sub-studio-topbar-right">
+                    <div class="sub-topbar-export-group">
+                        <button type="button" class="sub-topbar-btn secondary" onclick="downloadSubtitles('srt')" title="Export SubRip (.SRT) file">
+                            <i class="fa-solid fa-download"></i> .SRT
+                        </button>
+                        <button type="button" class="sub-topbar-btn secondary" onclick="downloadSubtitles('ass')" title="Export Advanced SubStation Alpha (.ASS) style file">
+                            <i class="fa-solid fa-file-code"></i> .ASS
+                        </button>
+                    </div>
+                    <div class="sub-topbar-divider"></div>
+                    <button type="button" class="sub-topbar-btn secondary" onclick="saveSubtitlesDraft(true)" title="Save subtitle cues & styling">
+                        <i class="fa-solid fa-floppy-disk"></i> <span>Save Draft</span>
+                    </button>
+                    <button id="subBurnGroupExecuteBtnHeader" type="button" class="sub-topbar-btn folder-mount-btn" style="display: none;" onclick="executeBurnGroupSubtitles()" title="Mount subtitles to each clip in this group and save reels">
+                        <i class="fa-solid fa-layer-group"></i> <span>Mount All in Group (<span id="subGroupCountBadgeHeader">0</span>)</span>
+                    </button>
+                    <button id="subBurnExecuteBtnHeader" type="button" class="sub-topbar-btn primary" onclick="executeBurnSubtitles()" title="Burn rendered captions directly into video">
+                        <i class="fa-solid fa-fire-flame-curved"></i> <span id="subBurnExecuteTextHeader">Burn to Video</span>
+                    </button>
+                    <button type="button" class="sub-topbar-close-btn" onclick="closeSubtitleModal()" title="Close Studio">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </header>
 
-            <div class="sub-studio-layout">
+            <!-- Studio Workspace Body -->
+            <div class="sub-studio-body">
+                <!-- Notice / Status Banner for Groq Key or Auto-transcription -->
+                <div id="subStatusBanner" style="display: none; padding: 10px 16px; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 12px;"></div>
+
+                <div class="sub-studio-layout">
                 <!-- Left Column: 9:16 Video Preview with Dynamic Subtitle Overlay -->
                 <div class="sub-preview-column">
-                    <div class="sub-video-wrapper">
+                    <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span style="font-size: 12px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 6px;">
+                            <i class="fa-solid fa-mobile-screen" style="color: var(--primary);"></i> 9:16 Live Preview
+                            <span class="badge" style="background: rgba(99, 102, 241, 0.18); color: #c7d2fe; border: 1px solid rgba(99, 102, 241, 0.35); font-size: 10px; font-family: monospace; padding: 2px 6px;">1080 × 1920</span>
+                        </span>
+                        <button type="button" id="toggleSubSafeZonesBtn" class="preset-chip active" style="font-size: 10.5px; padding: 3px 8px;" onclick="toggleSubSafeZones()">
+                            <i class="fa-solid fa-border-none"></i> Safe Zones
+                        </button>
+                    </div>
+
+                    <div id="subMockupPhone" class="sub-video-wrapper" onclick="onSubMockupClick(event)" title="Click anywhere on the preview to adjust vertical subtitle position">
                         <video id="subModalVideo" playsinline preload="metadata" ontimeupdate="onSubVideoTimeUpdate()"></video>
+
+                        <!-- Safe Zone Guides (Matches Instagram / TikTok / Reels UI) -->
+                        <div id="subSafeZonesLayer" class="sub-safe-zones">
+                            <div class="sub-safe-top">Top Safe Zone (0 - 240px)</div>
+                            <div class="sub-safe-bottom">Caption / UI Safe Zone (1560 - 1920px)</div>
+                            <div class="sub-safe-right">
+                                <i class="fa-solid fa-heart"></i>
+                                <i class="fa-solid fa-comment"></i>
+                                <i class="fa-solid fa-paper-plane"></i>
+                                <i class="fa-solid fa-compact-disc"></i>
+                            </div>
+                        </div>
+
                         <div id="subOverlayCaption" class="sub-overlay-caption">PREVIEW SUBTITLE</div>
                     </div>
+
+                    <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 6px; text-align: center;">
+                        <i class="fa-solid fa-hand-pointer"></i> Click anywhere on phone screen to adjust vertical position.
+                    </div>
+
                     <!-- Quick Playback Controls -->
-                    <div style="display: flex; align-items: center; gap: 12px; margin-top: 10px; width: 100%; max-width: 290px;">
+                    <div class="sub-playback-controls">
                         <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="toggleSubVideoPlay()">
                             <i id="subPlayIcon" class="fa-solid fa-play"></i>
                         </button>
                         <input id="subVideoSeek" type="range" min="0" max="100" value="0" step="0.1" style="flex: 1;" oninput="onSubVideoSeek(this.value)">
-                        <span id="subVideoTimeDisplay" style="font-size: 11px; font-family: monospace; color: var(--text-dim);">0:00</span>
+                        <span id="subVideoTimeDisplay" style="font-size: 11px; font-family: monospace; color: var(--text-dim); min-width: 80px; text-align: right;">0:00 / 0:00</span>
                     </div>
                 </div>
 
@@ -1267,8 +1328,14 @@
                             </div>
 
                             <div class="sub-control-group">
-                                <label>Font Size: <span id="subFontSizeVal">68</span>px</label>
-                                <input id="subFontSize" type="range" min="36" max="96" value="68" oninput="updateSubStyle('font_size', this.value); document.getElementById('subFontSizeVal').textContent=this.value;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <label style="margin-bottom: 0;">Font Size: <strong id="subFontSizeVal" style="color: #fff;">48</strong>px</label>
+                                    <div style="display: flex; align-items: center; gap: 4px;">
+                                        <input id="subFontSizeNum" type="number" min="20" max="140" value="48" class="form-input" style="width: 60px; padding: 2px 6px; font-size: 11.5px; text-align: center;" oninput="onSubFontSizeManualChange(this.value)">
+                                        <span style="font-size: 11px; color: var(--text-dim);">px</span>
+                                    </div>
+                                </div>
+                                <input id="subFontSize" type="range" min="24" max="120" value="48" oninput="onSubFontSizeChange(this.value)">
                             </div>
 
                             <div class="sub-control-group">
@@ -1308,8 +1375,14 @@
                             </div>
 
                             <div class="sub-control-group">
-                                <label>Outline Width: <span id="subOutlineWidthVal">4</span>px</label>
-                                <input id="subOutlineWidth" type="range" min="0" max="8" value="4" step="0.5" oninput="updateSubStyle('outline_width', this.value); document.getElementById('subOutlineWidthVal').textContent=this.value;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <label style="margin-bottom: 0;">Outline Width: <strong id="subOutlineWidthVal" style="color: #fff;">0.5</strong>px</label>
+                                    <div style="display: flex; align-items: center; gap: 4px;">
+                                        <input id="subOutlineWidthNum" type="number" min="0" max="16" step="0.5" value="0.5" class="form-input" style="width: 60px; padding: 2px 6px; font-size: 11.5px; text-align: center;" oninput="onSubOutlineWidthManualChange(this.value)">
+                                        <span style="font-size: 11px; color: var(--text-dim);">px</span>
+                                    </div>
+                                </div>
+                                <input id="subOutlineWidth" type="range" min="0" max="14" value="0.5" step="0.5" oninput="onSubOutlineWidthChange(this.value)">
                             </div>
 
                             <div class="sub-control-group">
@@ -1351,25 +1424,35 @@
                             </div>
                         </div>
 
-                        <!-- Position Options with Precision Slider -->
-                        <div class="sub-control-group" style="margin-top: 10px; margin-bottom: 18px;">
+                        <!-- Position Options with Precision Slider & Exact Parameters -->
+                        <div class="sub-control-group" style="margin-top: 10px; margin-bottom: 18px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: var(--radius-sm); padding: 12px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                <label style="margin-bottom: 0;">Vertical Position: <span id="subPosPercentVal">78</span>% from top</label>
-                                <span style="font-size: 11px; color: var(--accent-cyan); font-weight: 600;">78% = Viral Safe Zone</span>
+                                <div>
+                                    <span style="font-size: 12px; font-weight: 700; color: #fff;">
+                                        <i class="fa-solid fa-arrows-up-down" style="color: var(--primary);"></i> Vertical Position (Y):
+                                        <strong id="subPosYVal" style="color: #60a5fa;">1498</strong>px
+                                        <span style="font-size: 11px; color: var(--text-dim); font-weight: 400;">(<span id="subPosPercentVal">78</span>% from top)</span>
+                                    </span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <span style="font-size: 11px; color: var(--text-dim);">Exact Y:</span>
+                                    <input id="subPosYInput" type="number" min="192" max="1728" step="10" value="1498" class="form-input" style="width: 76px; padding: 3px 6px; font-size: 11.5px; text-align: center;" oninput="onSubPosYManualChange(this.value)">
+                                    <span style="font-size: 11px; color: var(--text-dim);">px</span>
+                                </div>
                             </div>
                             <input id="subPositionPercent" type="range" min="10" max="90" value="78" step="1" oninput="updateSubPositionPercent(this.value)">
                             <div class="sub-pos-btn-group" style="margin-top: 8px;">
                                 <button type="button" id="subPosTop" class="sub-pos-btn" onclick="setSubPositionPercent(20)">
-                                    <i class="fa-solid fa-arrow-up"></i> Top (20%)
+                                    <i class="fa-solid fa-arrow-up"></i> Top (384px · 20%)
                                 </button>
                                 <button type="button" id="subPosMiddle" class="sub-pos-btn" onclick="setSubPositionPercent(50)">
-                                    <i class="fa-solid fa-arrows-up-down"></i> Middle (50%)
+                                    <i class="fa-solid fa-arrows-up-down"></i> Middle (960px · 50%)
                                 </button>
                                 <button type="button" id="subPosSafe" class="sub-pos-btn active" onclick="setSubPositionPercent(78)">
-                                    <i class="fa-solid fa-bullseye"></i> Reels Safe (78%)
+                                    <i class="fa-solid fa-bullseye"></i> Reels Safe (1498px · 78%)
                                 </button>
                                 <button type="button" id="subPosBottom" class="sub-pos-btn" onclick="setSubPositionPercent(85)">
-                                    <i class="fa-solid fa-arrow-down"></i> Bottom (85%)
+                                    <i class="fa-solid fa-arrow-down"></i> Bottom (1632px · 85%)
                                 </button>
                             </div>
                         </div>
@@ -1470,8 +1553,9 @@
                 </div>
                 <span id="subGroupProgressPercent" style="font-size: 13px; font-weight: 700; color: #a5b4fc; font-family: monospace;">0%</span>
             </div>
-        </div>
-    </div>
+            </div> <!-- .sub-studio-body -->
+        </div> <!-- .subtitle-studio-container -->
+    </div> <!-- #subtitlesModal -->
 
 
     <!-- ==================================================================

@@ -155,6 +155,8 @@ job_cancel_events: dict[str, threading.Event] = {}
 class ClipRequest(BaseModel):
     url: str = ""
     title: str = "My Video"
+    video_title: str | None = None
+    source_title: str | None = None
     source_file: str | None = None
 
     clip_length: int = Field(default=30, ge=1, le=600)
@@ -288,6 +290,43 @@ def safe_name(value: str) -> str:
     value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
     value = re.sub(r"\s+", " ", value).strip(" .")
     return value[:100] or "video"
+
+
+def clean_source_video_title(stem: str) -> str:
+    """Extract a clean human-readable title from a video filename stem or title."""
+    if not stem:
+        return "Video"
+    s = re.sub(r"\s*\[[a-zA-Z0-9_-]{11}\]", "", str(stem)).strip()
+    s = re.sub(r"_[a-zA-Z0-9_-]{11}$", "", s).strip()
+    s = s.replace("_", " ").strip()
+    s = re.sub(r"[-_\s]+(part|viral)[-_\s]*\d*$", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"[-_\s]+ai\s*generated$", "", s, flags=re.IGNORECASE).strip()
+    return s[:80].strip() or "Video"
+
+
+def resolve_ai_viral_folder_name(
+    request: ClipRequest,
+    source_path: Optional[Path] = None,
+    info: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Resolve the destination folder name for AI generated viral clips:
+    Format: '[video title] - ai generated'
+    """
+    v_title = getattr(request, "video_title", None) or getattr(request, "source_title", None)
+    if not v_title and request.title:
+        t = str(request.title).strip()
+        if t.lower() not in ("viral highlights", "my video", "untitled", "clip", "video"):
+            v_title = t
+    if not v_title and info and info.get("title"):
+        v_title = clean_source_video_title(info["title"])
+    if not v_title and source_path:
+        v_title = clean_source_video_title(source_path.stem)
+    if not v_title:
+        v_title = "Video"
+
+    clean_base = clean_source_video_title(v_title)
+    return f"{clean_base} - ai generated"
 
 
 def extract_video_id(url: str) -> str | None:
@@ -593,13 +632,74 @@ def has_audio_stream(video_path: Path) -> bool:
         return True
 
 
-def find_windows_font() -> Path:
-    """Find a font that works on Windows or Linux."""
+def contains_emoji(text: str) -> bool:
+    """Check if the text contains any emoji or pictorial symbols."""
+    for char in text:
+        cp = ord(char)
+        if (
+            0x1F600 <= cp <= 0x1F64F  # Emoticons
+            or 0x1F300 <= cp <= 0x1F5FF  # Misc Symbols and Pictographs
+            or 0x1F680 <= cp <= 0x1F6FF  # Transport and Map
+            or 0x1F700 <= cp <= 0x1F77F  # Alchemical Symbols
+            or 0x1F780 <= cp <= 0x1F7FF  # Geometric Shapes Extended
+            or 0x1F800 <= cp <= 0x1F8FF  # Supplemental Arrows-C
+            or 0x1F900 <= cp <= 0x1F9FF  # Supplemental Symbols and Pictographs (🤫, 🥳, etc.)
+            or 0x1FA00 <= cp <= 0x1FA6F  # Chess Symbols
+            or 0x1FA70 <= cp <= 0x1FAFF  # Symbols and Pictographs Extended-A
+            or 0x2600 <= cp <= 0x26FF    # Misc symbols (⚡, ☀️, ☔, etc.)
+            or 0x2700 <= cp <= 0x27BF    # Dingbats (✨, ✂️, etc.)
+            or 0xFE00 <= cp <= 0xFE0F    # Variation Selectors
+            or 0x1F1E6 <= cp <= 0x1F1FF  # Flags / regional indicators
+        ):
+            return True
+    return False
+
+
+def contains_devanagari(text: str) -> bool:
+    """Check if the text contains Hindi / Devanagari script."""
+    return any(0x0900 <= ord(c) <= 0x097F for c in text)
+
+
+def find_windows_font(text: str = "") -> Path:
+    """
+    Find the best font on Windows or Linux to render the given text without tofu boxes ([]).
+    - If text contains Emojis (e.g. 'WAIT FOR IT... 🤫'): Use Segoe UI Emoji / Noto Color Emoji.
+    - If text contains Hindi / Devanagari (e.g. 'खुश हूँ'): Use Mangal / Nirmala UI.
+    - Otherwise: Use Arial Bold / DejaVu Sans Bold.
+    """
+    windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+    text_str = str(text or "")
+
+    # If text has emojis, Segoe UI Emoji has both emoji glyphs AND full English/Latin characters
+    if contains_emoji(text_str):
+        emoji_candidates = [
+            windir / "Fonts" / "seguiemj.ttf",
+            windir / "Fonts" / "seguisym.ttf",
+            Path("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"),
+            Path("/usr/share/fonts/truetype/ancient-scripts/Symbola.ttf"),
+        ]
+        for c in emoji_candidates:
+            if c.exists():
+                return c
+
+    # If text has Hindi / Devanagari script
+    if contains_devanagari(text_str):
+        devanagari_candidates = [
+            windir / "Fonts" / "mangalb.ttf",
+            windir / "Fonts" / "mangal.ttf",
+            windir / "Fonts" / "Nirmala.ttc",
+            Path("/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf"),
+            Path("/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf"),
+        ]
+        for c in devanagari_candidates:
+            if c.exists():
+                return c
+
+    # Default bold Latin font
     candidates = [
-        Path(os.environ.get("WINDIR", r"C:\Windows"))
-        / "Fonts" / "arialbd.ttf",
-        Path(os.environ.get("WINDIR", r"C:\Windows"))
-        / "Fonts" / "arial.ttf",
+        windir / "Fonts" / "arialbd.ttf",
+        windir / "Fonts" / "arial.ttf",
+        windir / "Fonts" / "segoeuib.ttf",
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     ]
@@ -608,8 +708,17 @@ def find_windows_font() -> Path:
         if candidate.exists():
             return candidate
 
+    # Fallback to Segoe UI Emoji or Arial if standard bold isn't found
+    fallbacks = [
+        windir / "Fonts" / "seguiemj.ttf",
+        windir / "Fonts" / "arial.ttf",
+    ]
+    for c in fallbacks:
+        if c.exists():
+            return c
+
     raise RuntimeError(
-        "No supported font was found. Install Arial or DejaVu Sans."
+        "No supported font was found. Install Arial, Segoe UI Emoji, or DejaVu Sans."
     )
 
 
@@ -666,12 +775,20 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
         )
         download_folder.mkdir(parents=True, exist_ok=True)
 
+        is_ai_viral = (getattr(request, "slicing_mode", "fixed") == "ai_viral") or bool(getattr(request, "moments", None))
+
         if request.output_path and request.output_path.strip():
             output_folder = Path(
                 os.path.expandvars(
                     os.path.expanduser(request.output_path.strip())
                 )
             ).resolve()
+        elif is_ai_viral:
+            # For AI generated clips of a video, save in '[video title] - ai generated' folder
+            viral_folder_name = resolve_ai_viral_folder_name(request)
+            output_folder = CLIPS_DIR / safe_name(
+                request.clips_folder
+            ) / safe_name(viral_folder_name)
         else:
             raw_title_clean = re.sub(r"[_\-\s]*\{part\}", "", request.title or "Untitled", flags=re.IGNORECASE).strip()
             raw_title_clean = re.sub(r"[_\-\s]+part[_\-\s]*$", "", raw_title_clean, flags=re.IGNORECASE).strip()
@@ -818,6 +935,20 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     )
 
                 downloaded_by_job = True
+
+        # For AI viral clips: refine output_folder using the resolved source video title
+        if is_ai_viral and not (request.output_path and request.output_path.strip()):
+            refined_folder_name = resolve_ai_viral_folder_name(request, source_path=source_path)
+            refined_folder = CLIPS_DIR / safe_name(request.clips_folder) / safe_name(refined_folder_name)
+            if refined_folder != output_folder:
+                try:
+                    if output_folder.exists() and not any(output_folder.iterdir()):
+                        output_folder.rmdir()
+                except Exception:
+                    pass
+                output_folder = refined_folder
+                output_folder.mkdir(parents=True, exist_ok=True)
+                job_output_dirs[job_id] = output_folder
 
         update_job(
             job_id,
@@ -1029,9 +1160,10 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     )
                     h_last = "h_base"
                     if safe_badge:
+                        badge_fontfile = escape_filter_path(find_windows_font(hook_info["badge"]))
                         filter_script += (
                             f";[{h_last}]drawtext=text='{safe_badge}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{badge_fontfile}':"
                             "fontcolor=yellow:"
                             "fontsize=46:"
                             "x=(w-text_w)/2:"
@@ -1052,10 +1184,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     )
                     b_last = "b_base"
                     if title:
+                        title_fontfile = escape_filter_path(find_windows_font(title))
                         safe_title = escape_drawtext(title)
                         filter_script += (
                             f";[{b_last}]drawtext=text='{safe_title}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{title_fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
                             f"x={title_x_expr}:"
@@ -1067,10 +1200,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         b_last = "b_t1"
 
                     if part:
+                        part_fontfile = escape_filter_path(find_windows_font(part))
                         safe_part = escape_drawtext(part)
                         filter_script += (
                             f";[{b_last}]drawtext=text='{safe_part}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{part_fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
                             f"x={part_x_expr}:"
@@ -1101,9 +1235,10 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     )
                     h_last = "h_base"
                     if safe_badge:
+                        badge_fontfile = escape_filter_path(find_windows_font(hook_info["badge"]))
                         filter_script += (
                             f";[{h_last}]drawtext=text='{safe_badge}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{badge_fontfile}':"
                             "fontcolor=yellow:"
                             "fontsize=46:"
                             "x=(w-text_w)/2:"
@@ -1121,10 +1256,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     )
                     b_last = "b_base"
                     if title:
+                        title_fontfile = escape_filter_path(find_windows_font(title))
                         safe_title = escape_drawtext(title)
                         filter_script += (
                             f";[{b_last}]drawtext=text='{safe_title}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{title_fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
                             f"x={title_x_expr}:"
@@ -1136,10 +1272,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         b_last = "b_t1"
 
                     if part:
+                        part_fontfile = escape_filter_path(find_windows_font(part))
                         safe_part = escape_drawtext(part)
                         filter_script += (
                             f";[{b_last}]drawtext=text='{safe_part}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{part_fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
                             f"x={part_x_expr}:"
@@ -1167,11 +1304,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     "-y",
                     "-threads", "0",
                     "-ss", str(hook_info["start"]),
-                    "-i", str(source_path),
                     "-t", str(hook_info["duration"]),
-                    "-ss", str(clip_start),
                     "-i", str(source_path),
+                    "-ss", str(clip_start),
                     "-t", str(clip_duration),
+                    "-i", str(source_path),
                     *filter_args,
                     "-c:v", "libx264",
                     "-profile:v", "main",
@@ -1199,10 +1336,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     )
                     last_pad = "base"
                     if title:
+                        title_fontfile = escape_filter_path(find_windows_font(title))
                         safe_title = escape_drawtext(title)
                         filter_script += (
                             f";[{last_pad}]drawtext=text='{safe_title}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{title_fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
                             f"x={title_x_expr}:"
@@ -1214,10 +1352,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         last_pad = "t1"
 
                     if part:
+                        part_fontfile = escape_filter_path(find_windows_font(part))
                         safe_part = escape_drawtext(part)
                         filter_script += (
                             f";[{last_pad}]drawtext=text='{safe_part}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{part_fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
                             f"x={part_x_expr}:"
@@ -1240,10 +1379,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     )
 
                     if title:
+                        title_fontfile = escape_filter_path(find_windows_font(title))
                         safe_title = escape_drawtext(title)
                         filters += (
                             f",drawtext=text='{safe_title}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{title_fontfile}':"
                             f"fontcolor={title_color}:"
                             f"fontsize={title_size}:"
                             f"x={title_x_expr}:"
@@ -1254,10 +1394,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         )
 
                     if part:
+                        part_fontfile = escape_filter_path(find_windows_font(part))
                         safe_part = escape_drawtext(part)
                         filters += (
                             f",drawtext=text='{safe_part}':"
-                            f"fontfile='{fontfile}':"
+                            f"fontfile='{part_fontfile}':"
                             f"fontcolor={part_color}:"
                             f"fontsize={part_size}:"
                             f"x={part_x_expr}:"
@@ -1275,8 +1416,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     "-y",
                     "-threads", "0",
                     "-ss", str(clip_start),
-                    "-i", str(source_path),
                     "-t", str(clip_duration),
+                    "-i", str(source_path),
                     *filter_args,
                     "-map", "0:a?",
                     "-c:v", "libx264",
@@ -1334,7 +1475,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 }
                 meta_path = output_path.with_name(f"{filename}.meta.json")
 
-                # Auto-generate or slice voice-synced subtitles for this clip
+                # Auto-generate or map voice-synced subtitles for this generated clip
                 try:
                     from services.transcription_service import (
                         get_stored_transcript,
@@ -1345,77 +1486,90 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         convert_cues_to_hinglish,
                         has_devanagari_characters,
                     )
-                    parent_tr = get_stored_transcript(eff_video_id)
-                    if not parent_tr and source_path:
-                        parent_tr = get_stored_transcript(source_path.stem)
-
                     cues = []
-                    if parent_tr and parent_tr.get("segments"):
-                        if hook_info:
-                            # 1. Slice hook teaser cues
-                            hook_cues = slice_transcript_for_clip(
-                                parent_tr,
-                                float(hook_info["start"]),
-                                float(hook_info["start"] + hook_info["duration"])
-                            )
-                            # 2. Slice body cues and offset timestamps by hook_duration
-                            body_cues = slice_transcript_for_clip(
-                                parent_tr,
-                                float(clip_start),
-                                float(clip_start + clip_duration)
-                            )
-                            h_dur_offset = float(hook_info["duration"])
-                            for bc in body_cues:
-                                bc["start"] = round(bc["start"] + h_dur_offset, 2)
-                                bc["end"] = round(bc["end"] + h_dur_offset, 2)
-                                for w in bc.get("words", []):
-                                    w["start"] = round(w["start"] + h_dur_offset, 2)
-                                    w["end"] = round(w["end"] + h_dur_offset, 2)
-                            raw_combined = hook_cues + body_cues
-                        else:
-                            raw_combined = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
 
-                        cues = create_voice_synced_word_chunks(raw_combined, max_words=3)
-
-                    # If parent transcript was missing, transcribe this 30-60s clip directly via Groq Whisper (1-2s)
-                    if not cues and output_path.exists() and get_groq_api_key():
+                    # 1. Primary method: Transcribe the rendered clip directly with Groq Whisper for 100% audio sync
+                    if output_path.exists() and get_groq_api_key():
                         try:
-                            logger.info("Auto-transcribing rendered viral clip %s directly...", filename)
+                            logger.info("Transcribing generated viral clip %s directly for 100%% voice-audio sync...", filename)
                             clip_tr = transcribe_video_with_groq(output_path, video_id=output_path.stem)
                             if clip_tr and clip_tr.get("segments"):
                                 cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=3)
+                                if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(clip_tr.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+                                    cues = convert_cues_to_hinglish(cues)
                         except Exception as c_err:
-                            logger.warning("Direct clip auto-transcribe failed: %s", c_err)
+                            logger.warning("Direct clip auto-transcribe failed (%s), falling back to parent slice", c_err)
 
-                    # Automatically convert Hindi speech to Hinglish by default (zero Devanagari script)
-                    if cues and (any(has_devanagari_characters(c.get("text", "")) for c in cues) or (parent_tr and str(parent_tr.get("language", "")).lower() in ("hi", "hindi", "urdu"))):
-                        try:
-                            logger.info("Auto-converting sliced cues for %s to Hinglish by default...", filename)
-                            cues = convert_cues_to_hinglish(cues)
-                        except Exception as h_err:
-                            logger.warning("Auto-Hinglish conversion failed for %s: %s", filename, h_err)
+                    # 2. Fallback: Slicing parent transcript with clean hook/body boundary isolation
+                    if not cues:
+                        parent_tr = get_stored_transcript(eff_video_id)
+                        if not parent_tr and source_path:
+                            parent_tr = get_stored_transcript(source_path.stem)
+
+                        if parent_tr and parent_tr.get("segments"):
+                            if hook_info:
+                                h_dur = float(hook_info["duration"])
+                                raw_hook = slice_transcript_for_clip(
+                                    parent_tr,
+                                    float(hook_info["start"]),
+                                    float(hook_info["start"] + h_dur)
+                                )
+                                hook_chunks = create_voice_synced_word_chunks(raw_hook, max_words=3)
+                                for hc in hook_chunks:
+                                    hc["end"] = min(h_dur, hc["end"])
+
+                                raw_body = slice_transcript_for_clip(
+                                    parent_tr,
+                                    float(clip_start),
+                                    float(clip_start + clip_duration)
+                                )
+                                body_chunks = create_voice_synced_word_chunks(raw_body, max_words=3)
+                                for bc in body_chunks:
+                                    bc["start"] = round(bc["start"] + h_dur, 2)
+                                    bc["end"] = round(bc["end"] + h_dur, 2)
+                                    for w in bc.get("words", []):
+                                        w["start"] = round(w["start"] + h_dur, 2)
+                                        w["end"] = round(w["end"] + h_dur, 2)
+
+                                cues = hook_chunks + body_chunks
+                                for idx, c in enumerate(cues):
+                                    c["id"] = idx
+                            else:
+                                raw_cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
+                                cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
+
+                            # Automatically convert Hindi speech to Hinglish by default
+                            if cues and (any(has_devanagari_characters(c.get("text", "")) for c in cues) or (parent_tr and str(parent_tr.get("language", "")).lower() in ("hi", "hindi", "urdu"))):
+                                try:
+                                    cues = convert_cues_to_hinglish(cues)
+                                except Exception as h_err:
+                                    logger.warning("Auto-Hinglish conversion failed for %s: %s", filename, h_err)
 
                     if cues:
                         sub_file = output_path.with_name(f"{filename}.subtitles.json")
                         default_styles = {
                             "font_family": "Montserrat",
-                            "font_size": 42,
+                            "font_size": 48,
                             "primary_color": "#FFFFFF",
                             "highlight_color": "#FACC15",
                             "outline_color": "#000000",
-                            "outline_width": 3.0,
+                            "outline_width": 0.5,
                             "text_transform": "uppercase",
                             "highlight_mode": "active_word",
                             "words_per_screen": 3,
                             "margin_v": 320
                         }
-                        with open(sub_file, "w", encoding="utf-8") as sf:
+                        tmp_sub_file = output_path.with_name(f"{filename}.subtitles.json.tmp")
+                        with open(tmp_sub_file, "w", encoding="utf-8") as sf:
                             json.dump({
                                 "clip_name": filename,
                                 "cues": cues,
                                 "styles": default_styles
                             }, sf, indent=2, ensure_ascii=False)
+                        tmp_sub_file.replace(sub_file)
+
                         clip_meta["has_subtitles"] = True
+                        clip_meta["caption"] = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
 
                         # Optional: Auto-burn animated subtitles directly into reel if requested
                         if getattr(request, "burn_subtitles", False):
@@ -1433,7 +1587,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             except Exception as b_err:
                                 logger.warning("Auto-burn subtitles on %s failed: %s", filename, b_err)
                 except Exception as sub_err:
-                    logger.debug("Auto-slice subtitles for clip skipped: %s", sub_err)
+                    logger.warning("Auto-mapping subtitles for clip skipped: %s", sub_err)
 
                 with open(meta_path, "w", encoding="utf-8") as f_meta:
                     import json
