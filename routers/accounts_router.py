@@ -13,6 +13,7 @@ from accounts.manager import (
     remove_account,
     connect_youtube_from_code,
     connect_instagram_from_code,
+    auto_connect_meta_token,
     add_manual_account,
     check_account_health,
     sync_accounts_from_env,
@@ -250,6 +251,25 @@ def add_manual_account_endpoint(payload: ManualAccountPayload, authorization: Op
         return {"success": True, "account": acc}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-        return {"success": True, "account": acc}
+
+
+class AutoConnectMetaPayload(BaseModel):
+    access_token: str
+
+
+@router.post("/auto-connect-meta")
+def auto_connect_meta_endpoint(payload: AutoConnectMetaPayload, authorization: Optional[str] = Header(None)):
+    """
+    Automate connecting Facebook and Instagram accounts in a single call.
+    Accepts any Meta access token (User Token, Long-Lived Token, or Page Token).
+    Automatically discovers and connects all managed Facebook Pages and linked Instagram accounts.
+    """
+    try:
+        user = get_current_user_optional(authorization)
+        user_id = user["id"] if user else "global"
+        res = auto_connect_meta_token(payload.access_token, user_id=user_id)
+        return res
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

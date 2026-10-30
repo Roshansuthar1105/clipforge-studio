@@ -1907,7 +1907,6 @@ input[type="range"]:hover {
 .phone-action-btn:hover {
   transform: translateY(-1px);
 }
-}
 
 /* Auth Modal Tabs */
 .auth-tabs {

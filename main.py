@@ -45,6 +45,7 @@ BASE_DIR = Path(os.getenv("DATA_DIR", str(APP_DIR / "data")).resolve()) if False
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 CLIPS_DIR = BASE_DIR / "clips"
 STATIC_DIR = APP_DIR / "static"
+FRONTEND_DIST_DIR = APP_DIR / "frontend" / "dist"
 
 for folder in (DOWNLOAD_DIR, CLIPS_DIR, STATIC_DIR):
     folder.mkdir(parents=True, exist_ok=True)
@@ -57,6 +58,8 @@ from routers.publish_router import router as publish_router
 from routers.meta_publish_router import router as meta_publish_router
 from routers.subtitles_router import router as subtitles_router
 from routers.viral_router import router as viral_router
+from routers.schedule_router import router as schedule_router
+from publisher.scheduler import start_scheduler_daemon
 
 app = FastAPI(title="ClipForge Studio")
 
@@ -128,12 +131,23 @@ async def on_startup():
         if cleaned > 0:
             logger.info("Cleaned up %d stale job(s) from previous server run", cleaned)
 
+    # Start auto-publishing scheduler background daemon
+    start_scheduler_daemon()
+
 app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(publish_router)
 app.include_router(meta_publish_router)
 app.include_router(subtitles_router)
 app.include_router(viral_router)
+app.include_router(schedule_router)
+
+if FRONTEND_DIST_DIR.exists() and (FRONTEND_DIST_DIR / "assets").exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(FRONTEND_DIST_DIR / "assets")),
+        name="frontend-assets",
+    )
 
 app.mount(
     "/static",
@@ -1677,12 +1691,15 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
 
 @app.get("/")
 def home():
-    index_path = STATIC_DIR / "index.html"
+    react_index = FRONTEND_DIST_DIR / "index.html"
+    if react_index.exists():
+        return FileResponse(react_index)
 
+    index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(
             status_code=404,
-            detail="static/index.html was not found.",
+            detail="index.html was not found.",
         )
 
     return FileResponse(index_path)

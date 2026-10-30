@@ -129,6 +129,91 @@ def fetch_instagram_accounts(user_access_token: str) -> list[dict]:
     return results
 
 
+def fetch_meta_pages_and_instagram(token: str) -> dict:
+    """
+    Auto-discover all Facebook Pages and linked Instagram Business/Creator accounts
+    from any Meta access token (User Token, Long-Lived Token, or Page Token).
+    """
+    token = token.strip()
+    result = {
+        "facebook_pages": [],
+        "instagram_accounts": [],
+    }
+
+    # 1. Try fetching via /me/accounts (works for User Access Tokens)
+    try:
+        url = f"{META_GRAPH_URL}/me/accounts"
+        params = {
+            "fields": "id,name,access_token,picture{url},instagram_business_account{id,username,name,profile_picture_url}",
+            "access_token": token,
+        }
+        resp = requests.get(url, params=params, timeout=15)
+        if resp.status_code == 200:
+            pages = resp.json().get("data", [])
+            for p in pages:
+                page_id = p.get("id")
+                page_name = p.get("name")
+                page_token = p.get("access_token", token)
+                page_pic = (p.get("picture", {}) or {}).get("data", {}).get("url")
+
+                result["facebook_pages"].append({
+                    "page_id": page_id,
+                    "name": page_name,
+                    "access_token": page_token,
+                    "avatar_url": page_pic,
+                })
+
+                ig = p.get("instagram_business_account")
+                if ig:
+                    result["instagram_accounts"].append({
+                        "ig_user_id": ig.get("id"),
+                        "username": ig.get("username", "instagram_account"),
+                        "name": ig.get("name") or page_name,
+                        "avatar_url": ig.get("profile_picture_url") or page_pic,
+                        "access_token": page_token,
+                        "page_id": page_id,
+                    })
+    except Exception:
+        pass
+
+    # 2. If nothing found via /me/accounts, try querying /me directly (works if token is already a Page Token)
+    if not result["facebook_pages"] and not result["instagram_accounts"]:
+        try:
+            url = f"{META_GRAPH_URL}/me"
+            params = {
+                "fields": "id,name,picture{url},instagram_business_account{id,username,name,profile_picture_url}",
+                "access_token": token,
+            }
+            resp = requests.get(url, params=params, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                page_id = data.get("id")
+                page_name = data.get("name")
+                page_pic = (data.get("picture", {}) or {}).get("data", {}).get("url")
+
+                result["facebook_pages"].append({
+                    "page_id": page_id,
+                    "name": page_name,
+                    "access_token": token,
+                    "avatar_url": page_pic,
+                })
+
+                ig = data.get("instagram_business_account")
+                if ig:
+                    result["instagram_accounts"].append({
+                        "ig_user_id": ig.get("id"),
+                        "username": ig.get("username", "instagram_account"),
+                        "name": ig.get("name") or page_name,
+                        "avatar_url": ig.get("profile_picture_url") or page_pic,
+                        "access_token": token,
+                        "page_id": page_id,
+                    })
+        except Exception:
+            pass
+
+    return result
+
+
 def check_instagram_token_validity(access_token: str) -> bool:
     """Quick check if token is valid by querying /me."""
     try:

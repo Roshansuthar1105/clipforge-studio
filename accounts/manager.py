@@ -26,6 +26,7 @@ from accounts.instagram_oauth import (
     exchange_code_for_user_token,
     get_long_lived_token,
     fetch_instagram_accounts,
+    fetch_meta_pages_and_instagram,
     check_instagram_token_validity,
 )
 
@@ -221,7 +222,7 @@ def connect_youtube_from_code(code: str, user_id: Optional[str] = None) -> dict:
 
 
 def connect_instagram_from_code(code: str, user_id: Optional[str] = None) -> list[dict]:
-    """Exchange Meta OAuth code, fetch linked IG accounts, and store them."""
+    """Exchange Meta OAuth code, fetch linked IG accounts and FB pages, and store them."""
     user_token_resp = exchange_code_for_user_token(code)
     short_token = user_token_resp.get("access_token")
 
@@ -235,27 +236,63 @@ def connect_instagram_from_code(code: str, user_id: Optional[str] = None) -> lis
         + datetime.timedelta(seconds=expires_in)
     ).isoformat()
 
-    ig_accounts = fetch_instagram_accounts(long_token)
-    if not ig_accounts:
+    discovery = fetch_meta_pages_and_instagram(long_token)
+    fb_pages = discovery.get("facebook_pages", [])
+    ig_accounts = discovery.get("instagram_accounts", [])
+
+    if not fb_pages and not ig_accounts:
         raise ValueError(
-            "No Instagram Business or Creator accounts linked to your Facebook pages were found. "
-            "Please ensure your Instagram account is set to Business/Creator and linked to a Facebook Page."
+            "No Facebook Pages or Instagram Business/Creator accounts linked to your account were found. "
+            "Please ensure you manage a Facebook Page and that your Instagram account is set to Professional (Business/Creator)."
         )
 
     connected_list = []
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # 1. Connect Facebook Pages
+    for p in fb_pages:
+        page_id = str(p["page_id"])
+        page_name = p.get("name") or f"Facebook Page {page_id}"
+        page_token = p.get("access_token", long_token)
+        page_pic = p.get("avatar_url")
+
+        existing = None
+        for acc in load_accounts(user_id):
+            if acc.get("platform") == "facebook" and str(acc.get("channel_id")) == page_id:
+                existing = acc
+                break
+
+        account_id = existing["id"] if existing else f"fb-{page_id}"
+        account = {
+            "id": account_id,
+            "platform": "facebook",
+            "alias": page_name,
+            "channel_id": page_id,
+            "avatar_url": page_pic or (existing.get("avatar_url") if existing else None),
+            "access_token": page_token,
+            "refresh_token": None,
+            "token_expiry": None,
+            "scopes": "pages_show_list,pages_manage_posts,pages_read_engagement",
+            "user_id": user_id or "global",
+            "created_at": existing.get("created_at") if existing else now,
+        }
+        upsert_account(account, user_id=user_id)
+        connected_list.append(Account(**account).to_safe_dict())
+
+    # 2. Connect Instagram Business Accounts
     for ig in ig_accounts:
-        channel_id = ig["ig_user_id"]
+        channel_id = str(ig["ig_user_id"])
         alias = f"@{ig['username']}"
         avatar_url = ig.get("avatar_url")
         token = ig.get("access_token", long_token)
 
         existing = None
         for acc in load_accounts(user_id):
-            if acc.get("platform") == "instagram" and acc.get("channel_id") == channel_id:
+            if acc.get("platform") == "instagram" and str(acc.get("channel_id")) == channel_id:
                 existing = acc
                 break
 
-        account_id = existing["id"] if existing else str(uuid.uuid4())
+        account_id = existing["id"] if existing else f"ig-{channel_id}"
         account = {
             "id": account_id,
             "platform": "instagram",
@@ -267,12 +304,116 @@ def connect_instagram_from_code(code: str, user_id: Optional[str] = None) -> lis
             "token_expiry": expiry_time,
             "scopes": "instagram_basic,instagram_content_publish",
             "user_id": user_id or "global",
-            "created_at": existing.get("created_at") if existing else datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at": existing.get("created_at") if existing else now,
         }
         upsert_account(account, user_id=user_id)
         connected_list.append(Account(**account).to_safe_dict())
 
     return connected_list
+
+
+def auto_connect_meta_token(token: str, user_id: Optional[str] = None) -> dict:
+    """
+    Automated 1-Click Meta Connector:
+    Given any Meta access token (User Token, Long-Lived Token, or Page Token):
+    - Automatically discovers all Facebook Pages the user manages.
+    - Automatically discovers all linked Instagram Business/Creator accounts.
+    - Saves all of them into persistent storage in a single call.
+    """
+    clean_token = token.strip()
+    if not clean_token:
+        raise ValueError("A valid Meta access token is required")
+
+    # Try exchanging for long-lived token if it's a short-lived token
+    try:
+        long_resp = get_long_lived_token(clean_token)
+        if long_resp and long_resp.get("access_token"):
+            clean_token = long_resp["access_token"]
+    except Exception:
+        pass
+
+    discovery = fetch_meta_pages_and_instagram(clean_token)
+    fb_pages = discovery.get("facebook_pages", [])
+    ig_accounts = discovery.get("instagram_accounts", [])
+
+    if not fb_pages and not ig_accounts:
+        raise ValueError(
+            "Could not discover any Facebook Pages or Instagram Business accounts with this token. "
+            "Please ensure the token has 'pages_show_list,pages_manage_posts,instagram_basic,instagram_content_publish' scopes "
+            "and that your Instagram account is linked to a Facebook Page."
+        )
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    connected_list = []
+
+    # 1. Connect all Facebook Pages
+    for p in fb_pages:
+        page_id = str(p["page_id"])
+        page_name = p.get("name") or f"Facebook Page {page_id}"
+        page_token = p.get("access_token", clean_token)
+        page_pic = p.get("avatar_url")
+
+        existing = None
+        for acc in load_accounts(user_id):
+            if acc.get("platform") == "facebook" and str(acc.get("channel_id")) == page_id:
+                existing = acc
+                break
+
+        acc_id = existing["id"] if existing else f"fb-{page_id}"
+        acc_doc = {
+            "id": acc_id,
+            "platform": "facebook",
+            "alias": page_name,
+            "channel_id": page_id,
+            "avatar_url": page_pic or (existing.get("avatar_url") if existing else None),
+            "access_token": page_token,
+            "refresh_token": None,
+            "token_expiry": None,
+            "scopes": "pages_show_list,pages_manage_posts,pages_read_engagement",
+            "user_id": user_id or "global",
+            "created_at": existing.get("created_at") if existing else now,
+        }
+        upsert_account(acc_doc, user_id=user_id)
+        connected_list.append(Account(**acc_doc).to_safe_dict())
+
+    # 2. Connect all Instagram Accounts
+    for ig in ig_accounts:
+        ig_id = str(ig["ig_user_id"])
+        ig_username = ig.get("username", "instagram_account")
+        ig_alias = f"@{ig_username}"
+        ig_token = ig.get("access_token", clean_token)
+        ig_pic = ig.get("avatar_url")
+
+        existing = None
+        for acc in load_accounts(user_id):
+            if acc.get("platform") == "instagram" and str(acc.get("channel_id")) == ig_id:
+                existing = acc
+                break
+
+        acc_id = existing["id"] if existing else f"ig-{ig_id}"
+        acc_doc = {
+            "id": acc_id,
+            "platform": "instagram",
+            "alias": ig_alias,
+            "channel_id": ig_id,
+            "avatar_url": ig_pic or (existing.get("avatar_url") if existing else None),
+            "access_token": ig_token,
+            "refresh_token": None,
+            "token_expiry": None,
+            "scopes": "instagram_basic,instagram_content_publish",
+            "user_id": user_id or "global",
+            "created_at": existing.get("created_at") if existing else now,
+        }
+        upsert_account(acc_doc, user_id=user_id)
+        connected_list.append(Account(**acc_doc).to_safe_dict())
+
+    return {
+        "success": True,
+        "total_connected": len(connected_list),
+        "facebook_pages_count": len(fb_pages),
+        "instagram_accounts_count": len(ig_accounts),
+        "accounts": connected_list,
+    }
 
 
 def add_manual_account(
