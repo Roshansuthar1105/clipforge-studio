@@ -292,14 +292,37 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                 "words": parsed_words,
             })
 
+        raw_lang = getattr(transcription, "language", "en")
+        detected_lang = str(raw_lang).lower() if raw_lang else "en"
+        has_devanagari = any(has_devanagari_characters(s.get("text", "")) for s in parsed_segments)
+
         transcript_data = {
             "video_id": video_id,
             "source_file": video_path.name,
-            "language": getattr(transcription, "language", "en"),
+            "language": "hi" if (detected_lang in ("hi", "hindi", "urdu") or has_devanagari) else detected_lang,
             "duration": getattr(transcription, "duration", 0.0),
             "full_text": getattr(transcription, "text", ""),
             "segments": parsed_segments,
         }
+
+        # 1. Hindi audio -> by default save & get Hinglish subtitles
+        if detected_lang in ("hi", "hindi", "urdu") or has_devanagari:
+            logger.info("Detected Hindi audio in %s; auto-converting transcript to Hinglish by default", video_id)
+            save_transcript(f"{video_id}_raw", transcript_data)
+            transcript_data = convert_transcript_to_hinglish(transcript_data, video_id=video_id)
+            return transcript_data
+
+        # 2. Foreign language (neither Hindi nor English) -> by default use English translation
+        elif detected_lang not in ("en", "english"):
+            logger.info("Detected foreign language '%s' in %s; translating to English by default", detected_lang, video_id)
+            save_transcript(f"{video_id}_raw", transcript_data)
+            try:
+                en_trans = translate_video_to_english_with_groq(video_path, video_id=video_id)
+                if en_trans and en_trans.get("segments"):
+                    save_transcript(video_id, en_trans)
+                    return en_trans
+            except Exception as tr_err:
+                logger.warning("Auto-translation to English failed for %s (%s); keeping base transcript: %s", video_id, detected_lang, tr_err)
 
         # Save to disk and database
         save_transcript(video_id, transcript_data)
@@ -433,7 +456,7 @@ def has_devanagari_characters(text: str) -> bool:
     return bool(re.search(r'[\u0900-\u097F]', text))
 
 
-def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 20) -> List[str]:
+def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> List[str]:
     """
     Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq.
     Preserves original English words and phrasing without translating meaning to English words.
@@ -459,11 +482,19 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 20) -> Li
         "Your task is to convert Hindi text written in Devanagari script into Hinglish (Romanized Hindi using the English Latin alphabet).\n\n"
         "RULES:\n"
         "1. Preserve existing English words as-is with their original spelling (e.g. 'started', 'realizing', 'considerate', 'trauma trigger', 'make sure', 'community').\n"
-        "2. Convert all Hindi / Devanagari words into everyday standard Hinglish (e.g. 'लड़कियां' -> 'ladkiyan', 'बहुत' -> 'bahut', 'दोस्त' -> 'dost', 'हैं' -> 'hain', 'हो जाए' -> 'ho jaye').\n"
+        "2. Convert all Hindi / Devanagari words into everyday standard Hinglish (e.g. 'लड़कियां' -> 'ladkiyan', 'बहुत' -> 'bahut', 'दोस्त' -> 'dost', 'हैं' -> 'hain', 'हो जाए' -> 'ho jaye', 'खुश हूँ' -> 'khush hoon').\n"
         "3. DO NOT translate the meaning into English. The spoken Hindi words MUST remain Hindi words, just written in English Latin letters.\n"
         "4. Output MUST contain ZERO Devanagari characters (only standard English A-Z, numbers, and basic punctuation).\n"
         "5. Return ONLY a valid JSON array of strings, with exactly one output string corresponding to each input string in the exact same order."
     )
+
+    models_to_try = [
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile"
+    ]
 
     results: List[str] = []
     for i in range(0, len(texts), batch_size):
@@ -473,44 +504,63 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 20) -> Li
             results.extend(chunk)
             continue
 
-        try:
-            user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
-            res = client.chat.completions.create(
-                model="qwen/qwen3.8-27b",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_msg}
-                ],
-                temperature=0.0,
-                max_tokens=1500
-            )
+        chunk_success = False
+        user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
 
-            raw = res.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = re.sub(r'^```(?:json)?\s*', '', raw)
-                raw = re.sub(r'\s*```$', '', raw)
+        for model_name in models_to_try:
+            try:
+                res = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg}
+                    ],
+                    temperature=0.0,
+                    max_tokens=2048
+                )
 
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                for val in parsed.values():
-                    if isinstance(val, list):
-                        parsed = val
+                raw = res.choices[0].message.content.strip()
+                if raw.startswith("```"):
+                    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+                    raw = re.sub(r'\s*```$', '', raw)
+
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    for val in parsed.values():
+                        if isinstance(val, list):
+                            parsed = val
+                            break
+
+                if isinstance(parsed, list) and len(parsed) == len(chunk):
+                    # Clean any accidental lingering Devanagari characters
+                    cleaned_items = [str(item).strip() for item in parsed]
+                    results.extend(cleaned_items)
+                    chunk_success = True
+                    break
+                else:
+                    logger.warning("Hinglish transliteration count mismatch via %s (expected %d, got %s)",
+                                   model_name, len(chunk), len(parsed) if isinstance(parsed, list) else "not-list")
+                    if isinstance(parsed, list) and len(parsed) >= len(chunk):
+                        results.extend([str(x).strip() for x in parsed[:len(chunk)]])
+                        chunk_success = True
                         break
+            except Exception as exc:
+                logger.warning("Hinglish transliteration model %s failed for chunk %d: %s", model_name, i, exc)
+                continue
 
-            if isinstance(parsed, list) and len(parsed) == len(chunk):
-                results.extend([str(item).strip() for item in parsed])
-            else:
-                logger.warning("Hinglish transliteration count mismatch (expected %d, got %s)", len(chunk), len(parsed) if isinstance(parsed, list) else "not-list")
-                results.extend([str(x) for x in parsed[:len(chunk)]] if isinstance(parsed, list) else chunk)
-        except Exception as exc:
-            logger.error("Hinglish transliteration failed for chunk %d: %s", i, exc)
+        if not chunk_success:
+            logger.error("All Hinglish models failed for chunk %d; retaining original lines", i)
             results.extend(chunk)
 
     return results
 
 
 def convert_cues_to_hinglish(cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Convert cues list with Hindi Devanagari text into Hinglish (English alphabet)."""
+    """
+    Convert cues list with Hindi Devanagari text into Hinglish (English alphabet).
+    Regenerates voice-synced word timestamps with Hinglish words so active word
+    illumination and subtitle burns contain zero Devanagari glyphs.
+    """
     if not cues:
         return []
 
@@ -521,12 +571,20 @@ def convert_cues_to_hinglish(cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     for cue, hing_text in zip(cues, hinglish_texts):
         c_copy = dict(cue)
         c_copy["text"] = hing_text
+        c_start = float(cue.get("start", 0.0))
+        c_end = float(cue.get("end", c_start + 1.0))
+        # Re-synthesize word timestamps for new Hinglish words so ASS active-word
+        # illumination and frontend preview use Hinglish words without Devanagari!
+        c_copy["words"] = synthesize_word_timestamps(hing_text, c_start, c_end)
         converted_cues.append(c_copy)
     return converted_cues
 
 
 def convert_transcript_to_hinglish(transcript: Dict[str, Any], video_id: Optional[str] = None) -> Dict[str, Any]:
-    """Convert an entire transcript to Hinglish and cache on disk."""
+    """
+    Convert an entire transcript to Hinglish, regenerate segment word timestamps,
+    and cache on disk and MongoDB.
+    """
     segments = transcript.get("segments", [])
     if not segments:
         return transcript
@@ -538,6 +596,9 @@ def convert_transcript_to_hinglish(transcript: Dict[str, Any], video_id: Optiona
     for s, h_text in zip(segments, hing_texts):
         s_copy = dict(s)
         s_copy["text"] = h_text
+        seg_st = float(s.get("start", 0.0))
+        seg_en = float(s.get("end", seg_st + 1.0))
+        s_copy["words"] = synthesize_word_timestamps(h_text, seg_st, seg_en)
         new_segments.append(s_copy)
 
     new_transcript = dict(transcript)
@@ -548,6 +609,7 @@ def convert_transcript_to_hinglish(transcript: Dict[str, Any], video_id: Optiona
     vid = video_id or transcript.get("video_id")
     if vid:
         save_transcript(f"{vid}_hinglish", new_transcript)
+        save_transcript(vid, new_transcript)
 
     return new_transcript
 
@@ -690,6 +752,25 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             with open(custom_path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
                 cues = saved.get("cues", [])
+
+                # By default convert any saved Hindi Devanagari cues to Hinglish
+                if any(has_devanagari_characters(c.get("text", "")) for c in cues):
+                    logger.info("Found Hindi Devanagari in saved subtitles for %s; auto-converting to Hinglish by default", clip_name)
+                    cues = convert_cues_to_hinglish(cues)
+                    saved["cues"] = cues
+                    try:
+                        with open(custom_path, "w", encoding="utf-8") as f_out:
+                            json.dump(saved, f_out, ensure_ascii=False, indent=2)
+                    except Exception as err:
+                        logger.warning("Could not persist converted Hinglish subtitles: %s", err)
+
+                    if clip_file:
+                        try:
+                            full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
+                            from routers.subtitles_router import update_clip_metadata_caption
+                            update_clip_metadata_caption(clip_file, full_caption, saved.get("styles", {}))
+                        except Exception:
+                            pass
                 for c in cues:
                     if not c.get("words") and c.get("text"):
                         c["words"] = synthesize_word_timestamps(
@@ -776,6 +857,17 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
 
         cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
+
+        # 1. Hindi audio -> by default save & get Hinglish subtitles
+        if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(transcript.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+            cues = convert_cues_to_hinglish(cues)
+        # 2. Foreign language (neither Hindi nor English) -> by default use English translation
+        elif str(transcript.get("language", "")).lower() not in ("en", "english"):
+            en_trans = get_stored_transcript(f"{source_video_id}_en")
+            if en_trans and en_trans.get("segments"):
+                raw_cues_en = slice_transcript_for_clip(en_trans, clip_start, clip_end)
+                if raw_cues_en:
+                    cues = create_voice_synced_word_chunks(raw_cues_en, max_words=3)
         styles = (meta or {}).get("styles", {})
         styles.setdefault("highlight_mode", "active_word")
         styles.setdefault("words_per_screen", 3)
@@ -809,6 +901,18 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             clip_transcript = transcribe_video_with_groq(clip_file, video_id=clip_file.stem)
             raw_cues = clip_transcript.get("segments", [])
             cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
+
+            # 1. Hindi audio -> by default save & get Hinglish subtitles
+            if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(clip_transcript.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+                cues = convert_cues_to_hinglish(cues)
+            # 2. Foreign language (neither Hindi nor English) -> by default use English translation
+            elif str(clip_transcript.get("language", "")).lower() not in ("en", "english"):
+                try:
+                    cues = translate_clip_to_english_with_groq(clip_file)
+                    cues = create_voice_synced_word_chunks(cues, max_words=3)
+                except Exception:
+                    pass
+
             styles = (meta or {}).get("styles", {})
             styles.setdefault("highlight_mode", "active_word")
             styles.setdefault("words_per_screen", 3)
@@ -847,6 +951,11 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
 
 def save_clip_subtitles(clip_name: str, data: Dict[str, Any]) -> None:
     """Save user-edited subtitle cues & style settings for a clip."""
+    cues = data.get("cues", [])
+    if cues and any(has_devanagari_characters(c.get("text", "")) for c in cues):
+        logger.info("Devanagari detected in save_clip_subtitles for %s; converting to Hinglish by default", clip_name)
+        data["cues"] = convert_cues_to_hinglish(cues)
+
     clip_file = _find_clip_path(clip_name)
     if clip_file:
         custom_path = clip_file.with_name(f"{clip_file.name}.subtitles.json")

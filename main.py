@@ -1,10 +1,12 @@
 
 import os
 import re
+import sys
 import time
 import uuid
 import math
 import shutil
+import asyncio
 import logging
 import threading
 import subprocess
@@ -97,7 +99,29 @@ def organize_clips_into_video_folders():
         logger.warning("Auto-organizing clips encountered error: %s", exc)
 
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
+    # Suppress harmless Windows asyncio ConnectionResetError (WinError 10054) when client closes video streams
+    if sys.platform == "win32":
+        try:
+            loop = asyncio.get_running_loop()
+            original_handler = loop.get_exception_handler()
+
+            def win_asyncio_exception_handler(loop, context):
+                exc = context.get("exception")
+                if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+                    return
+                msg = str(context.get("message", ""))
+                if "WinError 10054" in msg or "10054" in str(exc):
+                    return
+                if original_handler:
+                    original_handler(loop, context)
+                else:
+                    loop.default_exception_handler(context)
+
+            loop.set_exception_handler(win_asyncio_exception_handler)
+        except Exception:
+            pass
+
     organize_clips_into_video_folders()
     if db.is_db_connected():
         cleaned = db.db_cleanup_stale_jobs()
@@ -1318,6 +1342,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         create_voice_synced_word_chunks,
                         transcribe_video_with_groq,
                         get_groq_api_key,
+                        convert_cues_to_hinglish,
+                        has_devanagari_characters,
                     )
                     parent_tr = get_stored_transcript(eff_video_id)
                     if not parent_tr and source_path:
@@ -1360,6 +1386,14 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                                 cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=3)
                         except Exception as c_err:
                             logger.warning("Direct clip auto-transcribe failed: %s", c_err)
+
+                    # Automatically convert Hindi speech to Hinglish by default (zero Devanagari script)
+                    if cues and (any(has_devanagari_characters(c.get("text", "")) for c in cues) or (parent_tr and str(parent_tr.get("language", "")).lower() in ("hi", "hindi", "urdu"))):
+                        try:
+                            logger.info("Auto-converting sliced cues for %s to Hinglish by default...", filename)
+                            cues = convert_cues_to_hinglish(cues)
+                        except Exception as h_err:
+                            logger.warning("Auto-Hinglish conversion failed for %s: %s", filename, h_err)
 
                     if cues:
                         sub_file = output_path.with_name(f"{filename}.subtitles.json")

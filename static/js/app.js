@@ -942,6 +942,9 @@ function filterJobsList() {
     renderJobsList();
 }
 
+// Global alias so loadJobs() never throws ReferenceError
+const loadJobs = loadJobsList;
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Social Publishing Activity & Tracker (YouTube, Instagram, Facebook)
 // ──────────────────────────────────────────────────────────────────────────────
@@ -4357,12 +4360,10 @@ async function executeBurnGroupSubtitles() {
 
     let useHinglish = true;
     let englishOnly = false;
-    // Check if current cues contain any Devanagari Hindi characters
+    // By default use Hinglish for Hindi audio (zero Devanagari characters)
     const hasDevanagari = (subState.cues || []).some(c => /[\u0900-\u097F]/.test(c.text || ""));
     if (hasDevanagari) {
-        useHinglish = confirm(
-            "Detected Hindi Devanagari speech in this video.\n\nDo you want to mount with Hinglish (Hindi words written in English Latin alphabets)?\n\n• Click 'OK' for Hinglish (English Alphabets, e.g. 'ladkiyan bahut considerate hain' - Zero Devanagari fonts)\n• Click 'Cancel' for Original Devanagari Hindi"
-        );
+        useHinglish = true;
     }
 
     // Apply preview transform
@@ -4723,7 +4724,7 @@ async function createSingleViralReel(index) {
         closeViralMomentsModal();
         switchView("jobs");
         showToast(`Started rendering 9:16 vertical reel for "${m.headline}"!`, "success");
-        loadJobs();
+        loadJobsList();
 
     } catch (err) {
         console.error("Create viral reel error:", err);
@@ -4788,7 +4789,7 @@ async function createAllViralMomentsClips() {
         closeViralMomentsModal();
         switchView("jobs");
         showToast(`Queued all ${viralState.moments.length} viral reels for background rendering!`, "success");
-        loadJobs();
+        loadJobsList();
 
     } catch (err) {
         console.error("Create all viral reels error:", err);

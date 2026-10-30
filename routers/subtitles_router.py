@@ -310,6 +310,11 @@ def save_subtitles_for_clip(clip_name: str, payload: SubtitleSaveRequest):
     styles.setdefault("words_per_screen", 3)
     text_transform = styles.get("text_transform", "none")
 
+    # Automatically convert any Hindi Devanagari text to Hinglish by default
+    if payload.cues and any(has_devanagari_characters(c.get("text", "")) for c in payload.cues):
+        logger.info("Devanagari detected in save request for %s; auto-converting to Hinglish", unquoted)
+        payload.cues = convert_cues_to_hinglish(payload.cues)
+
     # Apply preview text transform so saved cues reflect what user configured
     if payload.cues and text_transform != "none":
         for cue in payload.cues:
@@ -564,6 +569,11 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
     styles.setdefault("words_per_screen", 3)
     text_transform = styles.get("text_transform", "none")
 
+    # Automatically convert any Hindi Devanagari cues to Hinglish before burning
+    if any(has_devanagari_characters(c.get("text", "")) for c in payload.cues):
+        logger.info("Devanagari detected in burn request for %s; auto-converting to Hinglish", unquoted)
+        payload.cues = convert_cues_to_hinglish(payload.cues)
+
     # 1. Apply preview text transform to all cues so the saved captions match the preview
     for cue in payload.cues:
         raw_text = cue.get("text", "")
@@ -730,13 +740,12 @@ def _process_group_subtitle_job(
                 results.append({"clip": clip_file.name, "status": "skipped", "reason": "No speech cues found"})
                 continue
 
-            # If hinglish is active, guarantee zero Devanagari characters
-            if hinglish and not english_only:
-                if any(has_devanagari_characters(c.get("text", "")) for c in cues):
-                    try:
-                        cues = convert_cues_to_hinglish(cues)
-                    except Exception as h_err:
-                        logger.warning("Hinglish cue conversion failed for %s: %s", clip_file.name, h_err)
+            # Guarantee zero Devanagari characters: auto-convert Hindi speech to Hinglish by default
+            if not english_only and (hinglish or any(has_devanagari_characters(c.get("text", "")) for c in cues)):
+                try:
+                    cues = convert_cues_to_hinglish(cues)
+                except Exception as h_err:
+                    logger.warning("Hinglish cue conversion failed for %s: %s", clip_file.name, h_err)
 
             # 2. Merge styles and apply preview text transform
             merged_styles = {**(sub_data.get("styles") or {}), **styles}
