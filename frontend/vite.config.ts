@@ -23,6 +23,10 @@ export default defineConfig({
         target: 'http://localhost:10000',
         changeOrigin: true,
       },
+      '/publish': {
+        target: 'http://localhost:10000',
+        changeOrigin: true,
+      },
     },
   },
   build: {

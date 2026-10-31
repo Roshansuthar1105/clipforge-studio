@@ -408,110 +408,15 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
             </div>
           </div>
 
-          {/* Dynamic Overlays Accordion */}
-          <div className="border border-white/8 rounded-2xl p-4 bg-slate-900/40">
-            <div
-              className="flex items-center justify-between cursor-pointer"
-              onClick={toggleOverlayDrawer}
-            >
-              <div className="flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-indigo-400" />
-                <span className="text-xs font-bold text-white">
-                  Dynamic Text Overlays & Title Banners
-                </span>
-              </div>
-              {overlayDrawerOpen ? (
-                <ChevronUp className="w-4 h-4 text-slate-400" />
-              ) : (
-                <ChevronDown className="w-4 h-4 text-slate-400" />
-              )}
+          {/* Clean Video Slicing Note */}
+          <div className="border border-indigo-500/20 rounded-2xl p-4 bg-indigo-500/10 flex items-start gap-3">
+            <Sparkles className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="text-xs font-bold text-white mb-0.5">Clean Video Slicing (No Baked-In Text)</h4>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Clips are sliced clean without permanent burned-in titles or Part numbers. You can customize, style, and preview dynamic text overlays, Part counters, and voice-synced Hinglish subtitles inside the <strong className="text-indigo-300">Subtitle & Caption Studio</strong>.
+              </p>
             </div>
-
-            {overlayDrawerOpen && (
-              <div className="mt-4 pt-4 border-t border-white/5 flex flex-col gap-4 animate-in fade-in">
-                {/* Title Banner */}
-                <div>
-                  <label className="text-xs text-slate-400 font-medium block mb-1">
-                    Title Banner Text
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full py-2 px-3 rounded-xl glass-input text-xs"
-                    placeholder="e.g. 5 Habits That Changed My Life"
-                    value={titleText}
-                    onChange={(e) => setOverlaySetting('titleText', e.target.value)}
-                  />
-                  <div className="flex flex-wrap items-center gap-3 mt-2">
-                    <span className="text-[11px] text-slate-400">Position:</span>
-                    <button
-                      type="button"
-                      className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-slate-800 text-slate-300 hover:text-white"
-                      onClick={() => setTitleYPreset('top')}
-                    >
-                      Top
-                    </button>
-                    <button
-                      type="button"
-                      className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-slate-800 text-slate-300 hover:text-white"
-                      onClick={() => setTitleYPreset('safe')}
-                    >
-                      Safe Zone
-                    </button>
-                    <button
-                      type="button"
-                      className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-slate-800 text-slate-300 hover:text-white"
-                      onClick={() => setTitleYPreset('center')}
-                    >
-                      Center
-                    </button>
-                    <div className="flex items-center gap-1.5 ml-auto">
-                      <span className="text-[11px] text-slate-400">Color:</span>
-                      <input
-                        type="color"
-                        value={titleColor}
-                        onChange={(e) => setOverlaySetting('titleColor', e.target.value)}
-                        className="w-6 h-6 rounded border border-white/10 bg-transparent cursor-pointer"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Part Badge */}
-                <div className="pt-3 border-t border-white/5">
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs text-slate-300 font-bold">
-                      Part Counter Badge (e.g. Part 1, Part 2...)
-                    </label>
-                    <input
-                      type="checkbox"
-                      checked={partEnabled}
-                      onChange={(e) => setOverlaySetting('partEnabled', e.target.checked)}
-                      className="accent-indigo-500 w-4 h-4"
-                    />
-                  </div>
-                  {partEnabled && (
-                    <div className="flex items-center gap-3">
-                      <select
-                        className="flex-1 py-1.5 px-3 rounded-xl glass-input text-xs"
-                        value={partFormat}
-                        onChange={(e) => setOverlaySetting('partFormat', e.target.value)}
-                      >
-                        <option value="Part {n}">Part &#123;n&#125;</option>
-                        <option value="PART {n}">PART &#123;n&#125;</option>
-                        <option value="Pt. {n}">Pt. &#123;n&#125;</option>
-                        <option value="Episode {n}">Episode &#123;n&#125;</option>
-                      </select>
-                      <input
-                        type="color"
-                        value={partColor}
-                        onChange={(e) => setOverlaySetting('partColor', e.target.value)}
-                        className="w-6 h-6 rounded border border-white/10 bg-transparent cursor-pointer"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       ) : (

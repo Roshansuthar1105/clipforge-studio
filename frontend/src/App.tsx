@@ -25,6 +25,7 @@ import { useJobsStore } from './stores/useJobsStore';
 import { useSubtitleStore } from './stores/useSubtitleStore';
 import { usePublishStore } from './stores/usePublishStore';
 import { useStudioStore } from './stores/useStudioStore';
+import { useLibraryStore } from './stores/useLibraryStore';
 
 export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>('studio');
@@ -64,6 +65,7 @@ export const App: React.FC = () => {
     // Initial stores initialization
     initAuth();
     checkDbStatus();
+    useLibraryStore.getState().loadStorageMetrics();
 
     // Check if there's an ongoing job to resume
     if (activeJobId) {

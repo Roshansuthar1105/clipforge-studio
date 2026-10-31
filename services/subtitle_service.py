@@ -184,11 +184,89 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return ass_header, primary_color, highlight_color, text_transform
 
 
+def build_overlay_styles_and_events(
+    overlays: Optional[List[Dict[str, Any]]],
+    video_width: int = 1080,
+    video_height: int = 1920
+) -> tuple[List[str], List[str]]:
+    """
+    Generate ASS style declarations and dialogue events for custom text overlays.
+    Returns (style_lines, dialogue_event_lines).
+    """
+    if not overlays:
+        return [], []
+
+    styles: List[str] = []
+    events: List[str] = []
+
+    for idx, ov in enumerate(overlays, start=1):
+        raw_text = str(ov.get("text") or "").strip()
+        if not raw_text:
+            continue
+
+        style_name = f"TextOverlay_{idx}"
+        font_name = ov.get("font_family") or ov.get("font_name") or "Arial Black"
+        font_size = int(ov.get("font_size", 54))
+        text_color = hex_to_ass_color(ov.get("text_color", "#FFFFFF"))
+        outline_color = hex_to_ass_color(ov.get("outline_color", "#000000"))
+        outline_width = float(ov.get("outline_width", 4.0))
+        box_style = ov.get("box_style", "box")
+        box_opacity = float(ov.get("box_opacity", 0.65))
+        box_alpha = int(round(max(0.0, min(1.0, 1.0 - box_opacity)) * 255))
+        back_color = hex_to_ass_color(ov.get("box_color", "#000000"), alpha=box_alpha)
+        border_style = 3 if box_style in ("box", "banner") else 1
+
+        pos_pct = float(ov.get("position_y_pct", 15))
+        align_h = str(ov.get("alignment", "center")).lower()
+
+        if pos_pct <= 45:
+            base_align = 8
+            margin_v = int(video_height * (pos_pct / 100.0))
+        elif pos_pct >= 65:
+            base_align = 2
+            margin_v = int(video_height * (1.0 - (pos_pct / 100.0)))
+        else:
+            base_align = 5
+            margin_v = 0
+
+        if align_h == "left":
+            align_code = base_align - 1
+        elif align_h == "right":
+            align_code = base_align + 1
+        else:
+            align_code = base_align
+
+        # Style definition
+        styles.append(
+            f"Style: {style_name},{font_name},{font_size},{text_color},&H000000FF&,{outline_color},{back_color},-1,0,0,0,100,100,1,0,{border_style},{outline_width},0,{align_code},60,60,{margin_v},1"
+        )
+
+        # Timing
+        apply_to_whole = bool(ov.get("apply_to_whole", False))
+        start_sec = 0.0 if apply_to_whole else max(0.0, float(ov.get("start_time", 0.0)))
+        end_sec = 99999.0 if apply_to_whole else max(start_sec + 0.1, float(ov.get("end_time", 99999.0)))
+
+        # Text transform
+        text_transform = ov.get("text_transform", "none")
+        if text_transform == "uppercase":
+            disp_text = raw_text.upper()
+        else:
+            disp_text = raw_text
+
+        disp_text = disp_text.replace("\n", "\\N")
+        events.append(
+            f"Dialogue: 2,{format_ass_timestamp(start_sec)},{format_ass_timestamp(end_sec)},{style_name},,0,0,0,,{disp_text}"
+        )
+
+    return styles, events
+
+
 def build_active_word_ass_content(
     cues: List[Dict[str, Any]],
     style: Optional[Dict[str, Any]] = None,
     video_width: int = 1080,
-    video_height: int = 1920
+    video_height: int = 1920,
+    overlays: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     """
     Generate Advanced SubStation Alpha (.ass) subtitle file content with micro-dialogue events
@@ -196,10 +274,17 @@ def build_active_word_ass_content(
     - As each word is spoken, it illuminates in highlight_color (e.g. #FFE500 yellow).
     - Inactive / already said words remain in clean primary_color (e.g. #FFFFFF white).
     - Zero horizontal or vertical text jitter; line boundaries remain 100% stable.
+    - Also attaches any custom text overlays on a higher layer.
     """
     ass_header, primary_color, highlight_color, text_transform = _generate_ass_header(
         style, video_width, video_height
     )
+
+    extra_styles, extra_events = build_overlay_styles_and_events(overlays, video_width, video_height)
+    if extra_styles:
+        # Inject styles into header before [Events]
+        parts = ass_header.split("[Events]")
+        ass_header = parts[0] + "\n".join(extra_styles) + "\n\n[Events]" + parts[1]
 
     events: List[str] = []
     for cue in cues:
@@ -278,6 +363,10 @@ def build_active_word_ass_content(
                 f"Dialogue: 0,{format_ass_timestamp(ev_start)},{format_ass_timestamp(ev_end)},Default,,0,0,0,,{line_str}"
             )
 
+    # Append overlay events on top
+    if extra_events:
+        events.extend(extra_events)
+
     return ass_header + "\n".join(events) + "\n"
 
 
@@ -285,24 +374,32 @@ def build_ass_content(
     cues: List[Dict[str, Any]],
     style: Optional[Dict[str, Any]] = None,
     video_width: int = 1080,
-    video_height: int = 1920
+    video_height: int = 1920,
+    overlays: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     """
     Generate Advanced SubStation Alpha (.ass) subtitle file content
     with full custom styling. Supports active word micro-events, static line highlighting,
-    or plain subtitles based on style['highlight_mode'].
+    or plain subtitles based on style['highlight_mode'], and custom text overlays.
     """
     style = style or {}
     highlight_mode = style.get("highlight_mode", "active_word")
 
     # If active word tracking is requested (CapCut / Hormozi style)
     if highlight_mode in ("active_word", "voice_synced"):
-        return build_active_word_ass_content(cues, style=style, video_width=video_width, video_height=video_height)
+        return build_active_word_ass_content(
+            cues, style=style, video_width=video_width, video_height=video_height, overlays=overlays
+        )
 
     # Standard static ASS generation
     ass_header, primary_color, highlight_color, text_transform = _generate_ass_header(
         style, video_width, video_height
     )
+
+    extra_styles, extra_events = build_overlay_styles_and_events(overlays, video_width, video_height)
+    if extra_styles:
+        parts = ass_header.split("[Events]")
+        ass_header = parts[0] + "\n".join(extra_styles) + "\n\n[Events]" + parts[1]
 
     events = []
     for cue in cues:
@@ -330,6 +427,9 @@ def build_ass_content(
         clean_text = clean_text.replace("\n", " ").replace("\\N", " ")
         events.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{clean_text}")
 
+    if extra_events:
+        events.extend(extra_events)
+
     return ass_header + "\n".join(events) + "\n"
 
 
@@ -355,17 +455,18 @@ def burn_subtitles_to_clip(
     input_video: Path,
     output_video: Path,
     cues: List[Dict[str, Any]],
-    style: Optional[Dict[str, Any]] = None
+    style: Optional[Dict[str, Any]] = None,
+    overlays: Optional[List[Dict[str, Any]]] = None
 ) -> Path:
     """
-    Burn custom styled ASS subtitles into video using FFmpeg.
+    Burn custom styled ASS subtitles and text overlays into video using FFmpeg.
     """
     if not input_video.exists():
         raise FileNotFoundError(f"Input video not found: {input_video}")
 
     ass_path = input_video.with_suffix(".temp.ass")
     try:
-        ass_content = build_ass_content(cues, style=style)
+        ass_content = build_ass_content(cues, style=style, overlays=overlays)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
 

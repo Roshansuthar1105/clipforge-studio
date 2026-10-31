@@ -10,6 +10,7 @@ import type {
   PublishRecord,
   SubtitleCue,
   SubtitleStyle,
+  TextOverlayConfig,
   ViralMoment
 } from '../types';
 
@@ -203,6 +204,7 @@ export const apiClient = {
   async getClipSubtitles(clipName: string): Promise<{
     cues: SubtitleCue[];
     style: SubtitleStyle;
+    overlays?: TextOverlayConfig[];
     full_text?: string;
     has_subtitles: boolean;
   }> {
@@ -211,7 +213,7 @@ export const apiClient = {
   },
   async saveClipSubtitles(
     clipName: string,
-    payload: { cues: SubtitleCue[]; style: SubtitleStyle }
+    payload: { cues: SubtitleCue[]; style: SubtitleStyle; overlays?: TextOverlayConfig[] }
   ): Promise<{ success: boolean }> {
     const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/save`, payload);
     return res.data;
@@ -230,14 +232,14 @@ export const apiClient = {
   },
   async burnSubtitles(
     clipName: string,
-    payload: { cues: SubtitleCue[]; style: SubtitleStyle }
+    payload: { cues?: SubtitleCue[]; styles?: Partial<SubtitleStyle>; style?: Partial<SubtitleStyle>; overlays?: TextOverlayConfig[]; replace_original?: boolean }
   ): Promise<{ job_id?: string; status?: string; output_clip?: string; success?: boolean }> {
     const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/burn`, payload);
     return res.data;
   },
   async burnGroupSubtitles(
     folderPath: string,
-    payload: { style: SubtitleStyle }
+    payload: { styles?: Partial<SubtitleStyle>; style?: Partial<SubtitleStyle>; overlays?: TextOverlayConfig[]; replace_original?: boolean }
   ): Promise<{ job_id: string; total_clips: number }> {
     const res = await api.post(`/api/subtitles/groups/${encodeURIComponent(folderPath)}/subtitles/burn`, payload);
     return res.data;

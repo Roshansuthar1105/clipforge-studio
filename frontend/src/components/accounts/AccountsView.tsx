@@ -188,7 +188,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
                         <div className="relative">
                           <img
                             src={acc.avatar_url}
-                            alt={acc.name}
+                            alt={acc.alias || acc.name || 'Account'}
                             className="w-12 h-12 rounded-2xl object-cover border border-white/15"
                           />
                           <div
@@ -217,7 +217,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
 
                       <div className="min-w-0">
                         <h4 className="text-sm font-bold text-white truncate max-w-[160px]">
-                          {acc.name || acc.channel_title || acc.page_name || 'Channel'}
+                          {acc.alias || acc.name || acc.channel_title || acc.page_name || 'Channel'}
                         </h4>
                         <div className="text-[11px] text-slate-400 capitalize flex items-center gap-1.5 mt-0.5">
                           <span

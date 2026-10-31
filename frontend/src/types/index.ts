@@ -44,11 +44,16 @@ export interface Job {
 export interface ClipItem {
   id: string;
   name: string;
-  filename: string;
+  filename?: string;
   url: string;
   thumb_url: string;
+  thumbnail_url?: string;
   size_mb: number;
   duration?: number;
+  duration_formatted?: string;
+  clean_title?: string;
+  part_number?: number;
+  part_label?: string;
   folder_name: string;
   folder_title: string;
   created_at?: string;
@@ -56,25 +61,34 @@ export interface ClipItem {
 
 export interface DownloadItem {
   filename: string;
+  name?: string;
   title: string;
+  clean_title?: string;
   url: string;
   thumb_url?: string;
+  thumbnail?: string;
   size_mb: number;
-  duration: number;
-  video_id: string;
+  duration?: number;
+  duration_formatted?: string;
+  video_id?: string;
+  youtube_url?: string;
 }
 
 export interface StorageMetrics {
   total_mb: number;
+  total_storage_mb?: number;
   downloads_mb: number;
+  total_downloads_mb?: number;
   clips_mb: number;
-  free_disk_gb: number;
+  total_clips_mb?: number;
+  free_disk_gb?: number;
 }
 
 export interface Account {
   id: string;
   platform: 'youtube' | 'instagram' | 'facebook';
-  name: string;
+  alias?: string;
+  name?: string;
   channel_title?: string;
   account_name?: string;
   page_name?: string;
@@ -126,6 +140,26 @@ export interface SubtitleStyle {
   position_y: number;
   uppercase: boolean;
   words_per_screen: number;
+}
+
+export interface TextOverlayConfig {
+  id?: string;
+  text: string;
+  start_time: number;
+  end_time: number;
+  apply_to_whole: boolean;
+  position_preset: 'top' | 'safe_top' | 'center' | 'safe_bottom' | 'bottom';
+  position_y_pct: number; // 5% to 95%
+  alignment: 'center' | 'left' | 'right';
+  font_family: string;
+  font_size: number;
+  text_color: string;
+  text_transform: 'none' | 'uppercase';
+  outline_color: string;
+  outline_width: number;
+  box_style: 'none' | 'box' | 'banner';
+  box_color: string;
+  box_opacity: number;
 }
 
 export interface ViralMoment {

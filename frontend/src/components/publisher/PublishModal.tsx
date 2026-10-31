@@ -218,6 +218,8 @@ export const PublishModal: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {accounts.map((acc) => {
                   const isSelected = selectedAccountIds.has(acc.id);
+                  const channelTitle = acc.alias || acc.name || acc.channel_title || acc.page_name || acc.account_name || 'Channel';
+                  const platformLabel = acc.platform === 'youtube' ? 'YouTube Shorts' : acc.platform === 'facebook' ? 'Facebook Reels' : 'Instagram Reels';
 
                   return (
                     <div
@@ -230,7 +232,7 @@ export const PublishModal: React.FC = () => {
                       onClick={() => toggleAccountSelection(acc.id)}
                     >
                       <div
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center border transition-all ${
+                        className={`w-6 h-6 rounded-lg flex items-center justify-center border transition-all shrink-0 ${
                           isSelected
                             ? 'bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-500/30'
                             : 'bg-black/40 border-white/20 text-transparent'
@@ -238,12 +240,19 @@ export const PublishModal: React.FC = () => {
                       >
                         <Check className="w-3.5 h-3.5 stroke-[3]" />
                       </div>
+                      {acc.avatar_url && (
+                        <img
+                          src={acc.avatar_url}
+                          alt={channelTitle}
+                          className="w-8 h-8 rounded-xl object-cover border border-white/10 shrink-0"
+                        />
+                      )}
                       <div className="truncate flex-1 min-w-0">
-                        <div className="text-xs font-bold truncate text-white">
-                          {acc.name || acc.channel_title || 'Channel'}
+                        <div className="text-xs font-bold truncate text-white" title={channelTitle}>
+                          {channelTitle}
                         </div>
-                        <div className="text-[10px] text-slate-400 capitalize mt-0.5">
-                          {acc.platform} {acc.platform === 'youtube' ? 'Shorts' : 'Reels'}
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          {platformLabel}
                         </div>
                       </div>
                     </div>

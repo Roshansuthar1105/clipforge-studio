@@ -1,15 +1,29 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Loader2, X, Check, ArrowDown, Scissors, Rocket } from 'lucide-react';
 import { useJobsStore } from '../../stores/useJobsStore';
 
 export const GlobalJobProgress: React.FC = () => {
-  const { activeJob, activeJobId, cancelActiveJob } = useJobsStore();
+  const { activeJob, activeJobId, cancelActiveJob, dismissActiveJob } = useJobsStore();
+
+  const status = activeJob?.status || 'pending';
+
+  // Auto-dismiss completed job notification after 15 seconds
+  useEffect(() => {
+    if (status === 'completed') {
+      const timer = setTimeout(() => {
+        dismissActiveJob();
+      }, 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [status, dismissActiveJob]);
 
   if (!activeJobId && !activeJob) return null;
 
   const pct = activeJob?.progress || 0;
-  const status = activeJob?.status || 'pending';
-  const stageMsg = activeJob?.stage_msg || 'Processing job in background...';
+  const stageMsg =
+    status === 'completed'
+      ? 'All reels sliced and ready! View them in your library or publish now.'
+      : activeJob?.stage_msg || 'Processing job in background...';
 
   let step = 1;
   if (status === 'downloading') step = 2;
@@ -34,7 +48,13 @@ export const GlobalJobProgress: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-white">Active Background Job</span>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                <span
+                  className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                    status === 'completed'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                      : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                  }`}
+                >
                   {status}
                 </span>
               </div>
@@ -42,11 +62,11 @@ export const GlobalJobProgress: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-4 self-end sm:self-center">
-            <span className="text-xl font-black text-indigo-300 font-mono tracking-tight">
+          <div className="flex items-center gap-3 self-end sm:self-center">
+            <span className="text-xl font-black text-indigo-300 font-mono tracking-tight mr-1">
               {Math.round(pct)}%
             </span>
-            {status !== 'completed' && (
+            {status !== 'completed' ? (
               <button
                 type="button"
                 className="px-3 py-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
@@ -54,7 +74,24 @@ export const GlobalJobProgress: React.FC = () => {
               >
                 <X className="w-3.5 h-3.5" /> Cancel
               </button>
+            ) : (
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                onClick={() => dismissActiveJob()}
+                title="Dismiss notification"
+              >
+                <Check className="w-3.5 h-3.5" /> Dismiss
+              </button>
             )}
+            <button
+              type="button"
+              className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              onClick={() => dismissActiveJob()}
+              title="Close notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
 

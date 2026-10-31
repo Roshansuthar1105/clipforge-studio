@@ -36,9 +36,9 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onSwitchView }) => 
 
   const activeNavId =
     currentView === 'subtitles'
-      ? 'library'
+      ? null
       : currentView === 'viral'
-      ? 'studio'
+      ? null
       : currentView === 'guide'
       ? 'accounts'
       : currentView;
@@ -167,7 +167,11 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onSwitchView }) => 
           >
             <HardDrive className="w-3.5 h-3.5 text-indigo-400" />
             <span className="font-mono text-[11px]">
-              {storageMetrics ? `${storageMetrics.total_mb} MB` : 'Storage'}
+              {typeof storageMetrics?.total_mb === 'number'
+                ? `${storageMetrics.total_mb} MB`
+                : typeof (storageMetrics as any)?.total_storage_mb === 'number'
+                ? `${(storageMetrics as any).total_storage_mb} MB`
+                : 'Storage'}
             </span>
           </button>
 

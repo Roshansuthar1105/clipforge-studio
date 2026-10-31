@@ -84,7 +84,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   titleAlignment: 'center',
   titleColor: '#FFFFFF',
 
-  partEnabled: true,
+  partEnabled: false,
   partFormat: 'Part {n}',
   partFontSize: 36,
   partY: 360,
@@ -205,17 +205,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         start_time: s.startTime,
         end_time: isPreview ? s.startTime + Math.min(30, s.clipLength) : s.endTime,
         is_preview: isPreview,
-        title_text: s.titleText,
-        title_font_size: s.titleFontSize,
-        title_y: s.titleY,
-        title_alignment: s.titleAlignment,
-        title_color: s.titleColor,
-        part_enabled: s.partEnabled,
-        part_format: s.partFormat,
-        part_font_size: s.partFontSize,
-        part_y: s.partY,
-        part_alignment: s.partAlignment,
-        part_color: s.partColor,
+        video_title: s.metadata?.title || undefined,
+        show_title: false,
+        show_parts: false,
       };
 
       if (s.slicingMode === 'viral' && s.viralMoments.length > 0) {

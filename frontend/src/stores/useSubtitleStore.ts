@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SubtitleCue, SubtitleStyle, SubtitleWord } from '../types';
+import type { SubtitleCue, SubtitleStyle, SubtitleWord, TextOverlayConfig } from '../types';
 import { apiClient, showToast } from '../api/client';
 
 export const STYLE_PRESETS: Record<string, Partial<SubtitleStyle>> = {
@@ -70,6 +70,25 @@ const DEFAULT_STYLE: SubtitleStyle = {
   words_per_screen: 3,
 };
 
+export const DEFAULT_OVERLAY: TextOverlayConfig = {
+  text: '',
+  start_time: 0,
+  end_time: 0,
+  apply_to_whole: true,
+  position_preset: 'top',
+  position_y_pct: 14,
+  alignment: 'center',
+  font_family: 'Arial Black',
+  font_size: 52,
+  text_color: '#FFFFFF',
+  text_transform: 'uppercase',
+  outline_color: '#000000',
+  outline_width: 5,
+  box_style: 'box',
+  box_color: '#000000',
+  box_opacity: 0.65,
+};
+
 interface SubtitleState {
   modalOpen: boolean;
   clipName: string;
@@ -80,11 +99,13 @@ interface SubtitleState {
 
   cues: SubtitleCue[];
   style: SubtitleStyle;
+  overlay: TextOverlayConfig;
+  overlayPromptOpen: boolean;
   currentTime: number;
   duration: number;
   isPlaying: boolean;
   showSafeZones: boolean;
-  activeTab: 'bulk' | 'cues';
+  activeTab: 'bulk' | 'cues' | 'overlay';
 
   findWord: string;
   replaceWord: string;
@@ -100,7 +121,13 @@ interface SubtitleState {
   setDuration: (duration: number) => void;
   setIsPlaying: (playing: boolean) => void;
   toggleSafeZones: () => void;
-  setActiveTab: (tab: 'bulk' | 'cues') => void;
+  setActiveTab: (tab: 'bulk' | 'cues' | 'overlay') => void;
+
+  setOverlayValue: (key: keyof TextOverlayConfig, val: any) => void;
+  setOverlayPreset: (preset: 'top' | 'safe_top' | 'center' | 'safe_bottom' | 'bottom') => void;
+  setOverlayToPlayhead: (field: 'start' | 'end') => void;
+  setOverlayPromptOpen: (open: boolean) => void;
+  burnTextOverlay: (scope: 'current' | 'folder') => Promise<boolean>;
 
   applyPreset: (presetName: string) => void;
   setStyleValue: (key: keyof SubtitleStyle, value: any) => void;
@@ -125,16 +152,24 @@ interface SubtitleState {
   saveDraft: () => Promise<void>;
 }
 
+let savedClipData: { clipName: string; clipUrl: string; folderPath?: string; groupClipsCount?: number } | null = null;
+try {
+  const stored = sessionStorage.getItem('clipforge_active_subtitle_clip');
+  if (stored) savedClipData = JSON.parse(stored);
+} catch {}
+
 export const useSubtitleStore = create<SubtitleState>((set, get) => ({
   modalOpen: false,
-  clipName: '',
-  clipUrl: '',
-  isGroupMode: false,
-  folderPath: '',
-  groupClipsCount: 0,
+  clipName: savedClipData?.clipName || '',
+  clipUrl: savedClipData?.clipUrl || '',
+  isGroupMode: Boolean(savedClipData?.folderPath),
+  folderPath: savedClipData?.folderPath || '',
+  groupClipsCount: savedClipData?.groupClipsCount || 0,
 
   cues: [],
   style: { ...DEFAULT_STYLE },
+  overlay: { ...DEFAULT_OVERLAY },
+  overlayPromptOpen: false,
   currentTime: 0,
   duration: 0,
   isPlaying: false,
@@ -149,6 +184,18 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
   burnStageMsg: '',
 
   openSubtitleStudio: async (clipName, clipUrl, groupOptions) => {
+    try {
+      sessionStorage.setItem(
+        'clipforge_active_subtitle_clip',
+        JSON.stringify({
+          clipName,
+          clipUrl,
+          folderPath: groupOptions?.folderPath || '',
+          groupClipsCount: groupOptions?.count || 0,
+        })
+      );
+    } catch {}
+
     set({
       modalOpen: true,
       clipName,
@@ -161,28 +208,95 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
       isBurning: false,
       burnProgress: 0,
       burnStageMsg: '',
+      overlayPromptOpen: false,
     });
 
     try {
       const data = await apiClient.getClipSubtitles(clipName);
-      if (data && data.cues) {
-        set({
-          cues: data.cues,
-          style: data.style ? { ...DEFAULT_STYLE, ...data.style } : { ...DEFAULT_STYLE },
-        });
+      let loadedOverlay = { ...DEFAULT_OVERLAY };
+      if (data && data.overlays && data.overlays.length > 0) {
+        loadedOverlay = { ...DEFAULT_OVERLAY, ...data.overlays[0] };
       }
+      set({
+        cues: data?.cues || [],
+        style: data?.style ? { ...DEFAULT_STYLE, ...data.style } : { ...DEFAULT_STYLE },
+        overlay: loadedOverlay,
+      });
     } catch {
       showToast('Could not load existing subtitles. Creating blank session.', 'info');
-      set({ cues: [] });
+      set({ cues: [], overlay: { ...DEFAULT_OVERLAY } });
     }
   },
 
-  closeSubtitleStudio: () => set({ modalOpen: false, isPlaying: false }),
+  closeSubtitleStudio: () => {
+    try {
+      sessionStorage.removeItem('clipforge_active_subtitle_clip');
+    } catch {}
+    set({
+      modalOpen: false,
+      clipName: '',
+      clipUrl: '',
+      cues: [],
+      isPlaying: false,
+      overlayPromptOpen: false,
+    });
+  },
   setCurrentTime: (time) => set({ currentTime: time }),
-  setDuration: (dur) => set({ duration: dur }),
+  setDuration: (dur) => set((state) => ({
+    duration: dur,
+    overlay: state.overlay.end_time === 0 ? { ...state.overlay, end_time: dur } : state.overlay,
+  })),
   setIsPlaying: (playing) => set({ isPlaying: playing }),
   toggleSafeZones: () => set((state) => ({ showSafeZones: !state.showSafeZones })),
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  setOverlayValue: (key, val) => set((state) => ({
+    overlay: { ...state.overlay, [key]: val },
+  })),
+
+  setOverlayPreset: (preset) => {
+    let pct = 14;
+    if (preset === 'top') pct = 10;
+    else if (preset === 'safe_top') pct = 16;
+    else if (preset === 'center') pct = 50;
+    else if (preset === 'safe_bottom') pct = 80;
+    else if (preset === 'bottom') pct = 88;
+
+    set((state) => ({
+      overlay: {
+        ...state.overlay,
+        position_preset: preset,
+        position_y_pct: pct,
+      },
+    }));
+  },
+
+  setOverlayToPlayhead: (field) => {
+    const cur = get().currentTime;
+    set((state) => ({
+      overlay: {
+        ...state.overlay,
+        apply_to_whole: false,
+        [field === 'start' ? 'start_time' : 'end_time']: Math.round(cur * 100) / 100,
+      },
+    }));
+  },
+
+  setOverlayPromptOpen: (open) => set({ overlayPromptOpen: open }),
+
+  burnTextOverlay: async (scope) => {
+    const { overlay, burnGroupSubtitles, burnSubtitlesToVideo } = get();
+    if (!overlay.text.trim()) {
+      showToast('Please enter text for the overlay', 'warning');
+      return false;
+    }
+    set({ overlayPromptOpen: false });
+    if (scope === 'folder') {
+      return burnGroupSubtitles();
+    } else {
+      return burnSubtitlesToVideo();
+    }
+  },
 
   applyPreset: (presetName) => {
     const preset = STYLE_PRESETS[presetName];
@@ -399,23 +513,25 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
   },
 
   saveDraft: async () => {
-    const { clipName, cues, style } = get();
+    const { clipName, cues, style, overlay } = get();
     try {
-      await apiClient.saveClipSubtitles(clipName, { cues, style });
-      showToast('Saved subtitle draft', 'success');
+      const overlays = overlay.text.trim() ? [overlay] : [];
+      await apiClient.saveClipSubtitles(clipName, { cues, style, overlays });
+      showToast('Saved subtitle & overlay draft', 'success');
     } catch {
       showToast('Failed to save subtitles draft', 'error');
     }
   },
 
   burnSubtitlesToVideo: async () => {
-    const { clipName, cues, style } = get();
-    set({ isBurning: true, burnProgress: 10, burnStageMsg: 'Compiling ASS subtitle filtergraph...' });
+    const { clipName, cues, style, overlay } = get();
+    set({ isBurning: true, burnProgress: 10, burnStageMsg: 'Compiling ASS subtitle & text overlay filtergraph...' });
     try {
-      const res = await apiClient.burnSubtitles(clipName, { cues, style });
+      const overlays = overlay.text.trim() ? [overlay] : [];
+      const res = await apiClient.burnSubtitles(clipName, { cues, style, overlays });
       if (!res?.job_id || res?.status === 'completed') {
         set({ isBurning: false, burnProgress: 100, burnStageMsg: 'Done!' });
-        showToast('Subtitles burned into video successfully!', 'success');
+        showToast('Subtitles & text overlay burned into video successfully!', 'success');
         set((state) => ({ clipUrl: `${state.clipUrl.split('?')[0]}?t=${Date.now()}` }));
         window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
         return true;
@@ -431,7 +547,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
           if (job.status === 'completed') {
             clearInterval(pollTimer);
             set({ isBurning: false, burnProgress: 100, burnStageMsg: 'Done!' });
-            showToast('Subtitles burned into video successfully!', 'success');
+            showToast('Subtitles & text overlay burned into video successfully!', 'success');
             // Refresh video preview
             set((state) => ({ clipUrl: `${state.clipUrl.split('?')[0]}?t=${Date.now()}` }));
             window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
@@ -454,10 +570,11 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
   },
 
   burnGroupSubtitles: async () => {
-    const { folderPath, style } = get();
-    set({ isBurning: true, burnProgress: 15, burnStageMsg: 'Mounting subtitles to all reels in folder...' });
+    const { folderPath, style, overlay } = get();
+    set({ isBurning: true, burnProgress: 15, burnStageMsg: 'Mounting subtitles & text overlays to all reels in folder...' });
     try {
-      const res = await apiClient.burnGroupSubtitles(folderPath, { style });
+      const overlays = overlay.text.trim() ? [overlay] : [];
+      const res = await apiClient.burnGroupSubtitles(folderPath, { style, overlays });
       const jobId = res.job_id;
 
       const pollTimer = setInterval(async () => {
@@ -466,7 +583,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
           if (job.status === 'completed') {
             clearInterval(pollTimer);
             set({ isBurning: false, burnProgress: 100 });
-            showToast('Subtitles mounted to all reels in folder!', 'success');
+            showToast('Subtitles & text overlays mounted to all reels in folder!', 'success');
             window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
           } else if (job.status === 'error') {
             clearInterval(pollTimer);
@@ -481,7 +598,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
       return true;
     } catch {
       set({ isBurning: false });
-      showToast('Failed to mount group subtitles', 'error');
+      showToast('Failed to mount group subtitles & overlays', 'error');
       return false;
     }
   },

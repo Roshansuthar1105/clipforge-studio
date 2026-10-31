@@ -89,6 +89,94 @@ def synthesize_word_timestamps(text: str, start: Any, end: Any) -> List[Dict[str
     return result
 
 
+HALLUCINATION_PATTERNS = [
+    r"\b(?:do[\s,]+)+not\s+translate\b",
+    r"\bdo\s+not\s+translate\b",
+    r"\btranslate\s+hindi\b",
+    r"\bhindi\s+into\s+english\b",
+    r"\bhindi\s+and\s+hinglish\b",
+    r"\btranscribe\s+hindi\b",
+    r"\btranscribe\s+in\s+hindi\b",
+]
+
+
+def clean_hallucinated_text(text: str) -> str:
+    """
+    Remove Whisper prompt hallucination / leakage phrases from text.
+    Returns cleaned text, or empty string if text consisted entirely of hallucinations.
+    """
+    if not text:
+        return ""
+    t = str(text)
+    t = re.sub(r"(?i)\b(?:do[\s,]+)+not\s+translate(?:\s+hindi)?(?:\s+(?:into|in)\s+english|\s+and\s+hinglish)?\.?", "", t)
+    t = re.sub(r"(?i)\bdo\s+not\s+translate(?:\s+hindi)?(?:\s+(?:into|in)\s+english|\s+and\s+hinglish)?\.?", "", t)
+    t = re.sub(r"(?i)\btranslate\s+hindi(?:\s+(?:into|in)\s+english|\s+and\s+hinglish)?\.?", "", t)
+    t = re.sub(r"(?i)\bhindi\s+and\s+hinglish\.?", "", t)
+    t = re.sub(r"(?i)\bhindi\s+into\s+english\.?", "", t)
+    t = re.sub(r"(?i)\btranscribe\s+hindi(?:\s+speech)?(?:\s+as\s+spoken)?\.?", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def is_hallucinated_prompt_segment(text: str) -> bool:
+    """
+    Check if a transcript segment or subtitle cue contains Whisper prompt hallucination / system prompt leakage.
+    E.g., 'DO NOT TRANSLATE', 'HINDI AND HINGLISH', 'Do Do Do not translate...'.
+    """
+    if not text:
+        return False
+    clean = re.sub(r"[^\w\s]", "", str(text)).strip().lower()
+    clean = re.sub(r"\s+", " ", clean)
+    if not clean:
+        return False
+
+    for p in HALLUCINATION_PATTERNS:
+        if re.search(p, clean):
+            return True
+
+    # If cleaning removes everything or leaves only punctuation
+    cleaned_t = clean_hallucinated_text(text)
+    if not cleaned_t:
+        return True
+
+    return False
+
+
+def sanitize_word_list(words: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Remove hallucinated word sequences (e.g. ['Do', 'not', 'translate', 'Hindi', 'into', 'English'])
+    from a list of word timestamp dictionaries.
+    """
+    if not words:
+        return []
+
+    blacklisted_phrases = [
+        ["do", "not", "translate"],
+        ["do", "do", "not", "translate"],
+        ["do", "do", "do", "not", "translate"],
+        ["not", "translate", "hindi"],
+        ["translate", "hindi", "into", "english"],
+        ["translate", "hindi", "and", "hinglish"],
+        ["translate", "hindi"],
+        ["hindi", "into", "english"],
+        ["hindi", "and", "hinglish"],
+        ["transcribe", "hindi"],
+        ["transcribe", "in", "hindi"],
+    ]
+
+    n = len(words)
+    skip_indices = set()
+    for phrase in blacklisted_phrases:
+        p_len = len(phrase)
+        for start_idx in range(n - p_len + 1):
+            window = [re.sub(r"[^\w]", "", str(words[start_idx + k].get("word", "")).lower()) for k in range(p_len)]
+            if window == phrase:
+                for k in range(p_len):
+                    skip_indices.add(start_idx + k)
+
+    return [w for idx, w in enumerate(words) if idx not in skip_indices]
+
+
 def create_voice_synced_word_chunks(
     cues_or_words: List[Dict[str, Any]],
     max_words: int = 3,
@@ -99,6 +187,21 @@ def create_voice_synced_word_chunks(
     with precise speech synchronization and natural boundary pauses.
     - max_words: Max words per screen (e.g. 2, 3, 4). Set to <= 0 for full sentence/traditional.
     """
+    if not cues_or_words:
+        return []
+
+    # Strip and clean any hallucinated prompt segments before chunking
+    cleaned_incoming: List[Dict[str, Any]] = []
+    for c in cues_or_words:
+        raw_t = str(c.get("text", "")).strip()
+        cl_t = clean_hallucinated_text(raw_t)
+        if cl_t and not is_hallucinated_prompt_segment(raw_t):
+            c_copy = dict(c)
+            c_copy["text"] = cl_t
+            if "words" in c_copy and isinstance(c_copy["words"], list):
+                c_copy["words"] = sanitize_word_list(c_copy["words"])
+            cleaned_incoming.append(c_copy)
+    cues_or_words = cleaned_incoming
     if not cues_or_words:
         return []
 
@@ -114,6 +217,7 @@ def create_voice_synced_word_chunks(
                     float(c.get("start", 0.0)),
                     float(c.get("end", 0.0))
                 )
+            c["words"] = sanitize_word_list(c.get("words", []))
             full_cues.append(c)
         return full_cues
 
@@ -145,7 +249,12 @@ def create_voice_synced_word_chunks(
                         "end": round(float(w.get("end", c_end)), 2),
                     })
 
-    all_words = [w for w in all_words if w.get("word")]
+    # Sanitize hallucinated word sequences from word stream
+    all_words = sanitize_word_list(all_words)
+    all_words = [
+        w for w in all_words
+        if w.get("word") and not is_hallucinated_prompt_segment(w.get("word", ""))
+    ]
     if not all_words:
         return []
 
@@ -155,6 +264,10 @@ def create_voice_synced_word_chunks(
     def _finalize_chunk(chunk_words: List[Dict[str, Any]], next_word: Optional[Dict[str, Any]] = None):
         if not chunk_words:
             return
+        chunk_text = " ".join(item["word"].strip() for item in chunk_words).strip()
+        if is_hallucinated_prompt_segment(chunk_text) or not clean_hallucinated_text(chunk_text):
+            return
+
         st = chunk_words[0]["start"]
         en = chunk_words[-1]["end"]
 
@@ -165,7 +278,6 @@ def create_voice_synced_word_chunks(
             if 0.0 <= gap < 0.35:
                 en = next_word["start"]
 
-        chunk_text = " ".join(item["word"].strip() for item in chunk_words)
         chunks.append({
             "id": len(chunks),
             "start": round(st, 2),
@@ -231,7 +343,11 @@ def extract_audio_for_transcription(video_path: Path, output_audio: Path) -> Pat
     return output_audio
 
 
-def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None) -> Dict[str, Any]:
+def transcribe_video_with_groq(
+    video_path: Path,
+    video_id: Optional[str] = None,
+    force_retranscribe: bool = False
+) -> Dict[str, Any]:
     """
     Transcribe a full video using Groq Cloud whisper-large-v3-turbo / whisper-large-v3.
     Caches results to disk and MongoDB so the video is never transcribed twice.
@@ -239,11 +355,17 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
     if not video_id:
         video_id = video_path.stem
 
-    # Check if already transcribed
-    cached = get_stored_transcript(video_id)
-    if cached and cached.get("segments"):
-        logger.info("Found cached transcript for video_id: %s", video_id)
-        return cached
+    # Check if already transcribed (unless force_retranscribe is requested)
+    if not force_retranscribe:
+        cached = get_stored_transcript(video_id)
+        if cached and cached.get("segments"):
+            # If cached transcript contains hallucinated prompts, invalidate and re-transcribe
+            has_hallucination = any(is_hallucinated_prompt_segment(s.get("text", "")) for s in cached.get("segments", []))
+            if not has_hallucination:
+                logger.info("Found cached transcript for video_id: %s", video_id)
+                return cached
+            else:
+                logger.info("Cached transcript for %s has prompt hallucinations; re-transcribing...", video_id)
 
     api_key = get_groq_api_key()
     if not api_key:
@@ -294,13 +416,18 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                 "start": round(float(tw_dict.get("start", 0.0)), 2),
                 "end": round(float(tw_dict.get("end", 0.0)), 2),
             })
+        parsed_top_words = sanitize_word_list(parsed_top_words)
 
         parsed_segments: List[Dict[str, Any]] = []
-        for idx, seg in enumerate(segments_raw):
+        for seg in segments_raw:
             seg_dict = seg if isinstance(seg, dict) else (seg.model_dump() if hasattr(seg, "model_dump") else seg)
+            raw_text = str(seg_dict.get("text", "")).strip()
+            clean_t = clean_hallucinated_text(raw_text)
+            if is_hallucinated_prompt_segment(raw_text) or not clean_t:
+                continue
+
             start = round(float(seg_dict.get("start", 0.0)), 2)
             end = round(float(seg_dict.get("end", 0.0)), 2)
-            text = str(seg_dict.get("text", "")).strip()
 
             words_raw = seg_dict.get("words", []) or []
             parsed_words = []
@@ -311,6 +438,7 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                     "start": round(float(w_dict.get("start", 0.0)), 2),
                     "end": round(float(w_dict.get("end", 0.0)), 2),
                 })
+            parsed_words = sanitize_word_list(parsed_words)
 
             # If segment words were not nested, match from top-level words
             if not parsed_words and parsed_top_words:
@@ -319,30 +447,37 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                     if (w["start"] >= start - 0.08 and w["start"] <= end + 0.08)
                 ]
                 if matched:
-                    parsed_words = matched
+                    parsed_words = sanitize_word_list(matched)
 
             # If still missing, synthesize timestamps so word tracking never fails
-            if not parsed_words and text:
-                parsed_words = synthesize_word_timestamps(text, start, end)
+            if not parsed_words and clean_t:
+                parsed_words = synthesize_word_timestamps(clean_t, start, end)
 
             parsed_segments.append({
-                "id": idx,
+                "id": len(parsed_segments),
                 "start": start,
                 "end": end,
-                "text": text,
+                "text": clean_t,
                 "words": parsed_words,
             })
+
+        for idx, s in enumerate(parsed_segments):
+            s["id"] = idx
 
         raw_lang = getattr(transcription, "language", "en")
         detected_lang = str(raw_lang).lower() if raw_lang else "en"
         has_devanagari = any(has_devanagari_characters(s.get("text", "")) for s in parsed_segments)
+        is_indic = (detected_lang in ("hi", "hindi", "urdu", "pa", "punjabi", "mr", "marathi", "gu", "gujarati", "bn", "bengali", "ne", "nepali", "sa", "sanskrit") or has_devanagari)
+
+        raw_full = getattr(transcription, "text", "")
+        clean_full = clean_hallucinated_text(raw_full)
 
         transcript_data = {
             "video_id": video_id,
             "source_file": video_path.name,
-            "language": "hi" if (detected_lang in ("hi", "hindi", "urdu") or has_devanagari) else detected_lang,
+            "language": "hi" if is_indic else detected_lang,
             "duration": getattr(transcription, "duration", 0.0),
-            "full_text": getattr(transcription, "text", ""),
+            "full_text": clean_full,
             "segments": parsed_segments,
         }
 
@@ -351,13 +486,10 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
         save_transcript(video_id, transcript_data)
         save_transcript(f"{video_id}_raw", transcript_data)
 
-        # 1. Hindi audio -> only auto-convert full video transcript if it is a short clip (<= 35 segments).
-        # For long videos (> 35 segments, like full episodes/specials with hundreds of segments),
-        # keep base transcript so full transcription returns instantly without triggering Groq 429 rate limits.
-        # Sliced viral clips convert to Hinglish on-demand in 1 fast call!
-        if detected_lang in ("hi", "hindi", "urdu") or has_devanagari:
-            if len(parsed_segments) <= 35:
-                logger.info("Detected Hindi audio in short video %s (%d segments); auto-converting to Hinglish", video_id, len(parsed_segments))
+        # 1. Hindi / Indic audio -> auto-convert short clips to Hinglish, keep base transcript for long videos
+        if is_indic:
+            if len(parsed_segments) <= 45:
+                logger.info("Detected Hindi / Indic audio in video %s (%d segments); auto-converting to Hinglish", video_id, len(parsed_segments))
                 try:
                     hinglish_data = convert_transcript_to_hinglish(transcript_data, video_id=video_id)
                     if hinglish_data and hinglish_data.get("segments"):
@@ -366,21 +498,9 @@ def transcribe_video_with_groq(video_path: Path, video_id: Optional[str] = None)
                     logger.warning("Auto-conversion to Hinglish failed for %s: %s; retaining base transcript", video_id, h_err)
             else:
                 logger.info(
-                    "Detected Hindi audio in long video %s (%d segments, %.1fs). Retaining base transcript so detection remains instant without 429 rate limits. Clips will transliterate to Hinglish on-demand.",
+                    "Detected Hindi audio in long video %s (%d segments, %.1fs). Retaining base transcript; clips will transliterate to Hinglish on-demand.",
                     video_id, len(parsed_segments), transcript_data.get("duration", 0.0)
                 )
-            return transcript_data
-
-        # 2. Foreign language (neither Hindi nor English) -> attempt translating to English by default
-        elif detected_lang not in ("en", "english"):
-            logger.info("Detected foreign language '%s' in %s; translating to English by default", detected_lang, video_id)
-            try:
-                en_trans = translate_video_to_english_with_groq(video_path, video_id=video_id)
-                if en_trans and en_trans.get("segments"):
-                    save_transcript(video_id, en_trans)
-                    return en_trans
-            except Exception as tr_err:
-                logger.warning("Auto-translation to English failed for %s (%s); keeping base transcript: %s", video_id, detected_lang, tr_err)
             return transcript_data
 
         return transcript_data
@@ -513,87 +633,9 @@ def has_devanagari_characters(text: str) -> bool:
     return bool(re.search(r'[\u0900-\u097F]', str(text)))
 
 
-_DEVA_VOWELS = {
-    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
-    'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'an', 'अः': 'ah'
-}
-_DEVA_MATRAS = {
-    'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
-    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', 'ँ': 'n', 'ः': 'h'
-}
-_DEVA_CONSONANTS = {
-    'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'ng',
-    'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'ny',
-    'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
-    'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
-    'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm',
-    'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v',
-    'श': 'sh', 'ष': 'sh', 'स': 's', 'ह': 'h',
-    'क़': 'q', 'ख़': 'kh', 'ग़': 'gh', 'ज़': 'z', 'ड़': 'r', 'ढ़': 'rh', 'फ़': 'f'
-}
-
-
-def devanagari_to_hinglish_phonetic(text: str) -> str:
+def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> List[str]:
     """
-    Offline phonetic transliterator converting Hindi Devanagari script into Hinglish (Latin alphabet).
-    Guarantees zero Devanagari characters even if Groq is unavailable, rate-limited, or offline.
-    """
-    if not text or not has_devanagari_characters(text):
-        return str(text or "")
-
-    res = []
-    i = 0
-    n = len(text)
-    while i < n:
-        c = text[i]
-        # Two-character consonant (with nukta)
-        if i + 1 < n and (c + text[i+1]) in _DEVA_CONSONANTS:
-            cons = _DEVA_CONSONANTS[c + text[i+1]]
-            i += 2
-            if i < n and text[i] == '्':  # halant / virama
-                res.append(cons)
-                i += 1
-            elif i < n and text[i] in _DEVA_MATRAS:
-                res.append(cons + _DEVA_MATRAS[text[i]])
-                i += 1
-            else:
-                inherent = 'a' if (i < n and (text[i] in _DEVA_CONSONANTS or (i+1 < n and text[i:i+2] in _DEVA_CONSONANTS))) else ''
-                res.append(cons + inherent)
-            continue
-        elif c in _DEVA_CONSONANTS:
-            cons = _DEVA_CONSONANTS[c]
-            i += 1
-            if i < n and text[i] == '्':
-                res.append(cons)
-                i += 1
-            elif i < n and text[i] in _DEVA_MATRAS:
-                res.append(cons + _DEVA_MATRAS[text[i]])
-                i += 1
-            else:
-                inherent = 'a' if (i < n and text[i] in _DEVA_CONSONANTS) else ''
-                res.append(cons + inherent)
-            continue
-        elif c in _DEVA_VOWELS:
-            res.append(_DEVA_VOWELS[c])
-            i += 1
-            continue
-        elif c in _DEVA_MATRAS:
-            res.append(_DEVA_MATRAS[c])
-            i += 1
-            continue
-        elif c == '्':
-            i += 1
-            continue
-        else:
-            res.append(c)
-            i += 1
-    return ''.join(res)
-
-
-def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 15) -> List[str]:
-    """
-    Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq,
-    with automatic offline phonetic fallback if Groq is unavailable or rate-limited.
+    Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq.
     Preserves original English words and phrasing without translating meaning to English words.
     Guarantees 0 Devanagari characters in output.
     """
@@ -605,15 +647,12 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 15) -> Li
         return texts
 
     api_key = get_groq_api_key()
-    client = None
-    if api_key:
-        try:
-            from groq import Groq
-            client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
-        except Exception as c_err:
-            logger.warning("Could not instantiate Groq client: %s", c_err)
-    else:
-        logger.info("GROQ_API_KEY is not set. Using offline phonetic Hinglish transliterator.")
+    if not api_key:
+        logger.warning("GROQ_API_KEY is not set for Hinglish conversion.")
+        return texts
+
+    from groq import Groq
+    client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
 
     system_prompt = (
         "You are a strict Hinglish transliteration engine.\n"
@@ -627,19 +666,16 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 15) -> Li
     )
 
     models_to_try = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
-        "allam-2-7b",
+        "openai/gpt-oss-20b"
     ]
 
     import time
     results: List[str] = []
     for i in range(0, len(texts), batch_size):
         if i > 0:
-            time.sleep(0.3)  # Gentle pacing to avoid rate limits
+            time.sleep(0.3)  # Gentle pacing to avoid Groq 30 RPM rate limits
         chunk = texts[i:i + batch_size]
         # If this entire chunk has no Devanagari, pass it through directly
         if not any(has_devanagari_characters(t) for t in chunk):
@@ -647,61 +683,55 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 15) -> Li
             continue
 
         chunk_success = False
+        user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
 
-        if client:
-            user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
-            for model_name in models_to_try:
-                try:
-                    res = client.chat.completions.create(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_msg}
-                        ],
-                        temperature=0.0,
-                        max_tokens=2048
+        for model_name in models_to_try:
+            try:
+                res = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg}
+                    ],
+                    temperature=0.0,
+                    max_tokens=500
+                )
+
+                raw = res.choices[0].message.content or ""
+                raw = raw.strip()
+                if raw.startswith("```"):
+                    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+                    raw = re.sub(r'\s*```$', '', raw)
+
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    for val in parsed.values():
+                        if isinstance(val, list):
+                            parsed = val
+                            break
+
+                if isinstance(parsed, list) and len(parsed) == len(chunk):
+                    # Clean any accidental lingering Devanagari characters
+                    cleaned_items = [str(item).strip() for item in parsed]
+                    results.extend(cleaned_items)
+                    chunk_success = True
+                    break
+                else:
+                    logger.warning(
+                        "Hinglish transliteration count mismatch via %s (expected %d, got %s)",
+                        model_name, len(chunk), len(parsed) if isinstance(parsed, list) else "not-list"
                     )
-
-                    raw = res.choices[0].message.content or ""
-                    raw = raw.strip()
-                    if raw.startswith("```"):
-                        raw = re.sub(r'^```(?:json)?\s*', '', raw)
-                        raw = re.sub(r'\s*```$', '', raw)
-
-                    parsed = json.loads(raw)
-                    if isinstance(parsed, dict):
-                        for val in parsed.values():
-                            if isinstance(val, list):
-                                parsed = val
-                                break
-
-                    if isinstance(parsed, list) and len(parsed) == len(chunk):
-                        cleaned_items = [
-                            devanagari_to_hinglish_phonetic(str(item).strip())
-                            for item in parsed
-                        ]
-                        results.extend(cleaned_items)
+                    if isinstance(parsed, list) and len(parsed) >= len(chunk):
+                        results.extend([str(x).strip() for x in parsed[:len(chunk)]])
                         chunk_success = True
                         break
-                    elif isinstance(parsed, list) and len(parsed) >= len(chunk):
-                        cleaned_items = [
-                            devanagari_to_hinglish_phonetic(str(x).strip())
-                            for x in parsed[:len(chunk)]
-                        ]
-                        results.extend(cleaned_items)
-                        chunk_success = True
-                        break
-                except Exception as exc:
-                    logger.debug("Hinglish transliteration model %s failed for chunk %d: %s", model_name, i, exc)
-                    continue
+            except Exception as exc:
+                logger.warning("Hinglish transliteration model %s failed for chunk %d: %s", model_name, i, exc)
+                continue
 
         if not chunk_success:
-            logger.info("Using offline phonetic Hinglish engine for chunk %d (%d lines)", i, len(chunk))
-            fallback_items = [
-                devanagari_to_hinglish_phonetic(line) if has_devanagari_characters(line) else line
-                for line in chunk
-            ]
-            results.extend(fallback_items)
+            logger.error("All Hinglish models failed for chunk %d; retaining original lines", i)
+            results.extend(chunk)
 
     return results
 
@@ -712,6 +742,10 @@ def convert_cues_to_hinglish(cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     Regenerates voice-synced word timestamps with Hinglish words so active word
     illumination and subtitle burns contain zero Devanagari glyphs.
     """
+    if not cues:
+        return []
+
+    cues = [c for c in cues if not is_hallucinated_prompt_segment(c.get("text") or "")]
     if not cues:
         return []
 
@@ -940,6 +974,34 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
                     saved = json.load(f)
                     cues = saved.get("cues", [])
 
+                    # Filter and clean any hallucinated prompt segments or words
+                    orig_len = len(cues)
+                    cleaned_cues = []
+                    for c in cues:
+                        raw_t = str(c.get("text", "")).strip()
+                        cl_t = clean_hallucinated_text(raw_t)
+                        if cl_t and not is_hallucinated_prompt_segment(raw_t):
+                            c_copy = dict(c)
+                            c_copy["text"] = cl_t
+                            if "words" in c_copy and isinstance(c_copy["words"], list):
+                                c_copy["words"] = sanitize_word_list(c_copy["words"])
+                            cleaned_cues.append(c_copy)
+                    cues = cleaned_cues
+
+                    if len(cues) != orig_len:
+                        logger.info("Filtered %d prompt hallucination cues from %s", orig_len - len(cues), custom_path.name)
+                        for idx, c in enumerate(cues):
+                            c["id"] = idx
+                        saved["cues"] = cues
+                        save_clip_subtitles(clip_name, saved)
+                        if clip_file:
+                            try:
+                                full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
+                                from routers.subtitles_router import update_clip_metadata_caption
+                                update_clip_metadata_caption(clip_file, full_caption, saved.get("styles", {}))
+                            except Exception:
+                                pass
+
                     # By default convert any saved Hindi Devanagari cues to Hinglish
                     if any(has_devanagari_characters(c.get("text", "")) for c in cues):
                         logger.info("Found Hindi Devanagari in saved subtitles for %s; auto-converting to Hinglish by default", clip_name)
@@ -1030,11 +1092,15 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             raw_cues = clip_transcript.get("segments", [])
             cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
 
-            # 1. Hindi audio -> by default save & get Hinglish subtitles
-            if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(clip_transcript.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+            # 1. Indic / Hindi audio -> by default save & get Hinglish subtitles
+            raw_lang = str(clip_transcript.get("language", "")).lower()
+            is_indic = any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_lang in (
+                "hi", "hindi", "urdu", "pa", "punjabi", "mr", "marathi", "gu", "gujarati", "bn", "bengali", "ne", "nepali", "sa", "sanskrit"
+            )
+            if is_indic:
                 cues = convert_cues_to_hinglish(cues)
             # 2. Foreign language (neither Hindi nor English) -> by default use English translation
-            elif str(clip_transcript.get("language", "")).lower() not in ("en", "english"):
+            elif raw_lang not in ("en", "english"):
                 try:
                     cues = translate_clip_to_english_with_groq(clip_file)
                     cues = create_voice_synced_word_chunks(cues, max_words=3)

@@ -35,6 +35,7 @@ from services.transcription_service import (
     save_clip_subtitles,
     slice_transcript_for_clip,
     create_voice_synced_word_chunks,
+    clean_hallucinated_text,
     _find_clip_path,
     get_groq_api_key,
     CLIPS_DIR,
@@ -105,10 +106,11 @@ def apply_text_transform(text: str, transform: str) -> str:
 
 
 def clean_caption_text(raw: str) -> str:
-    """Strip bracket/asterisk highlight markers from caption text for social post descriptions."""
+    """Strip bracket/asterisk highlight markers and hallucinated prompts from caption text for social post descriptions."""
     if not raw:
         return ""
-    cleaned = re.sub(r"\[([^\]]+)\]", r"\1", raw)
+    cleaned = clean_hallucinated_text(raw)
+    cleaned = re.sub(r"\[([^\]]+)\]", r"\1", cleaned)
     cleaned = re.sub(r"\*([^\*]+)\*", r"\1", cleaned)
     return cleaned.strip()
 
@@ -221,6 +223,7 @@ def update_clip_metadata_caption(clip_path: Path, full_caption: str, styles: Opt
 class SubtitleSaveRequest(BaseModel):
     cues: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    overlays: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
 
 
 class SubtitleAutoSyncRequest(BaseModel):
@@ -238,11 +241,13 @@ class SubtitleHinglishRequest(BaseModel):
 class SubtitleBurnRequest(BaseModel):
     cues: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    overlays: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     replace_original: bool = True
 
 
 class GroupSubtitleBurnRequest(BaseModel):
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    overlays: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     replace_original: bool = True
     english_only: bool = False
     hinglish: bool = True
@@ -329,7 +334,8 @@ def save_subtitles_for_clip(clip_name: str, payload: SubtitleSaveRequest):
 
     save_clip_subtitles(unquoted, {
         "cues": payload.cues or [],
-        "styles": styles
+        "styles": styles,
+        "overlays": payload.overlays or []
     })
 
     # Also update clip metadata caption
@@ -370,7 +376,7 @@ def auto_sync_clip_subtitles_endpoint(clip_name: str, payload: SubtitleAutoSyncR
     if (force_retranscribe or not cues) and input_clip.exists() and get_groq_api_key():
         try:
             logger.info("Transcribing clip %s directly for precision voice sync...", input_clip.name)
-            clip_transcript = transcribe_video_with_groq(input_clip, video_id=input_clip.stem)
+            clip_transcript = transcribe_video_with_groq(input_clip, video_id=input_clip.stem, force_retranscribe=force_retranscribe)
             raw_cues = clip_transcript.get("segments", [])
             if raw_cues:
                 cues = raw_cues
@@ -494,12 +500,13 @@ def translate_clip_subtitles_endpoint(
         if not cues:
             raise HTTPException(status_code=400, detail="No speech cues found to convert to Hinglish.")
 
-        # Convert cues to Hinglish (English Latin alphabet)
-        try:
-            cues = convert_cues_to_hinglish(cues)
-        except Exception as exc:
-            logger.error("Hinglish conversion failed for %s: %s", unquoted, exc)
-            raise HTTPException(status_code=500, detail=f"Failed to convert speech to Hinglish: {exc}")
+        # Convert cues to Hinglish (English Latin alphabet) if any Devanagari detected
+        if any(has_devanagari_characters(c.get("text", "")) for c in cues):
+            try:
+                cues = convert_cues_to_hinglish(cues)
+            except Exception as exc:
+                logger.error("Hinglish conversion failed for %s: %s", unquoted, exc)
+                raise HTTPException(status_code=500, detail=f"Failed to convert speech to Hinglish: {exc}")
 
     else:
         # mode == "english" (Pure English translation)
@@ -579,8 +586,8 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
         else:
             raise HTTPException(status_code=404, detail=f"Clip '{unquoted}' not found.")
 
-    if not payload.cues:
-        raise HTTPException(status_code=400, detail="Cannot burn empty subtitle cues.")
+    if not payload.cues and not payload.overlays:
+        raise HTTPException(status_code=400, detail="Cannot burn empty subtitle cues or overlays.")
 
     styles = payload.styles or {}
     styles.setdefault("highlight_mode", "active_word")
@@ -588,24 +595,26 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
     text_transform = styles.get("text_transform", "none")
 
     # Automatically convert any Hindi Devanagari cues to Hinglish before burning
-    if any(has_devanagari_characters(c.get("text", "")) for c in payload.cues):
+    if payload.cues and any(has_devanagari_characters(c.get("text", "")) for c in payload.cues):
         logger.info("Devanagari detected in burn request for %s; auto-converting to Hinglish", unquoted)
         payload.cues = convert_cues_to_hinglish(payload.cues)
 
     # 1. Apply preview text transform to all cues so the saved captions match the preview
-    for cue in payload.cues:
-        raw_text = cue.get("text", "")
-        if raw_text:
-            cue["text"] = apply_text_transform(raw_text, text_transform)
+    if payload.cues:
+        for cue in payload.cues:
+            raw_text = cue.get("text", "")
+            if raw_text:
+                cue["text"] = apply_text_transform(raw_text, text_transform)
 
-    # 2. Save latest edits with transformed cue text
+    # 2. Save latest edits with transformed cue text and overlays
     save_clip_subtitles(unquoted, {
         "cues": payload.cues or [],
-        "styles": styles
+        "styles": styles,
+        "overlays": payload.overlays or []
     })
 
     # 3. Save full caption to clip metadata for captions section & publishing
-    full_caption = " ".join([c.get("text", "").strip() for c in payload.cues if c.get("text", "").strip()])
+    full_caption = " ".join([c.get("text", "").strip() for c in (payload.cues or []) if c.get("text", "").strip()])
     update_clip_metadata_caption(input_clip, full_caption, styles)
 
     # Output file
@@ -620,7 +629,8 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
             input_video=input_clip,
             output_video=output_clip,
             cues=payload.cues or [],
-            style=styles
+            style=styles,
+            overlays=payload.overlays or []
         )
 
         if payload.replace_original:
@@ -664,9 +674,10 @@ def _process_group_subtitle_job(
     styles: Dict[str, Any],
     replace_original: bool,
     english_only: bool = False,
-    hinglish: bool = True
+    hinglish: bool = True,
+    overlays: Optional[List[Dict[str, Any]]] = None
 ) -> None:
-    """Background worker to mount subtitles to each clip in the group and save reels."""
+    """Background worker to mount subtitles and text overlays to each clip in the group and save reels."""
     total = len(clips)
     processed = 0
     results = []
@@ -755,13 +766,13 @@ def _process_group_subtitle_job(
                 except Exception as t_err:
                     logger.warning("Could not auto-transcribe %s: %s", clip_file.name, t_err)
 
-            if not cues:
-                logger.warning("No subtitle cues found for %s; skipping.", clip_file.name)
-                results.append({"clip": clip_file.name, "status": "skipped", "reason": "No speech cues found"})
+            if not cues and not overlays:
+                logger.warning("No subtitle cues or overlays found for %s; skipping.", clip_file.name)
+                results.append({"clip": clip_file.name, "status": "skipped", "reason": "No speech cues or overlays found"})
                 continue
 
             # Guarantee zero Devanagari characters: auto-convert Hindi speech to Hinglish by default
-            if not english_only and (hinglish or any(has_devanagari_characters(c.get("text", "")) for c in cues)):
+            if cues and not english_only and (hinglish or any(has_devanagari_characters(c.get("text", "")) for c in cues)):
                 try:
                     cues = convert_cues_to_hinglish(cues)
                 except Exception as h_err:
@@ -770,7 +781,7 @@ def _process_group_subtitle_job(
             # 2. Merge styles and apply preview text transform
             merged_styles = {**(sub_data.get("styles") or {}), **styles}
             merged_hl = merged_styles.get("highlight_mode", "active_word")
-            if merged_hl in ("active_word", "voice_synced"):
+            if cues and merged_hl in ("active_word", "voice_synced"):
                 max_w = int(merged_styles.get("words_per_screen", 3))
                 cues = create_voice_synced_word_chunks(cues, max_words=max_w)
 
@@ -779,20 +790,25 @@ def _process_group_subtitle_job(
                 if raw_text:
                     cue["text"] = apply_text_transform(raw_text, text_transform)
 
-            # 3. Save subtitle cues
-            save_clip_subtitles(rel_clip_path, {"cues": cues, "styles": merged_styles})
+            # 3. Save subtitle cues and overlays
+            save_clip_subtitles(rel_clip_path, {
+                "cues": cues,
+                "styles": merged_styles,
+                "overlays": overlays or []
+            })
 
             # 4. Save metadata caption/description
             full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
             update_clip_metadata_caption(clip_file, full_caption, merged_styles)
 
-            # 5. Burn subtitles to video
+            # 5. Burn subtitles and text overlays to video
             temp_output = clip_file.with_name(f"{clip_file.stem}_temp_burn.mp4")
             burn_subtitles_to_clip(
                 input_video=clip_file,
                 output_video=temp_output,
                 cues=cues,
-                style=merged_styles
+                style=merged_styles,
+                overlays=overlays
             )
 
             # 6. Replace original file or keep subtitled file
@@ -882,7 +898,7 @@ def burn_subtitles_for_group_endpoint(folder_path: str, payload: GroupSubtitleBu
     # Launch background thread
     t = threading.Thread(
         target=_process_group_subtitle_job,
-        args=(job_id, target_folder, clips, payload.styles or {}, payload.replace_original, payload.english_only, payload.hinglish),
+        args=(job_id, target_folder, clips, payload.styles or {}, payload.replace_original, payload.english_only, payload.hinglish, payload.overlays or []),
         daemon=True
     )
     t.start()

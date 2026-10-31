@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -16,8 +16,16 @@ import {
   Eye,
   Subtitles,
   Download,
+  Type,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  CheckCircle2,
+  FolderOpen,
+  X,
 } from 'lucide-react';
 import { useSubtitleStore, STYLE_PRESETS } from '../../stores/useSubtitleStore';
+import { apiClient } from '../../api/client';
 
 interface SubtitleStudioViewProps {
   onBack: () => void;
@@ -28,9 +36,12 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
     clipName,
     clipUrl,
     isGroupMode,
+    folderPath,
     groupClipsCount,
     cues,
     style,
+    overlay,
+    overlayPromptOpen,
     currentTime,
     duration,
     isPlaying,
@@ -59,12 +70,39 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
     translateToEnglish,
     burnSubtitlesToVideo,
     burnGroupSubtitles,
+    setOverlayValue,
+    setOverlayPreset,
+    setOverlayToPlayhead,
+    setOverlayPromptOpen,
+    burnTextOverlay,
     isBurning,
     burnProgress,
     burnStageMsg,
   } = useSubtitleStore();
 
+  const [overlayScope, setOverlayScope] = useState<'current' | 'folder'>('current');
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Auto-load subtitles if clipName exists but cues are empty (e.g. on direct route / refresh)
+  useEffect(() => {
+    if (clipName && cues.length === 0) {
+      apiClient
+        .getClipSubtitles(clipName)
+        .then((data) => {
+          if (data && data.cues) {
+            useSubtitleStore.setState({
+              cues: data.cues,
+              style: data.style ? { ...useSubtitleStore.getState().style, ...data.style } : useSubtitleStore.getState().style,
+              overlay:
+                data.overlays && data.overlays.length > 0
+                  ? { ...useSubtitleStore.getState().overlay, ...data.overlays[0] }
+                  : useSubtitleStore.getState().overlay,
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  }, [clipName, cues.length]);
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
@@ -101,14 +139,24 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
     const rect = e.currentTarget.getBoundingClientRect();
     const clickY = e.clientY - rect.top;
     const pct = Math.round((clickY / rect.height) * 100);
-    setPositionPercent(Math.min(90, Math.max(10, pct)));
+    if (activeTab === 'overlay') {
+      setOverlayValue('position_y_pct', Math.min(92, Math.max(8, pct)));
+    } else {
+      setPositionPercent(Math.min(90, Math.max(10, pct)));
+    }
   };
 
   const formatTime = (sec: number) => {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    const ms = Math.floor((sec % 1) * 10);
+    return `${m}:${s < 10 ? '0' : ''}${s}.${ms}`;
   };
+
+  // Check if text overlay is active at current time
+  const isOverlayVisible =
+    Boolean(overlay && overlay.text && overlay.text.trim()) &&
+    (overlay.apply_to_whole || (currentTime >= overlay.start_time && currentTime <= overlay.end_time));
 
   return (
     <div className="space-y-6 animate-in fade-in pb-16">
@@ -151,9 +199,9 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
           {isGroupMode ? (
             <button
               type="button"
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-purple-500/25 transition-all cursor-pointer flex items-center gap-2"
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-purple-500/25 transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => burnGroupSubtitles()}
-              disabled={isBurning}
+              disabled={isBurning || !clipName}
             >
               <Layers className="w-4 h-4" />
               <span>Mount All in Group ({groupClipsCount})</span>
@@ -161,9 +209,9 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
           ) : (
             <button
               type="button"
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white text-xs font-bold shadow-lg shadow-pink-500/25 transition-all cursor-pointer flex items-center gap-2"
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white text-xs font-bold shadow-lg shadow-pink-500/25 transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => burnSubtitlesToVideo()}
-              disabled={isBurning}
+              disabled={isBurning || !clipName}
             >
               <Flame className="w-4 h-4" />
               <span>Burn Subtitles to Video</span>
@@ -172,8 +220,26 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
         </div>
       </div>
 
-      {/* Main Studio Workspace Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {!clipName && !clipUrl ? (
+        <div className="p-16 text-center border border-white/10 rounded-3xl bg-slate-900/30 backdrop-blur-md">
+          <div className="w-16 h-16 rounded-3xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4 text-indigo-400">
+            <Subtitles className="w-8 h-8" />
+          </div>
+          <h3 className="text-base font-bold text-white">No Reel Selected</h3>
+          <p className="text-xs text-slate-400 mt-1.5 max-w-sm mx-auto">
+            Choose a rendered 9:16 clip from your Media Library to edit, style, and burn animated viral captions.
+          </p>
+          <button
+            type="button"
+            className="mt-5 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-2 shadow-lg shadow-indigo-600/25"
+            onClick={onBack}
+          >
+            <FolderOpen className="w-4 h-4" /> Open Media Library
+          </button>
+        </div>
+      ) : (
+        /* Main Studio Workspace Grid */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: 9:16 Video Player & Frame Mockup */}
         <div className="lg:col-span-5 glass-panel p-6 flex flex-col items-center justify-center relative overflow-hidden">
           <div className="flex items-center justify-between w-full max-w-[300px] mb-3 text-xs text-slate-400">
@@ -197,7 +263,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
           <div
             className="relative w-full max-w-[300px] aspect-[9/16] rounded-[36px] overflow-hidden border-2 border-white/20 shadow-2xl bg-black cursor-crosshair select-none ring-1 ring-white/10"
             onClick={handlePreviewClick}
-            title="Click anywhere on the preview to adjust vertical subtitle placement"
+            title={activeTab === 'overlay' ? 'Click anywhere on the preview to adjust text overlay placement' : 'Click anywhere on the preview to adjust subtitle placement'}
           >
             <video
               ref={videoRef}
@@ -218,10 +284,56 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
               </div>
             )}
 
+            {/* Custom Text Overlay Banner (Real-Time Live Preview) */}
+            {isOverlayVisible && (
+              <div
+                className={`absolute left-0 right-0 pointer-events-none transition-all duration-75 z-20 ${
+                  overlay.alignment === 'left'
+                    ? 'text-left pl-5 pr-4'
+                    : overlay.alignment === 'right'
+                    ? 'text-right pr-5 pl-4'
+                    : 'text-center px-4'
+                }`}
+                style={{
+                  top: `${overlay.position_y_pct}%`,
+                  transform: 'translateY(-50%)',
+                }}
+              >
+                <div
+                  className={`font-black tracking-wide leading-tight ${
+                    overlay.box_style === 'banner'
+                      ? 'w-full py-1.5 px-3 block'
+                      : overlay.box_style === 'box'
+                      ? 'inline-block px-3 py-1 rounded-lg'
+                      : 'inline-block px-1'
+                  }`}
+                  style={{
+                    fontFamily: overlay.font_family,
+                    fontSize: `${Math.round(overlay.font_size * 0.28)}px`,
+                    color: overlay.text_color,
+                    textTransform: overlay.text_transform === 'uppercase' ? 'uppercase' : 'none',
+                    WebkitTextStroke:
+                      overlay.outline_width > 0
+                        ? `${Math.max(1, overlay.outline_width * 0.28)}px ${overlay.outline_color}`
+                        : 'none',
+                    textShadow: '0 4px 12px rgba(0,0,0,0.85)',
+                    backgroundColor:
+                      overlay.box_style !== 'none'
+                        ? `${overlay.box_color}${Math.round(overlay.box_opacity * 255)
+                            .toString(16)
+                            .padStart(2, '0')}`
+                        : 'transparent',
+                  }}
+                >
+                  {overlay.text}
+                </div>
+              </div>
+            )}
+
             {/* Active Animated Word Subtitle Overlay */}
             {activeCue && (
               <div
-                className="absolute left-0 right-0 px-4 text-center pointer-events-none transition-all duration-75"
+                className="absolute left-0 right-0 px-4 text-center pointer-events-none transition-all duration-75 z-10"
                 style={{
                   top: `${style.position_percent}%`,
                   transform: 'translateY(-50%)',
@@ -302,13 +414,13 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
           </div>
         </div>
 
-        {/* Right Column: Style Controls, Presets, and Cue Editor */}
+        {/* Right Column: Style Controls, Presets, and Subtitle / Text Overlay Editors */}
         <div className="lg:col-span-7 glass-panel flex flex-col overflow-hidden">
           {/* Top Styling & Presets Bar */}
           <div className="p-5 border-b border-white/10 space-y-4 bg-slate-900/60">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Style Presets
+                Caption Engine
               </span>
               <div className="flex gap-2">
                 <button
@@ -368,7 +480,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
 
               <div className="p-3 rounded-2xl bg-slate-950/50 border border-white/5">
                 <div className="flex items-center justify-between text-xs text-slate-400 font-medium mb-1.5">
-                  <span>Vertical Position</span>
+                  <span>Subtitle Y Pos</span>
                   <strong className="text-white font-mono">{style.position_percent}%</strong>
                 </div>
                 <input
@@ -400,29 +512,46 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
             </div>
           </div>
 
-          {/* Sub-Tabs: Bulk Text vs Cue-by-Cue */}
-          <div className="flex border-b border-white/10 bg-slate-950/60">
+          {/* Sub-Tabs: Bulk Text vs Cue-by-Cue vs Add Text on Video */}
+          <div className="flex border-b border-white/10 bg-slate-950/60 overflow-x-auto">
             <button
               type="button"
-              className={`flex-1 py-3.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex-1 min-w-[130px] py-3.5 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                 activeTab === 'bulk'
                   ? 'border-b-2 border-indigo-500 text-indigo-300 bg-indigo-500/10'
                   : 'text-slate-400 hover:text-white'
               }`}
               onClick={() => setActiveTab('bulk')}
             >
-              Bulk Text & Find/Replace
+              <Subtitles className="w-3.5 h-3.5" />
+              <span>Bulk Text</span>
             </button>
             <button
               type="button"
-              className={`flex-1 py-3.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex-1 min-w-[130px] py-3.5 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                 activeTab === 'cues'
                   ? 'border-b-2 border-indigo-500 text-indigo-300 bg-indigo-500/10'
                   : 'text-slate-400 hover:text-white'
               }`}
               onClick={() => setActiveTab('cues')}
             >
-              One-by-One Cues ({cues.length})
+              <Clock className="w-3.5 h-3.5" />
+              <span>Cues ({cues.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`flex-1 min-w-[150px] py-3.5 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeTab === 'overlay'
+                  ? 'border-b-2 border-pink-500 text-pink-300 bg-pink-500/10'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              onClick={() => setActiveTab('overlay')}
+            >
+              <Type className="w-3.5 h-3.5 text-pink-400" />
+              <span>Add Text on Video</span>
+              {overlay.text.trim() && (
+                <span className="w-2 h-2 rounded-full bg-pink-500 ml-0.5" />
+              )}
             </button>
           </div>
 
@@ -458,53 +587,58 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                 {/* Full Caption Text Preview */}
                 <div>
                   <label className="text-xs text-slate-400 font-semibold mb-2 block">
-                    Full Caption (derived from subtitles)
+                    Complete Spoken Caption ({cues.length} speech segments)
                   </label>
                   <textarea
                     className="glass-input text-xs leading-relaxed w-full font-sans"
-                    rows={10}
+                    rows={8}
                     readOnly
                     value={cues.map((c) => c.text).join(' ')}
                   />
                 </div>
               </div>
-            ) : (
-              /* One-by-One Cues Editor */
+            ) : activeTab === 'cues' ? (
+              /* One-by-One Cue Editor */
               <div className="space-y-3">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                  <span className="text-xs text-slate-400 font-medium">Timeline Voice Cues</span>
                   <div className="flex gap-2">
                     <button
                       type="button"
                       className="px-3 py-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-300 transition-all cursor-pointer"
                       onClick={() => shiftAllCues(-0.5)}
                     >
-                      -0.5s shift
+                      -0.5s
                     </button>
                     <button
                       type="button"
                       className="px-3 py-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-300 transition-all cursor-pointer"
                       onClick={() => shiftAllCues(0.5)}
                     >
-                      +0.5s shift
+                      +0.5s
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3.5 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-xs font-bold text-indigo-300 transition-all cursor-pointer flex items-center gap-1.5"
+                      onClick={addCue}
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Cue
                     </button>
                   </div>
-
-                  <button
-                    type="button"
-                    className="px-3.5 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-xs font-bold text-indigo-300 transition-all cursor-pointer flex items-center gap-1.5"
-                    onClick={addCue}
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Add Caption
-                  </button>
                 </div>
 
                 {cues.map((cue, idx) => (
                   <div
                     key={idx}
-                    className="p-4 rounded-2xl border border-white/10 bg-slate-950/70 space-y-2.5"
+                    className={`p-3.5 rounded-2xl border transition-all ${
+                      currentTime >= cue.start && currentTime <= cue.end
+                        ? 'border-indigo-500/50 bg-indigo-500/10'
+                        : 'border-white/5 bg-slate-950/50'
+                    }`}
                   >
-                    <div className="flex items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center justify-between gap-3 text-xs mb-2">
                       <div className="flex items-center gap-2">
+                        <span className="font-mono text-slate-400 text-[11px]">#{idx + 1}</span>
                         <input
                           type="number"
                           step="0.1"
@@ -512,7 +646,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                           value={cue.start}
                           onChange={(e) => updateCueTiming(idx, 'start', +e.target.value)}
                         />
-                        <span className="text-slate-500 font-mono">➔</span>
+                        <span className="text-slate-500 font-mono">→</span>
                         <input
                           type="number"
                           step="0.1"
@@ -528,7 +662,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                           className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-semibold text-slate-300 transition-all cursor-pointer"
                           onClick={() => toggleCueHighlightAll(idx)}
                         >
-                          Highlight All
+                          Highlight
                         </button>
                         <button
                           type="button"
@@ -547,9 +681,8 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                       onChange={(e) => updateCueText(idx, e.target.value)}
                     />
 
-                    {/* Word-level click-to-highlight chips */}
                     {cue.words && cue.words.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
+                      <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-white/5">
                         {cue.words.map((w, wIdx) => (
                           <span
                             key={wIdx}
@@ -568,10 +701,484 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                   </div>
                 ))}
               </div>
+            ) : (
+              /* TAB 3: ADD TEXT ON VIDEO (DYNAMIC TEXT OVERLAY & BANNER) */
+              <div className="space-y-5 animate-in fade-in">
+                <div className="p-4 rounded-2xl bg-pink-500/10 border border-pink-500/20 flex items-start gap-3">
+                  <Type className="w-5 h-5 text-pink-400 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold text-white mb-0.5">
+                      Dynamic Text Overlay & Title Banner
+                    </h4>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Add customized text banners, part numbers, titles, or teaser hooks directly onto your video.
+                      Choose custom duration or whole video, tweak colors & position, and mount to this video or all reels in the folder.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 1. Text Input */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-300 font-bold flex items-center justify-between">
+                    <span>Banner Text Content</span>
+                    <span className="text-[11px] font-normal text-slate-400">Supports emojis</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    className="w-full py-2.5 px-3 rounded-2xl glass-input text-xs font-medium placeholder:text-slate-500"
+                    placeholder="e.g. PART 1: STANDUP COMEDY SPECIAL 🔥"
+                    value={overlay.text}
+                    onChange={(e) => setOverlayValue('text', e.target.value)}
+                  />
+                </div>
+
+                {/* 2. Duration / Timing Controls */}
+                <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/8 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-pink-400" /> Duration & Timing
+                    </span>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 font-medium">
+                      <span>Whole Video (0s - {Math.round(duration)}s)</span>
+                      <input
+                        type="checkbox"
+                        checked={overlay.apply_to_whole}
+                        onChange={(e) => setOverlayValue('apply_to_whole', e.target.checked)}
+                        className="accent-pink-500 w-4 h-4 rounded cursor-pointer"
+                      />
+                    </label>
+                  </div>
+
+                  {!overlay.apply_to_whole && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+                          <span>Start Time (seconds)</span>
+                          <button
+                            type="button"
+                            className="text-[10px] text-pink-400 hover:text-pink-300 font-bold cursor-pointer"
+                            onClick={() => setOverlayToPlayhead('start')}
+                          >
+                            Set to Playhead ({formatTime(currentTime)})
+                          </button>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          value={overlay.start_time}
+                          onChange={(e) => setOverlayValue('start_time', +e.target.value)}
+                          className="glass-input text-xs w-full py-2 px-3 font-mono"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+                          <span>End Time (seconds)</span>
+                          <button
+                            type="button"
+                            className="text-[10px] text-pink-400 hover:text-pink-300 font-bold cursor-pointer"
+                            onClick={() => setOverlayToPlayhead('end')}
+                          >
+                            Set to Playhead ({formatTime(currentTime)})
+                          </button>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          value={overlay.end_time || duration || 30}
+                          onChange={(e) => setOverlayValue('end_time', +e.target.value)}
+                          className="glass-input text-xs w-full py-2 px-3 font-mono"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Positioning Controls */}
+                <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/8 space-y-3">
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5 text-pink-400" /> Placement & Alignment
+                  </span>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+                      <span>Quick Position Presets</span>
+                      <strong className="text-white font-mono">{overlay.position_y_pct}% Y</strong>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                          overlay.position_preset === 'top'
+                            ? 'bg-pink-600 text-white shadow-md shadow-pink-500/25'
+                            : 'bg-white/5 border border-white/10 text-slate-300 hover:text-white'
+                        }`}
+                        onClick={() => setOverlayPreset('top')}
+                      >
+                        Top Banner
+                      </button>
+                      <button
+                        type="button"
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                          overlay.position_preset === 'safe_top'
+                            ? 'bg-pink-600 text-white shadow-md shadow-pink-500/25'
+                            : 'bg-white/5 border border-white/10 text-slate-300 hover:text-white'
+                        }`}
+                        onClick={() => setOverlayPreset('safe_top')}
+                      >
+                        Safe Zone Top
+                      </button>
+                      <button
+                        type="button"
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                          overlay.position_preset === 'center'
+                            ? 'bg-pink-600 text-white shadow-md shadow-pink-500/25'
+                            : 'bg-white/5 border border-white/10 text-slate-300 hover:text-white'
+                        }`}
+                        onClick={() => setOverlayPreset('center')}
+                      >
+                        Center
+                      </button>
+                      <button
+                        type="button"
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                          overlay.position_preset === 'safe_bottom'
+                            ? 'bg-pink-600 text-white shadow-md shadow-pink-500/25'
+                            : 'bg-white/5 border border-white/10 text-slate-300 hover:text-white'
+                        }`}
+                        onClick={() => setOverlayPreset('safe_bottom')}
+                      >
+                        Safe Zone Bottom
+                      </button>
+                    </div>
+
+                    <input
+                      type="range"
+                      min="6"
+                      max="92"
+                      value={overlay.position_y_pct}
+                      onChange={(e) => setOverlayValue('position_y_pct', +e.target.value)}
+                      className="w-full accent-pink-500 cursor-pointer mt-2"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                    <span className="text-xs text-slate-400 font-medium">Text Alignment</span>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        className={`p-2 rounded-xl border text-xs cursor-pointer ${
+                          overlay.alignment === 'left'
+                            ? 'bg-pink-500/20 border-pink-500/40 text-pink-300'
+                            : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                        }`}
+                        onClick={() => setOverlayValue('alignment', 'left')}
+                        title="Align Left"
+                      >
+                        <AlignLeft className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        className={`p-2 rounded-xl border text-xs cursor-pointer ${
+                          overlay.alignment === 'center'
+                            ? 'bg-pink-500/20 border-pink-500/40 text-pink-300'
+                            : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                        }`}
+                        onClick={() => setOverlayValue('alignment', 'center')}
+                        title="Align Center"
+                      >
+                        <AlignCenter className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        className={`p-2 rounded-xl border text-xs cursor-pointer ${
+                          overlay.alignment === 'right'
+                            ? 'bg-pink-500/20 border-pink-500/40 text-pink-300'
+                            : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                        }`}
+                        onClick={() => setOverlayValue('alignment', 'right')}
+                        title="Align Right"
+                      >
+                        <AlignRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Typography & Color Styling */}
+                <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/8 space-y-4">
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-pink-400" /> Font, Colors & Background Box
+                  </span>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-slate-400 font-medium">Font Family</label>
+                      <select
+                        className="w-full glass-input text-xs py-2 px-3 rounded-xl"
+                        value={overlay.font_family}
+                        onChange={(e) => setOverlayValue('font_family', e.target.value)}
+                      >
+                        <option value="Arial Black">Arial Black (Bold)</option>
+                        <option value="Montserrat">Montserrat (Clean)</option>
+                        <option value="Impact">Impact (Punchy)</option>
+                        <option value="Outfit">Outfit (Modern)</option>
+                        <option value="Arial">Arial (Standard)</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                        <span>Font Size</span>
+                        <strong className="text-white font-mono">{overlay.font_size}px</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="28"
+                        max="96"
+                        step="2"
+                        value={overlay.font_size}
+                        onChange={(e) => setOverlayValue('font_size', +e.target.value)}
+                        className="w-full accent-pink-500 cursor-pointer pt-1"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-slate-400 font-medium">Text Color</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={overlay.text_color}
+                          onChange={(e) => setOverlayValue('text_color', e.target.value)}
+                          className="w-8 h-8 rounded-lg border border-white/10 bg-transparent cursor-pointer shrink-0"
+                        />
+                        <input
+                          type="text"
+                          value={overlay.text_color}
+                          onChange={(e) => setOverlayValue('text_color', e.target.value)}
+                          className="glass-input text-xs py-1.5 px-2 flex-1 font-mono uppercase"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Outline & Background Box Controls */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-white/5">
+                    {/* Outline / Stroke */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+                        <span>Outline Stroke</span>
+                        <strong className="text-white font-mono">{overlay.outline_width}px</strong>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="color"
+                          value={overlay.outline_color}
+                          onChange={(e) => setOverlayValue('outline_color', e.target.value)}
+                          className="w-8 h-8 rounded-lg border border-white/10 bg-transparent cursor-pointer shrink-0"
+                        />
+                        <input
+                          type="range"
+                          min="0"
+                          max="12"
+                          value={overlay.outline_width}
+                          onChange={(e) => setOverlayValue('outline_width', +e.target.value)}
+                          className="flex-1 accent-pink-500 cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Background Box Style */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+                        <span>Box Style & Opacity</span>
+                        <strong className="text-white font-mono">{Math.round(overlay.box_opacity * 100)}%</strong>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="glass-input text-xs py-1.5 px-2 rounded-xl flex-1"
+                          value={overlay.box_style}
+                          onChange={(e) => setOverlayValue('box_style', e.target.value as any)}
+                        >
+                          <option value="none">None (Transparent)</option>
+                          <option value="box">Rounded Box</option>
+                          <option value="banner">Full Width Banner</option>
+                        </select>
+                        {overlay.box_style !== 'none' && (
+                          <>
+                            <input
+                              type="color"
+                              value={overlay.box_color}
+                              onChange={(e) => setOverlayValue('box_color', e.target.value)}
+                              className="w-8 h-8 rounded-lg border border-white/10 bg-transparent cursor-pointer shrink-0"
+                            />
+                            <input
+                              type="range"
+                              min="0.2"
+                              max="1.0"
+                              step="0.05"
+                              value={overlay.box_opacity}
+                              onChange={(e) => setOverlayValue('box_opacity', +e.target.value)}
+                              className="w-20 accent-pink-500 cursor-pointer"
+                            />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Apply Overlay Action Button */}
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 text-white text-xs font-bold shadow-xl shadow-pink-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    onClick={() => setOverlayPromptOpen(true)}
+                    disabled={!overlay.text.trim() || isBurning}
+                  >
+                    <Flame className="w-4 h-4" />
+                    <span>Apply & Mount Text Overlay...</span>
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
       </div>
+      )}
+
+      {/* Scope Confirmation Dialog Modal */}
+      {overlayPromptOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="w-full max-w-md rounded-3xl glass-panel p-6 border border-white/15 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-pink-500/15 border border-pink-500/30 flex items-center justify-center text-pink-400">
+                  <Type className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Mount Text Overlay</h3>
+                  <p className="text-[11px] text-slate-400">Choose destination scope</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                onClick={() => setOverlayPromptOpen(false)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Overlay Summary Preview Box */}
+            <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-white/5 space-y-2">
+              <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">
+                Overlay Details
+              </div>
+              <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-center">
+                <span
+                  className="inline-block px-3 py-1 rounded font-black text-xs"
+                  style={{
+                    color: overlay.text_color,
+                    backgroundColor:
+                      overlay.box_style !== 'none'
+                        ? `${overlay.box_color}${Math.round(overlay.box_opacity * 255)
+                            .toString(16)
+                            .padStart(2, '0')}`
+                        : 'transparent',
+                    textTransform: overlay.text_transform === 'uppercase' ? 'uppercase' : 'none',
+                  }}
+                >
+                  {overlay.text}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300 pt-1 font-mono">
+                <div>
+                  <span className="text-slate-500">Duration: </span>
+                  {overlay.apply_to_whole ? 'Whole Video' : `${overlay.start_time}s - ${overlay.end_time}s`}
+                </div>
+                <div>
+                  <span className="text-slate-500">Position: </span>
+                  {overlay.position_y_pct}% Y ({overlay.alignment})
+                </div>
+              </div>
+            </div>
+
+            {/* Destination Scope Radios */}
+            <div className="space-y-2.5">
+              <label className="text-xs text-slate-300 font-bold block">Apply to:</label>
+
+              <label
+                className={`p-3.5 rounded-2xl border flex items-center gap-3 cursor-pointer transition-all ${
+                  overlayScope === 'current'
+                    ? 'bg-indigo-600/15 border-indigo-500/50 text-white'
+                    : 'bg-white/5 border-white/10 text-slate-300 hover:border-white/20'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="overlayScope"
+                  value="current"
+                  checked={overlayScope === 'current'}
+                  onChange={() => setOverlayScope('current')}
+                  className="accent-indigo-500 w-4 h-4"
+                />
+                <div className="flex-1 text-xs">
+                  <div className="font-bold text-white">Current Video Only</div>
+                  <div className="text-[11px] text-slate-400 truncate">{clipName}</div>
+                </div>
+              </label>
+
+              <label
+                className={`p-3.5 rounded-2xl border flex items-center gap-3 cursor-pointer transition-all ${
+                  overlayScope === 'folder'
+                    ? 'bg-purple-600/15 border-purple-500/50 text-white'
+                    : 'bg-white/5 border-white/10 text-slate-300 hover:border-white/20'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="overlayScope"
+                  value="folder"
+                  checked={overlayScope === 'folder'}
+                  onChange={() => setOverlayScope('folder')}
+                  className="accent-purple-500 w-4 h-4"
+                />
+                <div className="flex-1 text-xs">
+                  <div className="font-bold text-white flex items-center gap-1.5">
+                    <FolderOpen className="w-3.5 h-3.5 text-purple-400" />
+                    <span>All Videos Inside this Folder</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Mounts this text overlay across all video clips in the folder
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300 transition-all cursor-pointer"
+                onClick={() => setOverlayPromptOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 text-xs font-bold text-white shadow-lg shadow-pink-500/25 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                onClick={() => burnTextOverlay(overlayScope)}
+              >
+                <Flame className="w-4 h-4" />
+                <span>Confirm & Mount</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Burn Progress Full-Screen Overlay */}
       {isBurning && (
@@ -580,7 +1187,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
             <Flame className="w-8 h-8" />
           </div>
           <h3 className="text-base font-bold text-white mb-1">
-            Burning Subtitles into 9:16 Video
+            Burning Subtitles & Text Overlay into 9:16 Video
           </h3>
           <p className="text-xs text-slate-400 max-w-sm mb-5">{burnStageMsg}</p>
           <div className="w-72 h-2.5 rounded-full bg-slate-800 overflow-hidden p-0.5 border border-white/10">
@@ -594,4 +1201,3 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
     </div>
   );
 };
-

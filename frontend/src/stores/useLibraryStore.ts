@@ -57,8 +57,38 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         apiClient.getDownloads().catch(() => ({ downloads: [] })),
       ]);
 
-      const clips = clipsRes.clips || [];
-      const downloads = downloadsRes.downloads || [];
+      const clips: ClipItem[] = (clipsRes.clips || []).map((c: any) => {
+        const rawName = c.name || c.filename || '';
+        const partMatch = c.part_label
+          ? null
+          : rawName.match(/(?:part[_-]?|_|\s)(\d+)(?:\.mp4)?$/i);
+        const partNumber = c.part_number || (partMatch ? parseInt(partMatch[1], 10) : undefined);
+        const partLabel = c.part_label || (partNumber ? `Part ${partNumber}` : undefined);
+
+        return {
+          ...c,
+          id: c.id || rawName,
+          name: rawName,
+          filename: c.filename || rawName,
+          thumb_url: c.thumb_url || c.thumbnail_url || '',
+          folder_name: c.folder_name || 'General',
+          folder_title: c.folder_title || c.folder_name || 'General',
+          part_number: partNumber,
+          part_label: partLabel,
+        };
+      });
+
+      const downloads: DownloadItem[] = (downloadsRes.downloads || []).map((d: any) => ({
+        ...d,
+        filename: d.filename || d.name || '',
+        name: d.name || d.filename || '',
+        title: d.title || d.clean_title || d.filename || d.name || 'Untitled Video',
+        clean_title: d.clean_title || d.title || d.filename || d.name || 'Untitled Video',
+        thumb_url: d.thumb_url || d.thumbnail || '',
+        thumbnail: d.thumbnail || d.thumb_url || '',
+        duration: typeof d.duration === 'number' && !isNaN(d.duration) ? d.duration : 0,
+        size_mb: typeof d.size_mb === 'number' && !isNaN(d.size_mb) ? d.size_mb : 0,
+      }));
 
       // Group clips by folder
       const groupMap = new Map<string, FolderGroup>();
@@ -92,7 +122,35 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   loadStorageMetrics: async () => {
     try {
       const metrics = await apiClient.getStorageMetrics();
-      set({ storageMetrics: metrics });
+      if (metrics) {
+        const total_mb =
+          typeof metrics.total_mb === 'number'
+            ? metrics.total_mb
+            : typeof (metrics as any).total_storage_mb === 'number'
+            ? (metrics as any).total_storage_mb
+            : 0;
+        const downloads_mb =
+          typeof metrics.downloads_mb === 'number'
+            ? metrics.downloads_mb
+            : typeof (metrics as any).total_downloads_mb === 'number'
+            ? (metrics as any).total_downloads_mb
+            : 0;
+        const clips_mb =
+          typeof metrics.clips_mb === 'number'
+            ? metrics.clips_mb
+            : typeof (metrics as any).total_clips_mb === 'number'
+            ? (metrics as any).total_clips_mb
+            : 0;
+        set({
+          storageMetrics: {
+            ...metrics,
+            total_mb,
+            downloads_mb,
+            clips_mb,
+            free_disk_gb: metrics.free_disk_gb ?? 0,
+          },
+        });
+      }
     } catch {
       // ignore
     }

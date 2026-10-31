@@ -181,7 +181,7 @@ job_cancel_events: dict[str, threading.Event] = {}
 
 class ClipRequest(BaseModel):
     url: str = ""
-    title: str = "My Video"
+    title: str = ""
     video_title: str | None = None
     source_title: str | None = None
     source_file: str | None = None
@@ -205,8 +205,8 @@ class ClipRequest(BaseModel):
     output_path: str | None = None
 
     aspect_ratio: str = "9:16"
-    show_title: bool = True
-    show_parts: bool = True
+    show_title: bool = False
+    show_parts: bool = False
     keep_source: bool = True
 
     title_y: int = 180
@@ -911,9 +911,18 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
 
                 downloaded_by_job = True
 
-        # For AI viral clips: refine output_folder using the resolved source video title
-        if is_ai_viral and not (request.output_path and request.output_path.strip()):
-            refined_folder_name = resolve_ai_viral_folder_name(request, source_path=source_path)
+        # Refine output_folder using the resolved source video title for ALL jobs (both sequential & AI viral)
+        if not (request.output_path and request.output_path.strip()):
+            if is_ai_viral:
+                refined_folder_name = resolve_ai_viral_folder_name(request, source_path=source_path)
+            else:
+                raw_t = request.video_title or request.source_title
+                if not raw_t and request.title and request.title.lower() not in ("my video", "untitled", "clip", "video"):
+                    raw_t = request.title
+                if not raw_t and source_path:
+                    raw_t = clean_source_video_title(source_path.stem)
+                refined_folder_name = safe_name(raw_t or "Video")
+
             refined_folder = CLIPS_DIR / safe_name(request.clips_folder) / safe_name(refined_folder_name)
             if refined_folder != output_folder:
                 try:
@@ -1029,7 +1038,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     end - clip_start,
                 )
                 raw_title = (request.title or "").strip()
-            # Support {part} placeholder in title (e.g. "My Video part - {part}")
+                if not raw_title or raw_title.lower() in ("my video", "untitled", "clip", "video"):
+                    raw_title = clean_source_video_title(
+                        request.video_title or request.source_title or (source_path.stem if source_path else "") or "clip"
+                    )
+            # Support {part} placeholder in title (if user provided one)
             has_part_in_title = bool(re.search(r"\{part\}", raw_title, re.IGNORECASE))
             if has_part_in_title:
                 formatted_title = re.sub(r"\{part\}", str(index + 1), raw_title, flags=re.IGNORECASE)
@@ -1055,7 +1068,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             if current_moment:
                 filename = f"{safe_stem}_viral_{index + 1}.mp4"
             else:
-                filename = f"{safe_stem}_part_{index + 1}.mp4"
+                filename = f"{safe_stem}_{index + 1}.mp4"
             output_path = output_folder / filename
 
             # Calculate dynamic vertical positions & styles
@@ -1460,6 +1473,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         get_groq_api_key,
                         convert_cues_to_hinglish,
                         has_devanagari_characters,
+                        clean_hallucinated_text,
                     )
                     cues = []
 
@@ -1470,7 +1484,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             clip_tr = transcribe_video_with_groq(output_path, video_id=output_path.stem)
                             if clip_tr and clip_tr.get("segments"):
                                 cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=3)
-                                if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(clip_tr.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+                                raw_l = str(clip_tr.get("language", "")).lower()
+                                if any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_l in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa"):
                                     cues = convert_cues_to_hinglish(cues)
                         except Exception as c_err:
                             logger.warning("Direct clip auto-transcribe failed (%s), falling back to parent slice", c_err)
@@ -1514,7 +1529,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                                 cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
 
                             # Automatically convert Hindi speech to Hinglish by default
-                            if cues and (any(has_devanagari_characters(c.get("text", "")) for c in cues) or (parent_tr and str(parent_tr.get("language", "")).lower() in ("hi", "hindi", "urdu"))):
+                            raw_pl = str(parent_tr.get("language", "")).lower() if parent_tr else ""
+                            if cues and (any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_pl in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa")):
                                 try:
                                     cues = convert_cues_to_hinglish(cues)
                                 except Exception as h_err:
@@ -1544,7 +1560,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         tmp_sub_file.replace(sub_file)
 
                         clip_meta["has_subtitles"] = True
-                        clip_meta["caption"] = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
+                        raw_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
+                        clip_meta["caption"] = clean_hallucinated_text(raw_caption)
 
                         # Optional: Auto-burn animated subtitles directly into reel if requested
                         if getattr(request, "burn_subtitles", False):
@@ -2111,11 +2128,11 @@ def list_available_clips():
                 duration_str = f"{mins}:{secs:02d}"
 
                 stem = file.stem
-                part_match = re.search(r"part_(\d+)", stem, re.IGNORECASE)
+                part_match = re.search(r"part_(\d+)", stem, re.IGNORECASE) or re.search(r"_(\d+)$", stem) or re.search(r"\s+(\d+)$", stem)
                 part_num = int(part_match.group(1)) if part_match else 1
                 part_label = f"Part {part_num}" if part_match else ""
 
-                clean_title = f"{folder_name}_part_{part_num} - Part {part_num}" if (part_match and folder_name != "General") else stem
+                clean_title = f"{folder_name} - Part {part_num}" if (part_match and folder_name != "General") else stem
                 meta_caption = (meta_data.get("caption") or meta_data.get("description") or "").strip()
                 default_caption = f"Best Highlights of {folder_name} | part - {part_num} #viral #reels #shorts #trending" if folder_name != "General" else f"{stem} #viral #reels #shorts"
                 caption = meta_caption if meta_caption else default_caption
@@ -2133,13 +2150,18 @@ def list_available_clips():
                 thumb_url = f"/media/clip-thumbs/{encoded_rel}"
 
                 clip_data = {
+                    "id": file.name,
                     "name": file.name,
+                    "filename": file.name,
                     "relative_path": rel_path,
                     "folder_name": folder_name,
                     "folder_path": folder_rel,
+                    "folder_title": folder_name,
                     "url": url,
                     "thumbnail_url": thumb_url,
+                    "thumb_url": thumb_url,
                     "clean_title": clean_title,
+                    "title": clean_title,
                     "description": caption,
                     "part_number": part_num,
                     "part_label": part_label,
@@ -2267,6 +2289,24 @@ def get_download_file_info(filename: str):
     }
 
 
+_video_duration_cache: dict[tuple[str, float, int], float] = {}
+
+def get_video_duration_cached(path: Path) -> float:
+    """Probe and cache video duration using ffprobe."""
+    try:
+        stat = path.stat()
+        cache_key = (str(path.resolve()), stat.st_mtime, stat.st_size)
+        if cache_key in _video_duration_cache:
+            return _video_duration_cache[cache_key]
+        dur = probe_duration(path)
+        if dur and dur > 0:
+            _video_duration_cache[cache_key] = dur
+            return dur
+    except Exception:
+        pass
+    return 0.0
+
+
 def _scan_directory_files(directory: Path, allowed_extensions: set[str] | None = None):
     files = []
     total_bytes = 0
@@ -2283,16 +2323,37 @@ def _scan_directory_files(directory: Path, allowed_extensions: set[str] | None =
                     vid_match = re.search(r"\[([a-zA-Z0-9_-]{11})\]", path.stem)
                     video_id = vid_match.group(1) if vid_match else None
                     clean_title = re.sub(r"\s*\[[a-zA-Z0-9_-]{11}\]", "", path.stem).replace("_", " ").strip()
+                    display_title = clean_title or path.stem
+
+                    duration = 0.0
+                    duration_formatted = ""
+                    if path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}:
+                        duration = get_video_duration_cached(path)
+                        if duration > 0:
+                            mins = int(duration // 60)
+                            secs = int(duration % 60)
+                            hours = mins // 60
+                            mins = mins % 60
+                            duration_formatted = f"{hours}:{mins:02d}:{secs:02d}" if hours > 0 else f"{mins:02d}:{secs:02d}"
+
+                    thumb = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if video_id else None
+
                     files.append({
                         "name": path.name,
+                        "filename": path.name,
+                        "title": display_title,
+                        "clean_title": display_title,
                         "relative_path": rel,
                         "size_mb": round(size_bytes / (1024 * 1024), 2),
                         "size_bytes": size_bytes,
+                        "duration": round(duration, 2),
+                        "duration_formatted": duration_formatted,
                         "modified": stat.st_mtime,
                         "video_id": video_id,
-                        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if video_id else None,
-                        "clean_title": clean_title or path.stem,
+                        "thumbnail": thumb,
+                        "thumb_url": thumb,
                         "youtube_url": f"https://www.youtube.com/watch?v={video_id}" if video_id else None,
+                        "url": f"/media/downloads/{urllib.parse.quote(path.name)}",
                     })
                 except Exception:
                     pass
@@ -2302,19 +2363,39 @@ def _scan_directory_files(directory: Path, allowed_extensions: set[str] | None =
 @app.get("/api/media/storage")
 def get_media_storage():
     """Return storage metrics and list of all downloaded videos and generated clips."""
-    downloads, dl_bytes = _scan_directory_files(DOWNLOAD_DIR)
+    downloads, dl_bytes = _scan_directory_files(DOWNLOAD_DIR, allowed_extensions={".mp4", ".mkv", ".webm"})
     clips, clip_bytes = _scan_directory_files(CLIPS_DIR, allowed_extensions={".mp4", ".mkv", ".webm"})
     for d in downloads:
         d["url"] = f"/media/downloads/{urllib.parse.quote(d['name'])}"
+        d["filename"] = d["name"]
+        d["title"] = d.get("clean_title") or d["name"]
+        d["thumb_url"] = d.get("thumbnail")
     for c in clips:
         c["url"] = f"/media/clips/{urllib.parse.quote(c['name'])}"
+        c["filename"] = c["name"]
+        c["title"] = c.get("clean_title") or c["name"]
+        c["thumb_url"] = c.get("thumbnail")
+
+    total_dl_mb = round(dl_bytes / (1024 * 1024), 2)
+    total_cl_mb = round(clip_bytes / (1024 * 1024), 2)
+    total_all_mb = round((dl_bytes + clip_bytes) / (1024 * 1024), 2)
+    free_gb = 0.0
+    try:
+        import shutil
+        free_gb = round(shutil.disk_usage(DOWNLOAD_DIR).free / (1024 ** 3), 2)
+    except Exception:
+        pass
 
     return {
         "downloads": downloads,
         "clips": clips,
-        "total_downloads_mb": round(dl_bytes / (1024 * 1024), 2),
-        "total_clips_mb": round(clip_bytes / (1024 * 1024), 2),
-        "total_storage_mb": round((dl_bytes + clip_bytes) / (1024 * 1024), 2),
+        "total_mb": total_all_mb,
+        "total_storage_mb": total_all_mb,
+        "downloads_mb": total_dl_mb,
+        "total_downloads_mb": total_dl_mb,
+        "clips_mb": total_cl_mb,
+        "total_clips_mb": total_cl_mb,
+        "free_disk_gb": free_gb,
     }
 
 

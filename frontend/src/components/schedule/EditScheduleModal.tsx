@@ -176,7 +176,9 @@ export const EditScheduleModal: React.FC = () => {
                       <Check className="w-3 h-3 stroke-[3]" />
                     </div>
                     <div className="truncate flex-1 min-w-0">
-                      <div className="text-xs font-bold truncate text-white">{acc.name}</div>
+                      <div className="text-xs font-bold truncate text-white">
+                        {acc.alias || acc.name || acc.channel_title || acc.page_name || 'Channel'}
+                      </div>
                       <div className="text-[10px] text-slate-400 capitalize">{acc.platform}</div>
                     </div>
                   </div>

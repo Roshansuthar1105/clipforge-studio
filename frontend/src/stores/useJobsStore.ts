@@ -17,6 +17,7 @@ interface JobsState {
   loadPublishHistory: () => Promise<void>;
   startJobPolling: (jobId: string) => void;
   stopJobPolling: () => void;
+  dismissActiveJob: () => void;
   cancelActiveJob: (jobId?: string) => Promise<boolean>;
   deleteJob: (jobId: string) => Promise<void>;
   clearCompletedJobs: () => Promise<void>;
@@ -100,6 +101,12 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       pollInterval = null;
     }
     set({ isPolling: false });
+  },
+
+  dismissActiveJob: () => {
+    get().stopJobPolling();
+    get().setActiveJobId(null);
+    set({ activeJob: null });
   },
 
   cancelActiveJob: async (jobId) => {

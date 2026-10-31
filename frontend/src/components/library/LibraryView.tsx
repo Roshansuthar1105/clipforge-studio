@@ -81,11 +81,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     }))
     .filter((g) => g.clips.length > 0 || !searchQuery);
 
-  const filteredDownloads = downloads.filter((d) =>
-    searchQuery
-      ? (d.title || d.filename).toLowerCase().includes(searchQuery.toLowerCase())
-      : true
-  );
+  const filteredDownloads = downloads.filter((d) => {
+    const title = d.title || d.clean_title || d.filename || d.name || '';
+    return searchQuery ? title.toLowerCase().includes(searchQuery.toLowerCase()) : true;
+  });
 
   return (
     <div className="space-y-6 animate-in fade-in pb-12">
@@ -130,13 +129,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div className="flex flex-wrap items-center gap-3">
           {/* Search Box */}
           <div className="relative flex-1 sm:w-64">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none z-10" />
             <input
               type="text"
               placeholder="Search reels or titles..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="glass-input pl-10 pr-4 py-2 text-xs w-full"
+              className="glass-input !pl-10 !pr-4 !py-2 text-xs w-full"
             />
           </div>
 
@@ -145,7 +144,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <div className="flex items-center gap-2">
               <HardDrive className="w-4 h-4 text-indigo-400" />
               <span>
-                Disk: <strong className="font-mono text-white">{storageMetrics ? `${storageMetrics.total_mb} MB` : '0 MB'}</strong>
+                Disk:{' '}
+                <strong className="font-mono text-white">
+                  {typeof storageMetrics?.total_mb === 'number'
+                    ? `${storageMetrics.total_mb} MB`
+                    : typeof (storageMetrics as any)?.total_storage_mb === 'number'
+                    ? `${(storageMetrics as any).total_storage_mb} MB`
+                    : '0 MB'}
+                </strong>
               </span>
             </div>
             <div className="h-4 w-px bg-white/10" />
@@ -263,7 +269,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         ) : (
                           <FolderOpen className="w-5 h-5 text-indigo-400" />
                         )}
-                        <h3 className="text-sm font-bold text-white truncate max-w-md">
+                        <h3 className="text-sm font-bold text-white break-words max-w-xl" title={group.folderTitle}>
                           {group.folderTitle}
                         </h3>
                         <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-mono">
@@ -368,6 +374,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                                   {clip.size_mb} MB
                                 </div>
 
+                                {/* Part Badge (Bottom-Left) */}
+                                {clip.part_label && (
+                                  <div className="absolute bottom-2.5 left-2.5 z-10 px-2.5 py-0.5 rounded-lg bg-indigo-600/90 backdrop-blur-md border border-indigo-400/40 text-[10px] font-black text-white pointer-events-none shadow-lg shadow-indigo-600/30 uppercase tracking-wider">
+                                    {clip.part_label}
+                                  </div>
+                                )}
+
                                 {/* Hover Play Overlay */}
                                 <div
                                   className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer backdrop-blur-[2px]"
@@ -382,7 +395,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                               {/* Card Body */}
                               <div className="p-3 flex flex-col justify-between flex-1 gap-2.5">
                                 <h4
-                                  className="text-xs font-bold text-white truncate group-hover:text-indigo-300 transition-colors"
+                                  className="text-xs font-semibold text-white break-words leading-relaxed group-hover:text-indigo-300 transition-colors select-text"
                                   title={clip.name}
                                 >
                                   {clip.name}
@@ -454,58 +467,76 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </p>
             </div>
           ) : (
-            filteredDownloads.map((item) => (
-              <div
-                key={item.filename}
-                className="glass-panel p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 transition-all hover:border-indigo-500/30"
-              >
-                <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
-                    <Film className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-white">{item.title || item.filename}</h4>
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400 font-mono">
-                      <span className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
-                        {item.size_mb} MB
-                      </span>
-                      <span>•</span>
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3.5 h-3.5 text-slate-500" />
-                        {Math.round(item.duration)} seconds
-                      </span>
+            filteredDownloads.map((item) => {
+              const filename = item.filename || item.name || '';
+              const title = item.title || item.clean_title || filename || 'Untitled Video';
+              const durationSec = typeof item.duration === 'number' && !isNaN(item.duration) ? Math.round(item.duration) : 0;
+              const durationFormatted =
+                item.duration_formatted ||
+                (durationSec > 0
+                  ? durationSec >= 60
+                    ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`
+                    : `${durationSec}s`
+                  : null);
+              const downloadUrl = item.url || `/media/downloads/${encodeURIComponent(filename)}`;
+
+              return (
+                <div
+                  key={filename}
+                  className="glass-panel p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 transition-all hover:border-indigo-500/30"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                      <Film className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white break-words">{title}</h4>
+                      <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400 font-mono">
+                        <span className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
+                          {typeof item.size_mb === 'number' ? item.size_mb : 0} MB
+                        </span>
+                        {durationFormatted && (
+                          <>
+                            <span>•</span>
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-slate-500" />
+                              {durationFormatted}
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
+
+                  <div className="flex items-center gap-2.5 self-end md:self-center">
+                    <button
+                      type="button"
+                      className="px-3.5 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                      onClick={() => onOpenViralModal(filename)}
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-purple-400" /> Detect Viral Moments
+                    </button>
+
+                    <button
+                      type="button"
+                      className="px-3.5 py-2 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-indigo-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                      onClick={() => onSliceInStudio(downloadUrl)}
+                    >
+                      <Scissors className="w-3.5 h-3.5 text-indigo-400" /> Slice in Studio
+                    </button>
+
+                    <button
+                      type="button"
+                      className="p-2 rounded-xl bg-white/5 hover:bg-rose-500/15 border border-white/10 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
+                      onClick={() => deleteDownload(filename)}
+                      title="Delete source video"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-
-                <div className="flex items-center gap-2.5 self-end md:self-center">
-                  <button
-                    type="button"
-                    className="px-3.5 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                    onClick={() => onOpenViralModal(item.filename)}
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-purple-400" /> Detect Viral Moments
-                  </button>
-
-                  <button
-                    type="button"
-                    className="px-3.5 py-2 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-indigo-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                    onClick={() => onSliceInStudio(item.url)}
-                  >
-                    <Scissors className="w-3.5 h-3.5 text-indigo-400" /> Slice in Studio
-                  </button>
-
-                  <button
-                    type="button"
-                    className="p-2 rounded-xl bg-white/5 hover:bg-rose-500/15 border border-white/10 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
-                    onClick={() => deleteDownload(item.filename)}
-                    title="Delete source video"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

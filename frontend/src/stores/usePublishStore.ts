@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { apiClient, showToast } from '../api/client';
+import { useAccountsStore } from './useAccountsStore';
 
 export interface PublishItem {
   name: string;
@@ -96,15 +97,26 @@ export const usePublishStore = create<PublishState>((set, get) => ({
 
     set({ isPublishing: true });
     try {
+      const accounts = useAccountsStore.getState().accounts;
+      const targets = Array.from(selectedAccountIds).map((accId) => {
+        const acc = accounts.find((a) => a.id === accId);
+        return {
+          account_id: accId,
+          platform: acc?.platform || 'youtube',
+        };
+      });
+
       if (clips.length === 1) {
         // Single clip publish
         const clip = clips[0];
         const res = await apiClient.publishSingle({
+          clip_path: clip.url || clip.name,
           clip_name: clip.name,
           clip_url: clip.url,
           title,
           caption,
           target_account_ids: Array.from(selectedAccountIds),
+          targets,
         });
 
         showToast('Publishing initiated!', 'success');
@@ -134,10 +146,12 @@ export const usePublishStore = create<PublishState>((set, get) => ({
       } else {
         // Batch sequential publish
         const res = await apiClient.publishBatch({
+          clip_paths: clips.map((c) => c.url || c.name),
           clips: clips.map((c) => ({ clip_name: c.name, clip_url: c.url })),
           title,
           caption,
           target_account_ids: Array.from(selectedAccountIds),
+          targets,
         });
 
         set({ activeBatchId: res.batch_id });
