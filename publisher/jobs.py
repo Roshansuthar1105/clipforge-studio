@@ -367,10 +367,6 @@ def start_publish_job(request: PublishRequest) -> dict:
         "targets": targets_status,
         "all_done": False,
     }
-        "started_at": now,
-        "targets": targets_status,
-        "all_done": False,
-    }
 
     with _jobs_lock:
         _publish_jobs[job_id] = job_entry
