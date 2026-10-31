@@ -167,7 +167,7 @@ export const EditScheduleModal: React.FC = () => {
                     onClick={() => toggleAccount(acc.id)}
                   >
                     <div
-                      className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all ${
+                      className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all shrink-0 ${
                         isSelected
                           ? 'bg-indigo-600 border-indigo-400 text-white'
                           : 'bg-black/40 border-white/20 text-transparent'
@@ -175,6 +175,13 @@ export const EditScheduleModal: React.FC = () => {
                     >
                       <Check className="w-3 h-3 stroke-[3]" />
                     </div>
+                    {acc.avatar_url && (
+                      <img
+                        src={acc.avatar_url}
+                        alt={acc.alias || 'Channel'}
+                        className="w-7 h-7 rounded-lg object-cover border border-white/10 shrink-0"
+                      />
+                    )}
                     <div className="truncate flex-1 min-w-0">
                       <div className="text-xs font-bold truncate text-white">
                         {acc.alias || acc.name || acc.channel_title || acc.page_name || 'Channel'}

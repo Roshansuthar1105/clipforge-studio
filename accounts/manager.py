@@ -158,6 +158,12 @@ def list_accounts_safe(user_id: Optional[str] = None) -> list[dict]:
             safe_list.append(acc.to_safe_dict())
         except Exception:
             safe = dict(raw)
+            alias = safe.get("alias", "")
+            safe["name"] = alias
+            safe["channel_title"] = alias
+            safe["account_name"] = alias
+            safe["page_name"] = alias
+            safe["is_valid"] = True
             safe["access_token"] = "***"
             if safe.get("refresh_token"):
                 safe["refresh_token"] = "***"

@@ -17,6 +17,7 @@ router = APIRouter(prefix="/publish", tags=["Publishing"])
 
 
 @router.post("")
+@router.post("/")
 def publish_clip(request: PublishRequest):
     """
     Start an asynchronous multi-target publishing job for a single clip.
@@ -34,6 +35,7 @@ def publish_clip(request: PublishRequest):
 
 
 @router.post("/batch")
+@router.post("/batch/")
 def publish_batch_clips(request: BatchPublishRequest):
     """
     Start an asynchronous batch publishing job to publish multiple clips across selected targets.
@@ -85,10 +87,11 @@ def skip_batch_failed_part(batch_id: str):
 
 
 @router.get("/history")
+@router.get("/history/")
 def list_history():
     """Retrieve full log of past publish jobs and their target URLs."""
     records = get_publish_history()
-    return {"records": records}
+    return {"records": records, "history": records}
 
 
 @router.delete("/history")
@@ -109,6 +112,7 @@ def delete_history_item(job_id: str):
 
 
 @router.get("/{job_id}/status")
+@router.get("/status/{job_id}")
 def get_job_status(job_id: str):
     """Get live progress and target statuses for a publish job."""
     status = get_publish_job_status(job_id)

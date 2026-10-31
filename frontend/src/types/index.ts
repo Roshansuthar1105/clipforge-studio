@@ -99,16 +99,39 @@ export interface Account {
   created_at?: string;
 }
 
+export interface PublishTargetStatus {
+  account_id: string;
+  account_alias: string;
+  avatar_url?: string | null;
+  platform: 'youtube' | 'instagram' | 'facebook' | string;
+  status: 'queued' | 'uploading' | 'success' | 'failed' | string;
+  progress: number;
+  stage?: string | null;
+  url?: string | null;
+  error?: string | null;
+  finished_at?: string | null;
+}
+
 export interface PublishRecord {
   job_id: string;
+  batch_id?: string;
+  clip_path?: string;
   clip_name: string;
-  clip_url: string;
-  platform: 'youtube' | 'instagram' | 'facebook';
-  target_name: string;
-  status: 'published' | 'failed' | 'in_progress';
+  clip_url?: string;
+  title?: string;
+  caption?: string;
+  privacy?: string;
+  started_at?: string;
+  finished_at?: string;
+  status?: 'published' | 'completed' | 'failed' | 'in_progress' | 'partial' | string;
+  targets?: PublishTargetStatus[];
+  all_done?: boolean;
+  // Flat backward-compatible fields:
+  platform?: 'youtube' | 'instagram' | 'facebook';
+  target_name?: string;
   post_url?: string;
   error_message?: string;
-  published_at: string;
+  published_at?: string;
 }
 
 export interface SubtitleWord {
@@ -177,16 +200,20 @@ export interface ViralMoment {
   };
 }
 
+export interface ScheduledPostTarget {
+  account_id: string;
+  platform: string;
+  account_alias?: string;
+  avatar_url?: string | null;
+  [key: string]: any;
+}
+
 export interface ScheduledPost {
   id: string;
   clip_path: string;
   clip_name: string;
   clip_url?: string;
-  targets: {
-    account_id: string;
-    platform: string;
-    [key: string]: any;
-  }[];
+  targets: ScheduledPostTarget[];
   title?: string;
   caption?: string;
   privacy: string;
@@ -196,6 +223,8 @@ export interface ScheduledPost {
   updated_at: string;
   published_at?: string;
   publish_job_id?: string;
+  published_urls?: string[];
+  targets_result?: PublishTargetStatus[];
   error_message?: string;
   user_id?: string;
 }

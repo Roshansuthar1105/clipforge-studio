@@ -148,6 +148,7 @@ async def on_startup():
 app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(publish_router)
+app.include_router(publish_router, prefix="/api")
 app.include_router(meta_publish_router)
 app.include_router(subtitles_router, prefix="/api/subtitles")
 app.include_router(subtitles_router, prefix="/api")

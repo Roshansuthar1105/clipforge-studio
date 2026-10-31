@@ -17,9 +17,12 @@ import {
   Sparkles,
   ArrowUpRight,
   Filter,
+  Eye,
 } from 'lucide-react';
 import { useJobsStore } from '../../stores/useJobsStore';
 import { useScheduleStore } from '../../stores/useScheduleStore';
+import { PublishDetailsModal } from '../publisher/PublishDetailsModal';
+import type { PublishRecord, ScheduledPost } from '../../types';
 
 export const JobsView: React.FC = () => {
   const {
@@ -49,6 +52,9 @@ export const JobsView: React.FC = () => {
   } = useScheduleStore();
 
   const [activeTab, setActiveTab] = useState<'jobs' | 'scheduled' | 'history'>('jobs');
+  const [selectedHistoryRecord, setSelectedHistoryRecord] = useState<PublishRecord | null>(null);
+  const [selectedScheduledPost, setSelectedScheduledPost] = useState<ScheduledPost | null>(null);
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
 
   useEffect(() => {
     loadJobsList();
@@ -72,7 +78,8 @@ export const JobsView: React.FC = () => {
 
   const filteredHistory = publishHistory.filter((h) => {
     if (activePublishFilter === 'all') return true;
-    return h.platform === activePublishFilter;
+    if (h.platform === activePublishFilter) return true;
+    return h.targets?.some((t) => t.platform === activePublishFilter);
   });
 
   const pendingScheduledCount = scheduledPosts.filter((p) => p.status === 'scheduled').length;
@@ -396,23 +403,63 @@ export const JobsView: React.FC = () => {
                           {post.targets.map((t, idx) => (
                             <span
                               key={idx}
-                              className={`px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase ${
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[10px] font-bold ${
                                 t.platform === 'youtube'
-                                  ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                  ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
                                   : t.platform === 'instagram'
-                                  ? 'bg-pink-500/15 text-pink-400 border border-pink-500/30'
-                                  : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                                  ? 'bg-pink-500/15 text-pink-300 border border-pink-500/30'
+                                  : 'bg-blue-500/15 text-blue-300 border border-blue-500/30'
                               }`}
                             >
-                              {t.platform}
+                              {t.avatar_url && (
+                                <img src={t.avatar_url} alt="" className="w-3.5 h-3.5 rounded-full object-cover" />
+                              )}
+                              <span>{t.account_alias || t.platform}</span>
                             </span>
                           ))}
                         </div>
+
+                        {/* Error message callout if failed */}
+                        {post.error_message && (
+                          <div className="mt-2 text-xs text-rose-300 bg-rose-950/40 p-2 rounded-xl border border-rose-500/20 font-mono">
+                            {post.error_message}
+                          </div>
+                        )}
+
+                        {/* Published URLs if completed */}
+                        {post.published_urls && post.published_urls.length > 0 && (
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            {post.published_urls.map((url, uidx) => (
+                              <a
+                                key={uidx}
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-xs font-bold transition-all flex items-center gap-1"
+                              >
+                                <ExternalLink className="w-3 h-3" /> View Post
+                              </a>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     {/* Actions */}
                     <div className="flex items-center gap-2.5 self-end lg:self-center shrink-0">
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-300 hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
+                        onClick={() => {
+                          setSelectedScheduledPost(post);
+                          setSelectedHistoryRecord(null);
+                          setIsDetailsModalOpen(true);
+                        }}
+                        title="View complete upload & scheduling details"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-indigo-400" /> Details
+                      </button>
+
                       {isPending && (
                         <>
                           <button
@@ -484,63 +531,161 @@ export const JobsView: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredHistory.map((rec, i) => (
-                <div
-                  key={i}
-                  className="glass-panel p-4 flex items-center justify-between gap-4 transition-all hover:border-indigo-500/30"
-                >
-                  <div className="flex items-center gap-3.5">
-                    <span
-                      className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                        rec.platform === 'youtube'
-                          ? 'bg-rose-500/15 border border-rose-500/30 text-rose-400'
-                          : rec.platform === 'instagram'
-                          ? 'bg-pink-500/15 border border-pink-500/30 text-pink-400'
-                          : 'bg-blue-500/15 border border-blue-500/30 text-blue-400'
-                      }`}
-                    >
-                      {rec.platform === 'youtube' ? 'YT' : rec.platform === 'instagram' ? 'IG' : 'FB'}
-                    </span>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-sm text-white">{rec.clip_name}</span>
-                        <span className="text-xs text-slate-400">➔ {rec.target_name}</span>
+              {filteredHistory.map((rec, i) => {
+                const targets = rec.targets && rec.targets.length > 0 ? rec.targets : [];
+                const anySuccess = targets.some((t) => t.status === 'success' || t.url);
+                const allSuccess = targets.length > 0 && targets.every((t) => t.status === 'success');
+                const allFailed = targets.length > 0 && targets.every((t) => t.status === 'failed');
+                const overallStatus =
+                  rec.status ||
+                  (allSuccess ? 'completed' : allFailed ? 'failed' : anySuccess ? 'partial' : 'completed');
+
+                return (
+                  <div
+                    key={rec.job_id || i}
+                    className="glass-panel p-5 space-y-3.5 transition-all hover:border-indigo-500/30"
+                  >
+                    {/* Top Row: Title, Job ID, Status, Timestamp & Action Buttons */}
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-white/5 pb-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <h4 className="font-bold text-sm text-white truncate max-w-md">
+                            {rec.title || rec.clip_name}
+                          </h4>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                              overallStatus === 'completed' || overallStatus === 'published'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : overallStatus === 'failed'
+                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            }`}
+                          >
+                            {overallStatus}
+                          </span>
+                          {rec.job_id && (
+                            <span className="font-mono text-[10px] text-slate-500">
+                              #{rec.job_id.slice(0, 8)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2">
+                          <span className="font-mono text-slate-500 truncate max-w-xs">{rec.clip_name}</span>
+                          <span>•</span>
+                          <span>
+                            {rec.published_at ? new Date(rec.published_at).toLocaleString() : 'Recently'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
-                        {rec.published_at ? new Date(rec.published_at).toLocaleString() : 'Just now'}
+
+                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                        <button
+                          type="button"
+                          className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-300 hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
+                          onClick={() => {
+                            setSelectedHistoryRecord(rec);
+                            setSelectedScheduledPost(null);
+                            setIsDetailsModalOpen(true);
+                          }}
+                          title="View complete upload report and parameters"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-indigo-400" /> Details
+                        </button>
+
+                        <button
+                          type="button"
+                          className="p-1.5 rounded-xl bg-white/5 hover:bg-rose-500/15 border border-white/10 hover:border-rose-500/30 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
+                          onClick={() => deletePublishRecord(rec.job_id)}
+                          title="Delete from history"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Channels & Targets List */}
+                    <div className="space-y-2">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                        Destinations & Published Links ({targets.length})
+                      </span>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {targets.map((tgt, tidx) => {
+                          const isTargetSuccess = tgt.status === 'success';
+                          const isTargetFailed = tgt.status === 'failed';
+
+                          return (
+                            <div
+                              key={tidx}
+                              className="p-2.5 rounded-xl border border-white/5 bg-slate-900/60 flex flex-col gap-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase shrink-0 ${
+                                      tgt.platform === 'youtube'
+                                        ? 'bg-rose-500/20 text-rose-400'
+                                        : tgt.platform === 'instagram'
+                                        ? 'bg-pink-500/20 text-pink-400'
+                                        : 'bg-blue-500/20 text-blue-400'
+                                    }`}
+                                  >
+                                    {tgt.platform}
+                                  </span>
+                                  <span className="text-xs font-semibold text-white truncate">
+                                    {tgt.account_alias || tgt.platform}
+                                  </span>
+                                </div>
+
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
+                                    isTargetSuccess
+                                      ? 'bg-emerald-500/20 text-emerald-300'
+                                      : isTargetFailed
+                                      ? 'bg-rose-500/20 text-rose-300'
+                                      : 'bg-indigo-500/20 text-indigo-300'
+                                  }`}
+                                >
+                                  {tgt.status}
+                                </span>
+                              </div>
+
+                              {tgt.error && (
+                                <p className="text-[10px] text-rose-300 font-mono line-clamp-2 bg-rose-950/30 p-1.5 rounded">
+                                  {tgt.error}
+                                </p>
+                              )}
+
+                              {tgt.url && (
+                                <a
+                                  href={tgt.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 pt-0.5 transition-colors self-start"
+                                >
+                                  <ExternalLink className="w-3 h-3" /> View Post
+                                </a>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-3">
-                    {rec.post_url ? (
-                      <a
-                        href={rec.post_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-3 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-xs font-bold text-indigo-300 transition-all flex items-center gap-1.5"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" /> View Post
-                      </a>
-                    ) : (
-                      <span className="text-xs text-slate-500 italic">Direct link pending</span>
-                    )}
-
-                    <button
-                      type="button"
-                      className="p-2 rounded-xl bg-white/5 hover:bg-rose-500/15 border border-white/10 hover:border-rose-500/30 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
-                      onClick={() => deletePublishRecord(rec.job_id)}
-                      title="Delete record"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       )}
+
+      {/* Upload Details Inspector Modal */}
+      <PublishDetailsModal
+        isOpen={isDetailsModalOpen}
+        onClose={() => setIsDetailsModalOpen(false)}
+        record={selectedHistoryRecord}
+        scheduledPost={selectedScheduledPost}
+      />
     </div>
   );
 };

@@ -21,6 +21,11 @@ class Account(BaseModel):
     def to_safe_dict(self) -> dict:
         """Return account dict with tokens redacted (for safe client responses)."""
         d = self.model_dump()
+        d["name"] = self.alias
+        d["channel_title"] = self.alias
+        d["account_name"] = self.alias
+        d["page_name"] = self.alias
+        d["is_valid"] = True
         d["access_token"]  = "***"
         d["refresh_token"] = "***" if d.get("refresh_token") else None
         return d

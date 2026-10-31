@@ -44,6 +44,15 @@ def resolve_clip_file(clip_path_str: str) -> Path:
     # Try searching within data/clips
     clips_dir = project_root / "data" / "clips"
     clean_sub = unquoted.replace("\\", "/").strip("/")
+    if clean_sub.startswith("media/clips/"):
+        rel = clean_sub[len("media/clips/"):]
+        if (clips_dir / rel).is_file():
+            return (clips_dir / rel).resolve()
+    if clean_sub.startswith("clips/"):
+        rel = clean_sub[len("clips/"):]
+        if (clips_dir / rel).is_file():
+            return (clips_dir / rel).resolve()
+
     if (clips_dir / clean_sub).is_file():
         return (clips_dir / clean_sub).resolve()
     if clips_dir.exists():
@@ -82,9 +91,12 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
             continue
 
         alias = account.get("alias", target.platform)
+        avatar_url = account.get("avatar_url")
         with _jobs_lock:
             job["targets"][i]["account_alias"] = alias
+            job["targets"][i]["avatar_url"] = avatar_url
             job["targets"][i]["status"] = "uploading"
+            job["targets"][i]["stage"] = f"Connecting to {alias}..."
             job["targets"][i]["progress"] = 5
 
         # Execute upload for this target
@@ -94,6 +106,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
             def yt_progress(pct: int):
                 with _jobs_lock:
                     job["targets"][i]["progress"] = pct
+                    job["targets"][i]["stage"] = f"Uploading to YouTube... ({pct}%)"
 
             yt_cfg = target.youtube_config
             video_title = (
@@ -121,12 +134,14 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                 )
                 with _jobs_lock:
                     job["targets"][i]["status"] = "success"
+                    job["targets"][i]["stage"] = "Published to YouTube Shorts!"
                     job["targets"][i]["progress"] = 100
                     job["targets"][i]["url"] = res.get("shorts_url") or res.get("url")
                     job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             except Exception as exc:
                 with _jobs_lock:
                     job["targets"][i]["status"] = "failed"
+                    job["targets"][i]["stage"] = f"Upload failed: {exc}"
                     job["targets"][i]["progress"] = 0
                     job["targets"][i]["error"] = str(exc)
                     job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -260,6 +275,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                 if res.status.value == "published":
                     with _jobs_lock:
                         job["targets"][i]["status"] = "success"
+                        job["targets"][i]["stage"] = "Published to Facebook Reel!" if as_reel else "Published to Facebook Video!"
                         job["targets"][i]["progress"] = 100
                         vid = res.media_id
                         permalink = res.details.get("permalink_url") if res.details else None
@@ -276,6 +292,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
             except Exception as exc:
                 with _jobs_lock:
                     job["targets"][i]["status"] = "failed"
+                    job["targets"][i]["stage"] = f"Upload failed: {exc}"
                     job["targets"][i]["progress"] = 0
                     job["targets"][i]["error"] = str(exc)
                     job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -283,11 +300,27 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
         else:
             with _jobs_lock:
                 job["targets"][i]["status"] = "failed"
+                job["targets"][i]["stage"] = f"Unsupported platform: {platform}"
                 job["targets"][i]["error"] = f"Unsupported platform: {platform}"
                 job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     with _jobs_lock:
         job["all_done"] = True
+        all_success = all(t.get("status") == "success" for t in job.get("targets", []))
+        any_success = any(t.get("status") == "success" for t in job.get("targets", []))
+        all_failed = all(t.get("status") == "failed" for t in job.get("targets", []))
+
+        if all_success:
+            job["status"] = "completed"
+        elif all_failed:
+            job["status"] = "failed"
+            job["error"] = job["targets"][0].get("error") if job["targets"] else "Upload failed"
+        elif any_success:
+            job["status"] = "partial"
+        else:
+            job["status"] = "completed"
+
+        job["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         job_copy = dict(job)
 
     # Persist the finished run to data/publish_history.json
@@ -308,11 +341,14 @@ def start_publish_job(request: PublishRequest) -> dict:
     for t in request.targets:
         acc = find_account(t.account_id)
         alias = acc.get("alias", t.platform) if acc else t.account_id
+        avatar_url = acc.get("avatar_url") if acc else None
         targets_status.append({
             "account_id": t.account_id,
             "account_alias": alias,
+            "avatar_url": avatar_url,
             "platform": t.platform,
             "status": "queued",
+            "stage": "Waiting in upload queue...",
             "progress": 0,
             "url": None,
             "error": None,
@@ -323,6 +359,14 @@ def start_publish_job(request: PublishRequest) -> dict:
         "job_id": job_id,
         "clip_path": str(clip_file),
         "clip_name": clip_file.name,
+        "title": request.title or clip_file.stem.replace("_", " "),
+        "caption": request.caption or "",
+        "privacy": request.privacy or "public",
+        "started_at": now,
+        "status": "uploading",
+        "targets": targets_status,
+        "all_done": False,
+    }
         "started_at": now,
         "targets": targets_status,
         "all_done": False,
@@ -570,13 +614,23 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
 
         # Save completed clip record to history
         with _jobs_lock:
+            targets_copy = [dict(t) for t in batch["clips"][clip_idx]["targets"]]
+            all_s = all(t.get("status") == "success" for t in targets_copy)
+            any_s = any(t.get("status") == "success" for t in targets_copy)
+            all_f = all(t.get("status") == "failed" for t in targets_copy)
+            clip_status = "completed" if all_s else ("failed" if all_f else ("partial" if any_s else "completed"))
+
             clip_record = {
                 "job_id": batch["clips"][clip_idx]["job_id"],
                 "batch_id": batch_id,
                 "clip_path": str(clip_file),
                 "clip_name": clip_file.name,
+                "title": f"{request.title_prefix or ''} Part {clip_idx + 1}".strip() or clip_file.stem,
+                "caption": request.caption or "",
+                "status": clip_status,
                 "started_at": batch["started_at"],
-                "targets": [dict(t) for t in batch["clips"][clip_idx]["targets"]],
+                "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "targets": targets_copy,
                 "all_done": True,
             }
         try:

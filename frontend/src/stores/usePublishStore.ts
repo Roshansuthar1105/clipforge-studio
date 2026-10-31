@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { apiClient, showToast } from '../api/client';
 import { useAccountsStore } from './useAccountsStore';
+import type { PublishTargetStatus } from '../types';
 
 export interface PublishItem {
   name: string;
@@ -16,7 +17,10 @@ interface PublishState {
   caption: string;
   isPublishing: boolean;
   activeBatchId: string | null;
-  targetProgress: Record<string, { status: string; url?: string; error?: string }>;
+  activeJobId: string | null;
+  activeClipName: string | null;
+  targetProgress: PublishTargetStatus[];
+  overallProgress: number;
 
   // Actions
   openPublishModal: (clips: PublishItem[]) => void;
@@ -28,6 +32,7 @@ interface PublishState {
   setCaption: (caption: string) => void;
   appendHashtag: (tag: string) => void;
   removeClipFromQueue: (index: number) => void;
+  dismissPublishJob: () => void;
   executePublish: () => Promise<boolean>;
 }
 
@@ -39,7 +44,10 @@ export const usePublishStore = create<PublishState>((set, get) => ({
   caption: '',
   isPublishing: false,
   activeBatchId: null,
-  targetProgress: {},
+  activeJobId: null,
+  activeClipName: null,
+  targetProgress: [],
+  overallProgress: 0,
 
   openPublishModal: (clips) => {
     const first = clips[0];
@@ -48,14 +56,17 @@ export const usePublishStore = create<PublishState>((set, get) => ({
       modalOpen: true,
       clips,
       title: initialTitle,
-      caption: `${initialTitle}\n\n#shorts #reels #viral`,
+      caption: initialTitle ? `${initialTitle}\n\n#shorts #reels #viral` : '#shorts #reels #viral',
       isPublishing: false,
       activeBatchId: null,
-      targetProgress: {},
+      targetProgress: [],
+      overallProgress: 0,
     });
   },
 
-  closePublishModal: () => set({ modalOpen: false, isPublishing: false }),
+  closePublishModal: () => set({ modalOpen: false }),
+
+  dismissPublishJob: () => set({ activeJobId: null, activeClipName: null, isPublishing: false }),
 
   toggleAccountSelection: (accountId) => {
     set((state) => {
@@ -71,11 +82,11 @@ export const usePublishStore = create<PublishState>((set, get) => ({
 
   setTitle: (title) => set({ title }),
   setCaption: (caption) => set({ caption }),
-
   appendHashtag: (tag) => {
-    set((state) => ({
-      caption: state.caption ? `${state.caption} #${tag}` : `#${tag}`,
-    }));
+    const cleanTag = tag.startsWith('#') ? tag : `#${tag}`;
+    const curr = get().caption;
+    if (curr.includes(cleanTag)) return;
+    set({ caption: curr ? `${curr} ${cleanTag}` : cleanTag });
   },
 
   removeClipFromQueue: (index) => {
@@ -95,7 +106,7 @@ export const usePublishStore = create<PublishState>((set, get) => ({
       return false;
     }
 
-    set({ isPublishing: true });
+    set({ isPublishing: true, overallProgress: 5 });
     try {
       const accounts = useAccountsStore.getState().accounts;
       const targets = Array.from(selectedAccountIds).map((accId) => {
@@ -123,18 +134,31 @@ export const usePublishStore = create<PublishState>((set, get) => ({
         
         // Poll publish job
         const jobId = res.job_id;
+        set({ activeJobId: jobId, activeClipName: clip.name });
+
         const poll = setInterval(async () => {
           try {
             const statusData = await apiClient.getPublishJobStatus(jobId);
-            if (statusData && statusData.targets) {
+            if (statusData && Array.isArray(statusData.targets)) {
               set({ targetProgress: statusData.targets });
+              const totalPct = statusData.targets.reduce((acc: number, t: any) => acc + (t.progress || 0), 0);
+              const avg = Math.round(totalPct / Math.max(1, statusData.targets.length));
+              set({ overallProgress: avg });
             }
-            if (statusData.status === 'completed' || statusData.status === 'failed') {
+            if (
+              statusData &&
+              (statusData.status === 'completed' ||
+                statusData.status === 'failed' ||
+                statusData.status === 'partial' ||
+                statusData.all_done)
+            ) {
               clearInterval(poll);
-              set({ isPublishing: false });
+              set({ isPublishing: false, overallProgress: 100 });
               showToast(
                 statusData.status === 'completed'
                   ? 'Clip successfully published to all targets!'
+                  : statusData.status === 'partial'
+                  ? 'Clip published with some errors.'
                   : 'Publish completed with some errors.',
                 statusData.status === 'completed' ? 'success' : 'warning'
               );
@@ -142,7 +166,7 @@ export const usePublishStore = create<PublishState>((set, get) => ({
           } catch {
             // ignore
           }
-        }, 2000);
+        }, 1500);
       } else {
         // Batch sequential publish
         const res = await apiClient.publishBatch({
@@ -154,12 +178,12 @@ export const usePublishStore = create<PublishState>((set, get) => ({
           targets,
         });
 
-        set({ activeBatchId: res.batch_id });
+        set({ activeBatchId: res.batch_id, isPublishing: false, overallProgress: 100 });
         showToast(`Sequential batch publish dispatched for ${clips.length} clips!`, 'success');
       }
       return true;
     } catch (err: any) {
-      set({ isPublishing: false });
+      set({ isPublishing: false, overallProgress: 0 });
       showToast(err.response?.data?.detail || 'Publish failed', 'error');
       return false;
     }

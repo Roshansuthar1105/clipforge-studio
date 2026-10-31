@@ -62,12 +62,25 @@ def create_scheduled_post(req: CreateScheduleRequest, user_id: Optional[str] = N
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     post_id = uuid.uuid4().hex
 
+    from storage import find_account
+    enriched_targets = []
+    for t in req.targets:
+        td = t.model_dump()
+        acc = find_account(t.account_id)
+        if acc:
+            td["account_alias"] = acc.get("alias", t.platform)
+            td["avatar_url"] = acc.get("avatar_url")
+        else:
+            td["account_alias"] = t.platform.capitalize()
+            td["avatar_url"] = None
+        enriched_targets.append(td)
+
     post_doc = {
         "id": post_id,
         "clip_path": str(resolved),
         "clip_name": resolved.name,
         "clip_url": f"/media/clips/{resolved.name}",
-        "targets": [t.model_dump() for t in req.targets],
+        "targets": enriched_targets,
         "title": req.title or resolved.stem.replace("_", " "),
         "caption": req.caption or "",
         "privacy": req.privacy or "public",
@@ -296,15 +309,29 @@ def _watch_publish_job(schedule_id: str, job_id: str) -> None:
             continue
 
         status = job.get("status")
-        if status in ("success", "completed"):
+        is_done = job.get("all_done", False)
+
+        if is_done or status in ("success", "completed", "failed", "partial"):
             now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            _update_post_status(schedule_id, "completed", {"published_at": now})
-            logger.info("Scheduled post '%s' published successfully!", schedule_id)
-            return
-        elif status == "failed":
-            error = job.get("error") or "Publishing failed for one or more targets"
-            _update_post_status(schedule_id, "failed", {"error_message": error})
-            logger.warning("Scheduled post '%s' failed: %s", schedule_id, error)
+            targets_result = job.get("targets", [])
+            published_urls = [t.get("url") for t in targets_result if t.get("url")]
+            any_success = any(t.get("status") == "success" for t in targets_result)
+            all_failed = all(t.get("status") == "failed" for t in targets_result)
+
+            if status in ("success", "completed") or (any_success and not all_failed):
+                _update_post_status(schedule_id, "completed", {
+                    "published_at": now,
+                    "targets_result": targets_result,
+                    "published_urls": published_urls,
+                })
+                logger.info("Scheduled post '%s' published successfully!", schedule_id)
+            else:
+                error = job.get("error") or "Publishing failed for all targets"
+                _update_post_status(schedule_id, "failed", {
+                    "error_message": error,
+                    "targets_result": targets_result,
+                })
+                logger.warning("Scheduled post '%s' failed: %s", schedule_id, error)
             return
 
 

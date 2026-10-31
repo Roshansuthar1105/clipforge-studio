@@ -31,6 +31,7 @@ export const PublishModal: React.FC = () => {
     appendHashtag,
     isPublishing,
     targetProgress,
+    overallProgress,
     executePublish,
   } = usePublishStore();
 
@@ -300,30 +301,107 @@ export const PublishModal: React.FC = () => {
             />
           </div>
 
-          {/* Live Upload Progress */}
-          {Object.keys(targetProgress).length > 0 && (
-            <div className="p-4 rounded-2xl border border-white/10 bg-slate-900/60 space-y-2.5">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                Publish Status
-              </span>
-              {Object.entries(targetProgress).map(([accId, prog]) => (
-                <div key={accId} className="flex items-center justify-between text-xs">
-                  <span className="text-slate-300 font-medium">Channel #{accId.slice(0, 8)}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-indigo-400 font-bold">{prog.status}</span>
-                    {prog.url && (
-                      <a
-                        href={prog.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-pink-400 hover:text-pink-300"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    )}
-                  </div>
+          {/* Live Multi-Channel Uploading Progress */}
+          {targetProgress.length > 0 && (
+            <div className="p-4 rounded-2xl border border-indigo-500/30 bg-indigo-950/20 space-y-3 animate-in fade-in">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {isPublishing && <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />}
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    {isPublishing ? 'Uploading in Progress...' : 'Publish Results'}
+                  </span>
                 </div>
-              ))}
+                <span className="font-mono text-xs font-extrabold text-indigo-300">
+                  {overallProgress}%
+                </span>
+              </div>
+
+              {/* Overall Progress Bar */}
+              <div className="w-full h-2 rounded-full bg-slate-900/80 overflow-hidden border border-white/5">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300"
+                  style={{ width: `${Math.max(5, overallProgress)}%` }}
+                />
+              </div>
+
+              {/* Target Channel Upload States */}
+              <div className="space-y-2 pt-1">
+                {targetProgress.map((tgt, idx) => {
+                  const isSuccess = tgt.status === 'success';
+                  const isFailed = tgt.status === 'failed';
+                  const isUploading = tgt.status === 'uploading' || tgt.status === 'queued';
+
+                  return (
+                    <div
+                      key={tgt.account_id || idx}
+                      className="p-3 rounded-xl border border-white/10 bg-slate-900/60 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase shrink-0 ${
+                              tgt.platform === 'youtube'
+                                ? 'bg-rose-500/20 text-rose-400'
+                                : tgt.platform === 'instagram'
+                                ? 'bg-pink-500/20 text-pink-400'
+                                : 'bg-blue-500/20 text-blue-400'
+                            }`}
+                          >
+                            {tgt.platform}
+                          </span>
+                          <span className="text-xs font-bold text-white truncate">
+                            {tgt.account_alias || `Channel #${tgt.account_id.slice(0, 8)}`}
+                          </span>
+                        </div>
+
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider shrink-0 ${
+                            isSuccess
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : isFailed
+                              ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                              : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                          }`}
+                        >
+                          {tgt.status}
+                        </span>
+                      </div>
+
+                      {tgt.stage && (
+                        <div className="text-[10px] text-slate-400 font-mono truncate">
+                          {tgt.stage}
+                        </div>
+                      )}
+
+                      {isUploading && (
+                        <div className="w-full h-1 rounded-full bg-slate-800 overflow-hidden">
+                          <div
+                            className="h-full bg-indigo-500 transition-all duration-300"
+                            style={{ width: `${Math.max(5, tgt.progress || 0)}%` }}
+                          />
+                        </div>
+                      )}
+
+                      {tgt.error && (
+                        <div className="text-[10px] text-rose-300 bg-rose-950/40 p-1.5 rounded border border-rose-500/20 font-mono break-all">
+                          {tgt.error}
+                        </div>
+                      )}
+
+                      {tgt.url && (
+                        <a
+                          href={tgt.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs font-bold text-pink-400 hover:text-pink-300 flex items-center gap-1 pt-1"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" /> View Published Reel / Short
+                        </a>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

@@ -3,8 +3,8 @@ publisher/models.py — Data models for multi-account publishing operations.
 """
 
 from __future__ import annotations
-from typing import Optional, List
-from pydantic import BaseModel, Field
+from typing import Optional, List, Any
+from pydantic import BaseModel, Field, model_validator
 
 
 class YouTubePublishConfig(BaseModel):
@@ -29,28 +29,79 @@ class FacebookPublishConfig(BaseModel):
 
 class PublishTarget(BaseModel):
     account_id: str
-    platform: str                    # "youtube" | "instagram" | "facebook"
+    platform: Optional[str] = "youtube"                    # "youtube" | "instagram" | "facebook"
     youtube_config: Optional[YouTubePublishConfig] = None
     instagram_config: Optional[InstagramPublishConfig] = None
     facebook_config: Optional[FacebookPublishConfig] = None
 
 
 class PublishRequest(BaseModel):
-    clip_path: str
-    targets: List[PublishTarget]
+    clip_path: Optional[str] = None
+    clip_url: Optional[str] = None
+    clip_name: Optional[str] = None
+    targets: Optional[List[PublishTarget]] = None
+    target_account_ids: Optional[List[str]] = None
     # Quick overrides applied across targets if not individually set:
     title: Optional[str] = None
     caption: Optional[str] = None
     privacy: Optional[str] = "public"
 
+    @model_validator(mode="before")
+    @classmethod
+    def populate_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Resolve clip path from clip_path, clip_url, or clip_name
+            if not data.get("clip_path"):
+                data["clip_path"] = data.get("clip_url") or data.get("clip_name") or ""
+            # Resolve targets from targets or target_account_ids
+            if not data.get("targets") and data.get("target_account_ids"):
+                from storage import find_account
+                targets = []
+                for aid in data["target_account_ids"]:
+                    acc = find_account(aid)
+                    platform = (acc or {}).get("platform", "youtube")
+                    targets.append({"account_id": aid, "platform": platform})
+                data["targets"] = targets
+        return data
+
 
 class BatchPublishRequest(BaseModel):
-    clip_paths: List[str]
-    targets: List[PublishTarget]
+    clip_paths: Optional[List[str]] = None
+    clips: Optional[List[Any]] = None
+    targets: Optional[List[PublishTarget]] = None
+    target_account_ids: Optional[List[str]] = None
     title_prefix: Optional[str] = None
     caption: Optional[str] = None
     privacy: Optional[str] = "public"
 
+    @model_validator(mode="before")
+    @classmethod
+    def populate_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("clip_paths") and data.get("clips"):
+                paths = []
+                for c in data["clips"]:
+                    if isinstance(c, str):
+                        paths.append(c)
+                    elif isinstance(c, dict):
+                        paths.append(
+                            c.get("clip_url")
+                            or c.get("clip_path")
+                            or c.get("clip_name")
+                            or c.get("url")
+                            or c.get("name")
+                            or ""
+                        )
+                data["clip_paths"] = paths
+            if not data.get("targets") and data.get("target_account_ids"):
+                from storage import find_account
+                targets = []
+                for aid in data["target_account_ids"]:
+                    acc = find_account(aid)
+                    platform = (acc or {}).get("platform", "youtube")
+                    targets.append({"account_id": aid, "platform": platform})
+                data["targets"] = targets
+        return data
 
 
 class TargetStatus(BaseModel):

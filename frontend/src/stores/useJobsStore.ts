@@ -59,7 +59,27 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   loadPublishHistory: async () => {
     try {
       const data = await apiClient.getPublishHistory();
-      set({ publishHistory: data.history || [] });
+      const rawRecords: any[] = (data.history || (data as any).records || []);
+      const normalized = rawRecords.map((r) => {
+        const targets: any[] = Array.isArray(r.targets) ? r.targets : [];
+        const firstTarget = targets[0] || {};
+        const firstSuccess = targets.find((t) => t.status === 'success' && t.url);
+        const postUrl = firstSuccess?.url || firstTarget.url || r.post_url;
+        const targetName =
+          targets.map((t) => t.account_alias || t.platform).join(', ') || r.target_name || 'Destination';
+        const platform = (firstTarget.platform || r.platform || 'youtube') as any;
+        const publishedAt = r.finished_at || r.started_at || r.published_at || new Date().toISOString();
+
+        return {
+          ...r,
+          targets,
+          post_url: postUrl,
+          target_name: targetName,
+          platform,
+          published_at: publishedAt,
+        };
+      });
+      set({ publishHistory: normalized });
     } catch (e) {
       console.error('Failed to load publish history:', e);
     }
