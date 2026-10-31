@@ -47,7 +47,7 @@ from services.subtitle_service import (
 )
 
 logger = logging.getLogger("clipforge.subtitles_router")
-router = APIRouter(prefix="/api", tags=["subtitles"])
+router = APIRouter(tags=["subtitles"])
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 SUBTITLE_JOBS_FILE = BASE_DIR / "subtitle_jobs.json"
 
@@ -229,6 +229,10 @@ class SubtitleAutoSyncRequest(BaseModel):
     words_per_screen: Optional[int] = 3
     mode: Optional[str] = None  # hinglish, english, or None
     force_retranscribe: Optional[bool] = False
+
+
+class SubtitleHinglishRequest(BaseModel):
+    cues: Optional[List[Dict[str, Any]]] = None
 
 
 class SubtitleBurnRequest(BaseModel):
@@ -422,7 +426,11 @@ def auto_sync_clip_subtitles_endpoint(clip_name: str, payload: SubtitleAutoSyncR
 
 
 @router.post("/clips/{clip_name:path}/subtitles/translate")
-def translate_clip_subtitles_endpoint(clip_name: str, mode: str = "hinglish"):
+def translate_clip_subtitles_endpoint(
+    clip_name: str,
+    mode: str = "hinglish",
+    payload: Optional[SubtitleHinglishRequest] = None
+):
     """
     Convert or translate clip speech into 100% English alphabet transcript.
     - mode="hinglish" (default): Spoken Hindi words written in English Latin alphabet (Romanized Hindi).
@@ -437,9 +445,6 @@ def translate_clip_subtitles_endpoint(clip_name: str, mode: str = "hinglish"):
             input_clip = found
         else:
             raise HTTPException(status_code=404, detail=f"Clip '{unquoted}' not found.")
-
-    if not get_groq_api_key():
-        raise HTTPException(status_code=400, detail="GROQ_API_KEY is not configured in .env.")
 
     meta_path = input_clip.with_name(f"{input_clip.name}.meta.json")
     if not meta_path.exists():
@@ -458,43 +463,47 @@ def translate_clip_subtitles_endpoint(clip_name: str, mode: str = "hinglish"):
     clip_end = float(meta.get("clip_end", 0.0))
 
     cues = []
+    # If client passed existing cues in payload, prioritize those
+    if payload and payload.cues:
+        cues = [dict(c) for c in payload.cues if isinstance(c, dict)]
 
     if mode == "hinglish":
-        # Check if parent transcript exists
-        if source_video_id and clip_end > clip_start:
-            hinglish_trans = get_stored_transcript(f"{source_video_id}_hinglish")
-            if hinglish_trans:
-                cues = slice_transcript_for_clip(hinglish_trans, clip_start, clip_end)
-            else:
-                orig_trans = get_stored_transcript(source_video_id)
-                if orig_trans:
-                    cues = slice_transcript_for_clip(orig_trans, clip_start, clip_end)
-
-        # If not obtained from parent transcript, load existing subtitles or transcribe clip
         if not cues:
-            existing = get_clip_subtitles(unquoted)
-            cues = existing.get("cues") or []
+            # Check if parent transcript exists
+            if source_video_id and clip_end > clip_start:
+                hinglish_trans = get_stored_transcript(f"{source_video_id}_hinglish")
+                if hinglish_trans:
+                    cues = slice_transcript_for_clip(hinglish_trans, clip_start, clip_end)
+                else:
+                    orig_trans = get_stored_transcript(source_video_id)
+                    if orig_trans:
+                        cues = slice_transcript_for_clip(orig_trans, clip_start, clip_end)
 
-        if not cues and get_groq_api_key():
-            try:
-                clip_transcript = transcribe_video_with_groq(input_clip, video_id=input_clip.stem)
-                cues = clip_transcript.get("segments", [])
-            except Exception as exc:
-                logger.warning("Direct clip transcription failed: %s", exc)
+            # If not obtained from parent transcript, load existing subtitles or transcribe clip
+            if not cues:
+                existing = get_clip_subtitles(unquoted)
+                cues = existing.get("cues") or []
+
+            if not cues and get_groq_api_key():
+                try:
+                    clip_transcript = transcribe_video_with_groq(input_clip, video_id=input_clip.stem)
+                    cues = clip_transcript.get("segments", [])
+                except Exception as exc:
+                    logger.warning("Direct clip transcription failed: %s", exc)
 
         if not cues:
             raise HTTPException(status_code=400, detail="No speech cues found to convert to Hinglish.")
 
-        # Convert cues to Hinglish (English Latin alphabet) if any Devanagari detected
-        if any(has_devanagari_characters(c.get("text", "")) for c in cues):
-            try:
-                cues = convert_cues_to_hinglish(cues)
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"Failed to convert speech to Hinglish: {exc}")
+        # Convert cues to Hinglish (English Latin alphabet)
+        try:
+            cues = convert_cues_to_hinglish(cues)
+        except Exception as exc:
+            logger.error("Hinglish conversion failed for %s: %s", unquoted, exc)
+            raise HTTPException(status_code=500, detail=f"Failed to convert speech to Hinglish: {exc}")
 
     else:
         # mode == "english" (Pure English translation)
-        if source_video_id and clip_end > clip_start:
+        if not cues and source_video_id and clip_end > clip_start:
             found_source = None
             for f in DOWNLOAD_DIR.glob("**/*.*"):
                 if f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
@@ -543,12 +552,15 @@ def translate_clip_subtitles_endpoint(clip_name: str, mode: str = "hinglish"):
 
 
 @router.post("/clips/{clip_name:path}/subtitles/hinglish")
-def hinglish_clip_subtitles_endpoint(clip_name: str):
+def hinglish_clip_subtitles_endpoint(
+    clip_name: str,
+    payload: Optional[SubtitleHinglishRequest] = None
+):
     """
     Dedicated endpoint to convert clip speech into Hinglish (Hindi written in English alphabets).
     Guarantees zero Hindi Devanagari characters in subtitles.
     """
-    return translate_clip_subtitles_endpoint(clip_name, mode="hinglish")
+    return translate_clip_subtitles_endpoint(clip_name, mode="hinglish", payload=payload)
 
 
 @router.post("/clips/{clip_name:path}/subtitles/burn")
@@ -624,6 +636,8 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
         encoded_name = urllib.parse.quote(final_name)
         return {
             "success": True,
+            "job_id": "",
+            "status": "completed",
             "filename": final_name,
             "url": f"/media/clips/{encoded_name}",
             "caption": full_caption,

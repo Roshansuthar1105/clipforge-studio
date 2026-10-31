@@ -59,7 +59,7 @@ export const ManualAccountModal: React.FC = () => {
           <div>
             <label className="text-xs text-slate-400 font-semibold block mb-1.5">Platform</label>
             <select
-              className="glass-input text-xs w-full"
+              className="glass-input px-3.5 py-2.5 rounded-xl text-xs w-full"
               value={platform}
               onChange={(e: any) => setPlatform(e.target.value)}
             >
@@ -74,7 +74,7 @@ export const ManualAccountModal: React.FC = () => {
             <input
               type="text"
               required
-              className="glass-input text-xs w-full"
+              className="glass-input px-3.5 py-2.5 rounded-xl text-xs w-full placeholder:text-slate-500"
               placeholder="e.g. My Official Brand"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -85,7 +85,7 @@ export const ManualAccountModal: React.FC = () => {
             <label className="text-xs text-slate-400 font-semibold block mb-1.5">Access Token</label>
             <textarea
               required
-              className="glass-input text-xs font-mono w-full"
+              className="glass-input px-3.5 py-2.5 rounded-xl text-xs font-mono w-full placeholder:text-slate-500"
               rows={3}
               placeholder="Paste never-expiring Page Access Token or OAuth token..."
               value={token}
@@ -101,7 +101,7 @@ export const ManualAccountModal: React.FC = () => {
               <input
                 type="text"
                 required
-                className="glass-input text-xs font-mono w-full"
+                className="glass-input px-3.5 py-2.5 rounded-xl text-xs font-mono w-full placeholder:text-slate-500"
                 placeholder="e.g. 17841400000000000"
                 value={accountId}
                 onChange={(e) => {

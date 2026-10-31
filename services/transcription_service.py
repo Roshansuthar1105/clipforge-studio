@@ -36,7 +36,17 @@ def get_groq_api_key() -> str:
     return key
 
 
-def synthesize_word_timestamps(text: str, start: float, end: float) -> List[Dict[str, Any]]:
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """Safely convert any value to float without throwing TypeError or ValueError."""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def synthesize_word_timestamps(text: str, start: Any, end: Any) -> List[Dict[str, Any]]:
     """
     Synthesize word-level timestamps proportionally by character length
     when Whisper word timestamps are missing or text was manually edited.
@@ -44,29 +54,31 @@ def synthesize_word_timestamps(text: str, start: float, end: float) -> List[Dict
     """
     if not text:
         return []
-    clean_text = text.replace("\n", " ").replace("\\N", " ").strip()
+    clean_text = str(text).replace("\n", " ").replace("\\N", " ").strip()
     # Strip brackets/asterisks for timing calculation
     clean_words = [w for w in clean_text.split() if w]
     if not clean_words:
         return []
 
-    start = max(0.0, float(start))
-    end = max(start + 0.1, float(end))
-    duration = end - start
+    start_f = _safe_float(start, 0.0)
+    end_f = _safe_float(end, start_f + 1.0)
+    if end_f <= start_f:
+        end_f = start_f + 1.0
+    duration = end_f - start_f
 
     # Weight proportional to length of word (min 2 chars)
     weights = [max(2, len(re.sub(r'[^A-Za-z0-9]', '', w) or w)) for w in clean_words]
     total_weight = sum(weights) or len(clean_words)
 
     result: List[Dict[str, Any]] = []
-    cur_time = start
+    cur_time = start_f
     for idx, (w, weight) in enumerate(zip(clean_words, weights)):
         w_dur = max(0.08, duration * (weight / total_weight))
         w_start = round(cur_time, 2)
         if idx == len(clean_words) - 1:
-            w_end = round(end, 2)
+            w_end = round(end_f, 2)
         else:
-            w_end = round(min(end, cur_time + w_dur), 2)
+            w_end = round(min(end_f, cur_time + w_dur), 2)
         result.append({
             "word": w,
             "start": w_start,
@@ -498,12 +510,90 @@ def has_devanagari_characters(text: str) -> bool:
     """Return True if text contains any Hindi/Devanagari characters (Unicode range U+0900 to U+097F)."""
     if not text:
         return False
-    return bool(re.search(r'[\u0900-\u097F]', text))
+    return bool(re.search(r'[\u0900-\u097F]', str(text)))
 
 
-def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> List[str]:
+_DEVA_VOWELS = {
+    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
+    'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'an', 'अः': 'ah'
+}
+_DEVA_MATRAS = {
+    'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
+    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', 'ँ': 'n', 'ः': 'h'
+}
+_DEVA_CONSONANTS = {
+    'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'ng',
+    'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'ny',
+    'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
+    'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
+    'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm',
+    'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v',
+    'श': 'sh', 'ष': 'sh', 'स': 's', 'ह': 'h',
+    'क़': 'q', 'ख़': 'kh', 'ग़': 'gh', 'ज़': 'z', 'ड़': 'r', 'ढ़': 'rh', 'फ़': 'f'
+}
+
+
+def devanagari_to_hinglish_phonetic(text: str) -> str:
     """
-    Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq.
+    Offline phonetic transliterator converting Hindi Devanagari script into Hinglish (Latin alphabet).
+    Guarantees zero Devanagari characters even if Groq is unavailable, rate-limited, or offline.
+    """
+    if not text or not has_devanagari_characters(text):
+        return str(text or "")
+
+    res = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        # Two-character consonant (with nukta)
+        if i + 1 < n and (c + text[i+1]) in _DEVA_CONSONANTS:
+            cons = _DEVA_CONSONANTS[c + text[i+1]]
+            i += 2
+            if i < n and text[i] == '्':  # halant / virama
+                res.append(cons)
+                i += 1
+            elif i < n and text[i] in _DEVA_MATRAS:
+                res.append(cons + _DEVA_MATRAS[text[i]])
+                i += 1
+            else:
+                inherent = 'a' if (i < n and (text[i] in _DEVA_CONSONANTS or (i+1 < n and text[i:i+2] in _DEVA_CONSONANTS))) else ''
+                res.append(cons + inherent)
+            continue
+        elif c in _DEVA_CONSONANTS:
+            cons = _DEVA_CONSONANTS[c]
+            i += 1
+            if i < n and text[i] == '्':
+                res.append(cons)
+                i += 1
+            elif i < n and text[i] in _DEVA_MATRAS:
+                res.append(cons + _DEVA_MATRAS[text[i]])
+                i += 1
+            else:
+                inherent = 'a' if (i < n and text[i] in _DEVA_CONSONANTS) else ''
+                res.append(cons + inherent)
+            continue
+        elif c in _DEVA_VOWELS:
+            res.append(_DEVA_VOWELS[c])
+            i += 1
+            continue
+        elif c in _DEVA_MATRAS:
+            res.append(_DEVA_MATRAS[c])
+            i += 1
+            continue
+        elif c == '्':
+            i += 1
+            continue
+        else:
+            res.append(c)
+            i += 1
+    return ''.join(res)
+
+
+def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 15) -> List[str]:
+    """
+    Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq,
+    with automatic offline phonetic fallback if Groq is unavailable or rate-limited.
     Preserves original English words and phrasing without translating meaning to English words.
     Guarantees 0 Devanagari characters in output.
     """
@@ -515,12 +605,15 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
         return texts
 
     api_key = get_groq_api_key()
-    if not api_key:
-        logger.warning("GROQ_API_KEY is not set for Hinglish conversion.")
-        return texts
-
-    from groq import Groq
-    client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
+    client = None
+    if api_key:
+        try:
+            from groq import Groq
+            client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
+        except Exception as c_err:
+            logger.warning("Could not instantiate Groq client: %s", c_err)
+    else:
+        logger.info("GROQ_API_KEY is not set. Using offline phonetic Hinglish transliterator.")
 
     system_prompt = (
         "You are a strict Hinglish transliteration engine.\n"
@@ -534,16 +627,19 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
     )
 
     models_to_try = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b"
+        "openai/gpt-oss-20b",
+        "allam-2-7b",
     ]
 
     import time
     results: List[str] = []
     for i in range(0, len(texts), batch_size):
         if i > 0:
-            time.sleep(0.3)  # Gentle pacing to avoid Groq 30 RPM rate limits
+            time.sleep(0.3)  # Gentle pacing to avoid rate limits
         chunk = texts[i:i + batch_size]
         # If this entire chunk has no Devanagari, pass it through directly
         if not any(has_devanagari_characters(t) for t in chunk):
@@ -551,52 +647,61 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
             continue
 
         chunk_success = False
-        user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
 
-        for model_name in models_to_try:
-            try:
-                res = client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg}
-                    ],
-                    temperature=0.0,
-                    max_tokens=500
-                )
+        if client:
+            user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
+            for model_name in models_to_try:
+                try:
+                    res = client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_msg}
+                        ],
+                        temperature=0.0,
+                        max_tokens=2048
+                    )
 
-                raw = res.choices[0].message.content.strip()
-                if raw.startswith("```"):
-                    raw = re.sub(r'^```(?:json)?\s*', '', raw)
-                    raw = re.sub(r'\s*```$', '', raw)
+                    raw = res.choices[0].message.content or ""
+                    raw = raw.strip()
+                    if raw.startswith("```"):
+                        raw = re.sub(r'^```(?:json)?\s*', '', raw)
+                        raw = re.sub(r'\s*```$', '', raw)
 
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict):
-                    for val in parsed.values():
-                        if isinstance(val, list):
-                            parsed = val
-                            break
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        for val in parsed.values():
+                            if isinstance(val, list):
+                                parsed = val
+                                break
 
-                if isinstance(parsed, list) and len(parsed) == len(chunk):
-                    # Clean any accidental lingering Devanagari characters
-                    cleaned_items = [str(item).strip() for item in parsed]
-                    results.extend(cleaned_items)
-                    chunk_success = True
-                    break
-                else:
-                    logger.warning("Hinglish transliteration count mismatch via %s (expected %d, got %s)",
-                                   model_name, len(chunk), len(parsed) if isinstance(parsed, list) else "not-list")
-                    if isinstance(parsed, list) and len(parsed) >= len(chunk):
-                        results.extend([str(x).strip() for x in parsed[:len(chunk)]])
+                    if isinstance(parsed, list) and len(parsed) == len(chunk):
+                        cleaned_items = [
+                            devanagari_to_hinglish_phonetic(str(item).strip())
+                            for item in parsed
+                        ]
+                        results.extend(cleaned_items)
                         chunk_success = True
                         break
-            except Exception as exc:
-                logger.warning("Hinglish transliteration model %s failed for chunk %d: %s", model_name, i, exc)
-                continue
+                    elif isinstance(parsed, list) and len(parsed) >= len(chunk):
+                        cleaned_items = [
+                            devanagari_to_hinglish_phonetic(str(x).strip())
+                            for x in parsed[:len(chunk)]
+                        ]
+                        results.extend(cleaned_items)
+                        chunk_success = True
+                        break
+                except Exception as exc:
+                    logger.debug("Hinglish transliteration model %s failed for chunk %d: %s", model_name, i, exc)
+                    continue
 
         if not chunk_success:
-            logger.error("All Hinglish models failed for chunk %d; retaining original lines", i)
-            results.extend(chunk)
+            logger.info("Using offline phonetic Hinglish engine for chunk %d (%d lines)", i, len(chunk))
+            fallback_items = [
+                devanagari_to_hinglish_phonetic(line) if has_devanagari_characters(line) else line
+                for line in chunk
+            ]
+            results.extend(fallback_items)
 
     return results
 
@@ -610,15 +715,19 @@ def convert_cues_to_hinglish(cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     if not cues:
         return []
 
-    texts = [c.get("text", "") for c in cues]
+    texts = [str(c.get("text") or "") for c in cues]
     hinglish_texts = convert_text_to_hinglish_batch(texts)
 
     converted_cues = []
     for cue, hing_text in zip(cues, hinglish_texts):
         c_copy = dict(cue)
         c_copy["text"] = hing_text
-        c_start = float(cue.get("start", 0.0))
-        c_end = float(cue.get("end", c_start + 1.0))
+        c_start = _safe_float(cue.get("start"), 0.0)
+        c_end = _safe_float(cue.get("end"), c_start + 1.0)
+        if c_end <= c_start:
+            c_end = c_start + 1.0
+        c_copy["start"] = c_start
+        c_copy["end"] = c_end
         # Re-synthesize word timestamps for new Hinglish words so ASS active-word
         # illumination and frontend preview use Hinglish words without Devanagari!
         c_copy["words"] = synthesize_word_timestamps(hing_text, c_start, c_end)

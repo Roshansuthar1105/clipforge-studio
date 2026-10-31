@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel, Field
 
 import yt_dlp
+from services.ytdlp_utils import get_yt_dlp_options, clean_ytdlp_error
 from services.viral_moment_service import (
     detect_viral_moments_for_video,
     detect_viral_moments_with_ai,
@@ -133,30 +134,49 @@ def detect_viral_moments_endpoint(payload: ViralDetectRequest):
 
         # If not already downloaded, download it now
         if not target_video or not target_video.exists():
-            try:
-                DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-                ydl_opts = {
-                    "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
-                    "merge_output_format": "mp4",
-                    "outtmpl": str(DOWNLOAD_DIR / "%(title).80s_%(id)s.%(ext)s"),
-                    "noplaylist": True,
-                    "restrictfilenames": True,
-                    "windowsfilenames": True,
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(payload.url.strip(), download=True)
-                    video_title = info.get("title", "Video Source")
-                    video_id = info.get("id", video_id)
-                    prepared = ydl.prepare_filename(info)
-                    target_video = Path(prepared)
-                    if not target_video.exists():
-                        target_video = target_video.with_suffix(".mp4")
-                    if not target_video.exists() and video_id:
-                        target_video = _find_source_in_downloads(video_id)
-            except Exception as dl_err:
+            DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            base_opts = {
+                "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
+                "merge_output_format": "mp4",
+                "outtmpl": str(DOWNLOAD_DIR / "%(title).80s_%(id)s.%(ext)s"),
+                "noplaylist": True,
+                "restrictfilenames": True,
+                "windowsfilenames": True,
+            }
+            client_candidates = [
+                None,  # default / auto-select
+                ["android", "ios"],
+                ["web", "mweb"],
+                ["android"],
+                ["ios"],
+                ["tv", "mweb"],
+            ]
+            download_success = False
+            last_dl_err = None
+            for dl_clients in client_candidates:
+                try:
+                    ydl_opts = get_yt_dlp_options(extra_opts=base_opts, player_clients=dl_clients)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(payload.url.strip(), download=True)
+                        video_title = info.get("title", "Video Source")
+                        video_id = info.get("id", video_id)
+                        prepared = ydl.prepare_filename(info)
+                        target_video = Path(prepared)
+                        if not target_video.exists():
+                            target_video = target_video.with_suffix(".mp4")
+                        if not target_video.exists() and video_id:
+                            target_video = _find_source_in_downloads(video_id)
+                        download_success = True
+                        break
+                except Exception as dl_err:
+                    last_dl_err = dl_err
+                    continue
+
+            if not download_success or not target_video or not target_video.exists():
+                err_msg = clean_ytdlp_error(last_dl_err or "Unknown download failure")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to download source video for analysis: {dl_err}"
+                    detail=f"Failed to download source video for analysis: {err_msg}"
                 )
     else:
         raise HTTPException(

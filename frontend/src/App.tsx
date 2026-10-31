@@ -10,6 +10,7 @@ import { AccountsView } from './components/accounts/AccountsView';
 import { SubtitleStudioView } from './components/subtitles/SubtitleStudioView';
 import { ViralMomentsView } from './components/viral/ViralMomentsView';
 import { GuideView } from './components/accounts/GuideView';
+import { SpeedTestView } from './components/speedtest/SpeedTestView';
 
 // Compact Dialog Modals (Background scroll locked!)
 import { PublishModal } from './components/publisher/PublishModal';
@@ -48,13 +49,13 @@ export const App: React.FC = () => {
   useEffect(() => {
     // Sync initial route from URL hash
     const hash = window.location.hash.replace('#', '') as AppView;
-    if (['studio', 'jobs', 'library', 'accounts', 'subtitles', 'viral', 'guide'].includes(hash)) {
+    if (['studio', 'jobs', 'library', 'accounts', 'subtitles', 'viral', 'guide', 'speedtest'].includes(hash)) {
       setCurrentView(hash);
     }
 
     const onHashChange = () => {
       const h = window.location.hash.replace('#', '') as AppView;
-      if (['studio', 'jobs', 'library', 'accounts', 'subtitles', 'viral', 'guide'].includes(h)) {
+      if (['studio', 'jobs', 'library', 'accounts', 'subtitles', 'viral', 'guide', 'speedtest'].includes(h)) {
         setCurrentView(h);
       }
     };
@@ -85,6 +86,7 @@ export const App: React.FC = () => {
     if (currentView === 'subtitles') fallback = 'library';
     else if (currentView === 'viral') fallback = 'studio';
     else if (currentView === 'guide') fallback = 'accounts';
+    else if (currentView === 'speedtest') fallback = 'studio';
 
     const target = previousView && previousView !== currentView ? previousView : fallback;
     handleSwitchView(target);
@@ -186,6 +188,11 @@ export const App: React.FC = () => {
         {/* Dedicated Full Page 3: Social Channel Setup Guide */}
         {currentView === 'guide' && (
           <GuideView onBack={handleBack} defaultTab={guideDefaultTab} />
+        )}
+
+        {/* Dedicated Full Page 4: Network & Server Speed Test */}
+        {currentView === 'speedtest' && (
+          <SpeedTestView onBack={handleBack} />
         )}
       </main>
 

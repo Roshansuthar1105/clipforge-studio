@@ -231,7 +231,7 @@ export const apiClient = {
   async burnSubtitles(
     clipName: string,
     payload: { cues: SubtitleCue[]; style: SubtitleStyle }
-  ): Promise<{ job_id: string; status: string; output_clip?: string }> {
+  ): Promise<{ job_id?: string; status?: string; output_clip?: string; success?: boolean }> {
     const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/burn`, payload);
     return res.data;
   },
@@ -273,6 +273,25 @@ export const apiClient = {
   },
 
   // ----------------------------------------------------
+  // YOUTUBE COOKIES / BOT BYPASS
+  // ----------------------------------------------------
+  async getYoutubeCookiesStatus(): Promise<{
+    configured: boolean;
+    source: string;
+    path?: string;
+    has_youtube_auth: boolean;
+    cookie_count: number;
+    message: string;
+  }> {
+    const res = await api.get('/api/youtube/cookies/status');
+    return res.data;
+  },
+  async uploadYoutubeCookies(cookies: string): Promise<{ success: boolean; message: string; status: any }> {
+    const res = await api.post('/api/youtube/cookies', { cookies });
+    return res.data;
+  },
+
+  // ----------------------------------------------------
   // SOCIAL MEDIA AUTO-SCHEDULER
   // ----------------------------------------------------
   async schedulePost(payload: any): Promise<any> {
@@ -297,6 +316,27 @@ export const apiClient = {
   },
   async publishScheduledNow(scheduleId: string): Promise<any> {
     const res = await api.post(`/api/schedule/${encodeURIComponent(scheduleId)}/publish-now`);
+    return res.data;
+  },
+
+  // ----------------------------------------------------
+  // INTERNET SPEED TEST
+  // ----------------------------------------------------
+  async getServerSpeedTest(): Promise<{
+    ping_ms: number;
+    jitter_ms: number;
+    download_mbps: number;
+    upload_mbps: number;
+    rating: string;
+    quality: string;
+    status: string;
+    timestamp: number;
+  }> {
+    const res = await api.get('/api/speedtest/server');
+    return res.data;
+  },
+  async getPing(): Promise<{ status: string; timestamp: number }> {
+    const res = await api.get('/api/speedtest/ping');
     return res.data;
   },
 };

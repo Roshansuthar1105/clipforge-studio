@@ -11,13 +11,14 @@ import {
   Sparkles,
   Menu,
   X,
+  Gauge,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { useJobsStore } from '../../stores/useJobsStore';
 import { useLibraryStore } from '../../stores/useLibraryStore';
 import { useAccountsStore } from '../../stores/useAccountsStore';
 
-export type AppView = 'studio' | 'jobs' | 'library' | 'accounts' | 'subtitles' | 'viral' | 'guide';
+export type AppView = 'studio' | 'jobs' | 'library' | 'accounts' | 'subtitles' | 'viral' | 'guide' | 'speedtest';
 
 interface HeaderProps {
   currentView: AppView;
@@ -168,6 +169,21 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onSwitchView }) => 
             <span className="font-mono text-[11px]">
               {storageMetrics ? `${storageMetrics.total_mb} MB` : 'Storage'}
             </span>
+          </button>
+
+          {/* Network & Server Speed Test Pill */}
+          <button
+            type="button"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs transition-all cursor-pointer ${
+              currentView === 'speedtest'
+                ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                : 'bg-slate-900/60 hover:bg-slate-900 border-white/8 hover:border-emerald-500/30 text-slate-300 hover:text-white'
+            }`}
+            onClick={() => handleNavClick('speedtest')}
+            title="Network and server speed test"
+          >
+            <Gauge className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline text-[11px]">Speed Test</span>
           </button>
 
           {/* User Auth Section */}

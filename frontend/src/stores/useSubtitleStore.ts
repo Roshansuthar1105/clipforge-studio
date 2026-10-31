@@ -413,6 +413,14 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
     set({ isBurning: true, burnProgress: 10, burnStageMsg: 'Compiling ASS subtitle filtergraph...' });
     try {
       const res = await apiClient.burnSubtitles(clipName, { cues, style });
+      if (!res?.job_id || res?.status === 'completed') {
+        set({ isBurning: false, burnProgress: 100, burnStageMsg: 'Done!' });
+        showToast('Subtitles burned into video successfully!', 'success');
+        set((state) => ({ clipUrl: `${state.clipUrl.split('?')[0]}?t=${Date.now()}` }));
+        window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
+        return true;
+      }
+
       set({ burnProgress: 50, burnStageMsg: 'Encoding 1080x1920 video with FFmpeg...' });
 
       // Poll subtitle job

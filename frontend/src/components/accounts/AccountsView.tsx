@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Radio,
   Plus,
@@ -11,8 +11,10 @@ import {
   BookOpen,
   Zap,
   ShieldCheck,
+  Cookie,
 } from 'lucide-react';
 import { useAccountsStore } from '../../stores/useAccountsStore';
+import { YouTubeCookiesModal } from './YouTubeCookiesModal';
 
 const PlatformIcon: React.FC<{ platform: string; className?: string }> = ({ platform, className = 'w-5 h-5' }) => {
   if (platform === 'youtube') {
@@ -54,6 +56,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
     syncEnvAccounts,
     testingAccountId,
   } = useAccountsStore();
+
+  const [showCookiesModal, setShowCookiesModal] = useState(false);
 
   const handleOpenGuide = (tab: 'instagram' | 'facebook' | 'youtube' = 'instagram') => {
     if (onOpenGuidePage) {
@@ -134,6 +138,16 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
             <Key className="w-3.5 h-3.5 text-slate-400" /> Manual Token
           </button>
 
+          {/* YouTube Cookies */}
+          <button
+            type="button"
+            className="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-xs font-semibold text-amber-300 transition-all cursor-pointer flex items-center gap-1.5"
+            onClick={() => setShowCookiesModal(true)}
+            title="Configure YouTube cookies to bypass bot checks in deployment"
+          >
+            <Cookie className="w-3.5 h-3.5 text-amber-400" /> Cookies (Bot Bypass)
+          </button>
+
           {/* Sync .env */}
           <button
             type="button"
@@ -178,26 +192,24 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
                             className="w-12 h-12 rounded-2xl object-cover border border-white/15"
                           />
                           <div
-                            className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white shadow-md ${
-                              acc.platform === 'youtube'
+                            className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white shadow-md ${acc.platform === 'youtube'
                                 ? 'bg-red-600'
                                 : acc.platform === 'instagram'
-                                ? 'bg-pink-600'
-                                : 'bg-blue-600'
-                            }`}
+                                  ? 'bg-pink-600'
+                                  : 'bg-blue-600'
+                              }`}
                           >
                             {acc.platform === 'youtube' ? 'Y' : acc.platform === 'instagram' ? 'I' : 'F'}
                           </div>
                         </div>
                       ) : (
                         <div
-                          className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-sm ${
-                            acc.platform === 'youtube'
+                          className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-sm ${acc.platform === 'youtube'
                               ? 'bg-rose-500/15 border border-rose-500/30 text-rose-400'
                               : acc.platform === 'instagram'
-                              ? 'bg-pink-500/15 border border-pink-500/30 text-pink-400'
-                              : 'bg-blue-500/15 border border-blue-500/30 text-blue-400'
-                          }`}
+                                ? 'bg-pink-500/15 border border-pink-500/30 text-pink-400'
+                                : 'bg-blue-500/15 border border-blue-500/30 text-blue-400'
+                            }`}
                         >
                           <PlatformIcon platform={acc.platform} className="w-6 h-6" />
                         </div>
@@ -209,9 +221,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
                         </h4>
                         <div className="text-[11px] text-slate-400 capitalize flex items-center gap-1.5 mt-0.5">
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              acc.is_valid ? 'bg-emerald-400' : 'bg-amber-400'
-                            }`}
+                            className={`w-1.5 h-1.5 rounded-full ${acc.is_valid ? 'bg-emerald-400' : 'bg-amber-400'
+                              }`}
                           />
                           <span>
                             {acc.platform} {acc.platform === 'youtube' ? 'Shorts' : 'Reels'}
@@ -222,11 +233,10 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
 
                     {/* Health Status Pill */}
                     <span
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                        acc.is_valid
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${acc.is_valid
                           ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                           : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
-                      }`}
+                        }`}
                     >
                       {acc.is_valid ? (
                         <>
@@ -273,6 +283,9 @@ export const AccountsView: React.FC<AccountsViewProps> = ({ onOpenGuidePage }) =
           })}
         </div>
       )}
+
+      {/* YouTube Cookies Modal */}
+      <YouTubeCookiesModal isOpen={showCookiesModal} onClose={() => setShowCookiesModal(false)} />
     </div>
   );
 };

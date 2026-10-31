@@ -59,7 +59,15 @@ from routers.meta_publish_router import router as meta_publish_router
 from routers.subtitles_router import router as subtitles_router
 from routers.viral_router import router as viral_router
 from routers.schedule_router import router as schedule_router
+from routers.speedtest_router import router as speedtest_router
 from publisher.scheduler import start_scheduler_daemon
+from services.ytdlp_utils import (
+    get_yt_dlp_options,
+    clean_ytdlp_error,
+    get_cookies_status,
+    save_cookies_text,
+    init_cookies_from_env,
+)
 
 app = FastAPI(title="ClipForge Studio")
 
@@ -131,6 +139,9 @@ async def on_startup():
         if cleaned > 0:
             logger.info("Cleaned up %d stale job(s) from previous server run", cleaned)
 
+    # Initialize YouTube cookies from deployment environment if provided
+    init_cookies_from_env()
+
     # Start auto-publishing scheduler background daemon
     start_scheduler_daemon()
 
@@ -138,9 +149,11 @@ app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(publish_router)
 app.include_router(meta_publish_router)
-app.include_router(subtitles_router)
+app.include_router(subtitles_router, prefix="/api/subtitles")
+app.include_router(subtitles_router, prefix="/api")
 app.include_router(viral_router)
 app.include_router(schedule_router)
+app.include_router(speedtest_router)
 
 if FRONTEND_DIST_DIR.exists() and (FRONTEND_DIST_DIR / "assets").exists():
     app.mount(
@@ -247,56 +260,8 @@ class ClipRequest(BaseModel):
 # --------------------------------------------------
 
 def clean_error_message(err_msg: str) -> str:
-    """Strip ANSI color codes and clean up error messages."""
-    clean = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", err_msg)
-    clean = re.sub(r"\[[0-9;]*m", "", clean)
-    clean = clean.replace("ERROR: ", "").strip()
-    return clean
-
-
-def get_yt_dlp_options(
-    extra_opts: dict | None = None,
-    player_clients: list[str] | None = None,
-) -> dict:
-    """
-    Build yt-dlp options configured to bypass YouTube bot detection checks
-    using mobile player API clients (android/ios) and optional cookies.txt.
-    """
-    clients = player_clients or ["android", "ios", "mweb"]
-    opts: dict = {
-        "quiet": True,
-        "no_warnings": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": clients
-            }
-        },
-    }
-
-    # Enable Node.js as JavaScript runtime if installed
-    node_path = shutil.which("node")
-    if node_path:
-        opts["js_runtimes"] = {"node": {}}
-
-    # Automatically detect cookies.txt file
-    cookie_candidates = [
-        os.getenv("YTDLP_COOKIES"),
-        os.getenv("COOKIES_FILE"),
-        APP_DIR / "cookies.txt",
-        BASE_DIR / "cookies.txt",
-        Path("cookies.txt"),
-    ]
-    for candidate in cookie_candidates:
-        if candidate:
-            cand_path = Path(candidate).resolve()
-            if cand_path.exists() and cand_path.is_file():
-                opts["cookiefile"] = str(cand_path)
-                break
-
-    if extra_opts:
-        opts.update(extra_opts)
-
-    return opts
+    """Format and clean yt-dlp error messages with actionable help."""
+    return clean_ytdlp_error(err_msg)
 
 
 def safe_name(value: str) -> str:
@@ -889,11 +854,12 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 last_dl_error = None
                 prepared_name = None
                 client_candidates = [
+                    None,  # auto-select (web/mweb if cookies, android/ios if no cookies)
                     ["android", "ios"],
+                    ["web", "mweb"],
                     ["android"],
                     ["ios"],
                     ["tv", "mweb"],
-                    None,
                 ]
 
                 for dl_clients in client_candidates:
@@ -915,12 +881,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         continue
 
                 if not download_success or not prepared_name:
-                    err_msg = clean_error_message(str(last_dl_error or "Unknown download failure"))
-                    if "bot" in err_msg.lower() or "sign in" in err_msg.lower():
-                        err_msg = (
-                            f"{err_msg} (YouTube bot check triggered. "
-                            "Place a 'cookies.txt' file in the ClipForge folder or set COOKIES_FILE to authenticate.)"
-                        )
+                    err_msg = clean_ytdlp_error(last_dl_error or "Unknown download failure")
                     raise RuntimeError(f"Download failed: {err_msg}")
 
                 # yt-dlp may change the extension after merging streams.
@@ -1710,6 +1671,29 @@ def health():
     return {"status": "ok"}
 
 
+class CookieUploadRequest(BaseModel):
+    cookies: str
+
+
+@app.get("/api/youtube/cookies/status")
+def youtube_cookies_status_endpoint():
+    """Return status of YouTube cookies authentication for yt-dlp."""
+    return get_cookies_status()
+
+
+@app.post("/api/youtube/cookies")
+def youtube_cookies_upload_endpoint(payload: CookieUploadRequest):
+    """Save raw Netscape cookies text directly to ClipForge storage."""
+    if not payload.cookies.strip():
+        raise HTTPException(status_code=400, detail="Cookies content cannot be empty.")
+    save_cookies_text(payload.cookies)
+    return {
+        "success": True,
+        "message": "YouTube cookies saved successfully.",
+        "status": get_cookies_status()
+    }
+
+
 @app.get("/api/cache-check")
 def cache_check(url: str):
     """
@@ -1731,11 +1715,12 @@ def preview_video(url: str):
 
     # Try client chains in order of reliability to avoid bot check challenges
     client_chains = [
+        None,  # auto-select (web/mweb if cookies, android/ios if no cookies)
         ["android", "ios"],
+        ["web", "mweb"],
         ["android"],
         ["ios"],
         ["tv", "mweb"],
-        None,
     ]
 
     last_error = None
@@ -1756,16 +1741,10 @@ def preview_video(url: str):
             continue
 
     if not info:
-        cleaned_msg = clean_error_message(str(last_error or "Could not extract video metadata"))
-        if "bot" in cleaned_msg.lower() or "sign in" in cleaned_msg.lower():
-            cleaned_msg = (
-                "YouTube bot check detected. "
-                "Place an exported 'cookies.txt' file in your ClipForge folder, "
-                "or try again in a few moments."
-            )
+        cleaned_msg = clean_ytdlp_error(last_error or "Could not extract video metadata")
         raise HTTPException(
             status_code=400,
-            detail=f"Unable to load preview for this video: {cleaned_msg[:300]}",
+            detail=f"Unable to load preview for this video: {cleaned_msg[:400]}",
         )
 
     duration = float(info.get("duration") or 0)

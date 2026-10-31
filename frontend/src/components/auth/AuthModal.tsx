@@ -60,22 +60,20 @@ export const AuthModal: React.FC = () => {
         <div className="flex p-1.5 rounded-2xl bg-slate-900 border border-white/10 mb-5">
           <button
             type="button"
-            className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-              authTab === 'login'
+            className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${authTab === 'login'
                 ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
-            }`}
+              }`}
             onClick={() => setAuthTab('login')}
           >
             Log In
           </button>
           <button
             type="button"
-            className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-              authTab === 'signup'
+            className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${authTab === 'signup'
                 ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
-            }`}
+              }`}
             onClick={() => setAuthTab('signup')}
           >
             Sign Up
@@ -88,7 +86,7 @@ export const AuthModal: React.FC = () => {
             <input
               type="text"
               required
-              className="glass-input text-xs w-full"
+              className="glass-input px-3.5 py-2.5 rounded-xl text-xs w-full placeholder:text-slate-500 focus:outline-none"
               placeholder="e.g. johndoe"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -101,7 +99,7 @@ export const AuthModal: React.FC = () => {
                 <label className="text-xs text-slate-400 font-semibold block mb-1.5">Full Name</label>
                 <input
                   type="text"
-                  className="glass-input text-xs w-full"
+                  className="glass-input px-3.5 py-2.5 rounded-xl text-xs w-full placeholder:text-slate-500 focus:outline-none"
                   placeholder="e.g. John Doe"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
@@ -113,7 +111,7 @@ export const AuthModal: React.FC = () => {
                 <input
                   type="email"
                   required
-                  className="glass-input text-xs w-full"
+                  className="glass-input px-3.5 py-2.5 rounded-xl text-xs w-full placeholder:text-slate-500 focus:outline-none"
                   placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -127,7 +125,7 @@ export const AuthModal: React.FC = () => {
             <input
               type="password"
               required
-              className="glass-input text-xs w-full"
+              className="glass-input px-3.5 py-2.5 rounded-xl text-xs w-full placeholder:text-slate-500 focus:outline-none"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
