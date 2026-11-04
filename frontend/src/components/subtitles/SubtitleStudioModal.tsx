@@ -235,12 +235,16 @@ export const SubtitleStudioModal: React.FC = () => {
                   <div
                     className="inline-block px-3 py-1.5 rounded font-black tracking-wide leading-tight"
                     style={{
-                      fontFamily: style.font_family,
-                      fontSize: `${Math.round(style.font_size * 0.28)}px`,
+                      fontFamily: style.font_family || 'Arial Black',
+                      fontSize: `${Math.round(style.font_size * 0.25)}px`,
                       color: style.text_color,
                       textTransform: style.uppercase ? 'uppercase' : 'none',
-                      WebkitTextStroke: `${Math.max(1, style.outline_width * 0.28)}px ${style.outline_color}`,
-                      textShadow: '0 4px 12px rgba(0,0,0,0.8)',
+                      paintOrder: 'stroke fill',
+                      WebkitTextStroke:
+                        style.outline_width > 0
+                          ? `${Math.max(0.3, style.outline_width * 0.25)}px ${style.outline_color}`
+                          : 'none',
+                      textShadow: `${Math.max(0.5, 1.0 * 0.25).toFixed(1)}px ${Math.max(0.5, 1.5 * 0.25).toFixed(1)}px 1px rgba(0,0,0,0.9)`,
                     }}
                   >
                     {activeCue.words && activeCue.words.length > 0 ? (
@@ -254,10 +258,9 @@ export const SubtitleStudioModal: React.FC = () => {
                             key={wIdx}
                             style={{
                               color: isHighlighted ? style.highlight_color : style.text_color,
-                              marginRight: '6px',
+                              marginRight: '5px',
                               display: 'inline-block',
-                              transform: isWordActive ? 'scale(1.1)' : 'scale(1)',
-                              transition: 'transform 0.08s ease, color 0.08s ease',
+                              transition: 'color 0.05s ease',
                             }}
                           >
                             {w.word}
@@ -345,7 +348,7 @@ export const SubtitleStudioModal: React.FC = () => {
                     type="button"
                     className="px-3 py-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
                     onClick={() => downloadSubtitles('ass')}
-                    title="Download Advanced SubStation Alpha (.ASS) style file"
+                    title="Download Hinglish Advanced SubStation Alpha (.ASS) style file"
                   >
                     <Download className="w-3.5 h-3.5 text-emerald-400" /> ASS
                   </button>

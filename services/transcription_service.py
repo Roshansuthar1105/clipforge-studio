@@ -1097,20 +1097,13 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             raw_cues = clip_transcript.get("segments", [])
             cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
 
-            # 1. Indic / Hindi audio -> by default save & get Hinglish subtitles
+            # Indic / Hindi audio -> by default save & get Hinglish subtitles (never English translation)
             raw_lang = str(clip_transcript.get("language", "")).lower()
             is_indic = any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_lang in (
                 "hi", "hindi", "urdu", "pa", "punjabi", "mr", "marathi", "gu", "gujarati", "bn", "bengali", "ne", "nepali", "sa", "sanskrit"
             )
-            if is_indic:
+            if is_indic or any(has_devanagari_characters(c.get("text", "")) for c in cues):
                 cues = convert_cues_to_hinglish(cues)
-            # 2. Foreign language (neither Hindi nor English) -> by default use English translation
-            elif raw_lang not in ("en", "english"):
-                try:
-                    cues = translate_clip_to_english_with_groq(clip_file)
-                    cues = create_voice_synced_word_chunks(cues, max_words=3)
-                except Exception:
-                    pass
 
             styles = (meta or {}).get("styles", {})
             styles.setdefault("highlight_mode", "active_word")
@@ -1171,16 +1164,9 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             raw_cues = slice_transcript_for_clip(transcript, clip_start, clip_end)
             cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
 
-        # 1. Hindi audio -> by default save & get Hinglish subtitles
-        if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(transcript.get("language", "")).lower() in ("hi", "hindi", "urdu"):
+        # Indic / Hindi audio -> by default save & get Hinglish subtitles (never English translation)
+        if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(transcript.get("language", "")).lower() in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn"):
             cues = convert_cues_to_hinglish(cues)
-        # 2. Foreign language (neither Hindi nor English) -> by default use English translation
-        elif str(transcript.get("language", "")).lower() not in ("en", "english"):
-            en_trans = get_stored_transcript(f"{source_video_id}_en")
-            if en_trans and en_trans.get("segments"):
-                raw_cues_en = slice_transcript_for_clip(en_trans, clip_start, clip_end)
-                if raw_cues_en:
-                    cues = create_voice_synced_word_chunks(raw_cues_en, max_words=3)
 
         styles = (meta or {}).get("styles", {})
         styles.setdefault("highlight_mode", "active_word")

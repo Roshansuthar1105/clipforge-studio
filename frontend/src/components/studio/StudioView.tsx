@@ -171,7 +171,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
               <h4 className="text-sm font-bold text-white leading-snug line-clamp-2">
                 {metadata.title}
               </h4>
-              <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-slate-400">
+              <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-slate-400">
                 <span className="text-indigo-400 font-semibold">{metadata.channel}</span>
                 <span>•</span>
                 <span>Duration: {formatSeconds(metadata.duration)}</span>
@@ -181,6 +181,20 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
                     <span>{metadata.views.toLocaleString()} views</span>
                   </>
                 )}
+              </div>
+
+              {/* Editable Base Title for Slicing & Publishing */}
+              <div className="mt-3 pt-3 border-t border-white/10">
+                <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                  Clip Title / YouTube Upload Title
+                </label>
+                <input
+                  type="text"
+                  className="glass-input text-xs w-full py-1.5 px-3"
+                  placeholder="Custom title prefix for clips and uploads..."
+                  value={titleText}
+                  onChange={(e) => setOverlaySetting('titleText', e.target.value)}
+                />
               </div>
             </div>
           </div>

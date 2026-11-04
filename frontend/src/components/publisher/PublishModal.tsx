@@ -91,12 +91,21 @@ export const PublishModal: React.FC = () => {
 
       // Schedule each selected clip
       let successCount = 0;
-      for (const clip of clips) {
+      for (let i = 0; i < clips.length; i++) {
+        const clip = clips[i];
+        let schedTitle = title || clip.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
+        if (clips.length > 1) {
+          if (schedTitle.includes('{part}') || schedTitle.includes('{n}')) {
+            schedTitle = schedTitle.replace(/\{part\}|\{n\}/gi, String(i + 1));
+          } else if (!schedTitle.toLowerCase().endsWith(`part ${i + 1}`)) {
+            schedTitle = `${schedTitle.trim()} - Part ${i + 1}`;
+          }
+        }
         const ok = await createSchedule({
           clip_path: clip.name,
           targets,
-          title: title || clip.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
-          caption,
+          title: schedTitle,
+          caption: caption.replace(/\{part\}|\{n\}/gi, String(i + 1)),
           privacy: 'public',
           scheduled_time: isoTime,
         });
@@ -271,14 +280,52 @@ export const PublishModal: React.FC = () => {
 
           {/* Title */}
           <div>
-            <label className="text-xs text-slate-400 font-semibold block mb-1.5">Reel Title</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs text-slate-300 font-semibold">
+                YouTube / Reel Upload Title
+              </label>
+              {clips.length > 1 && (
+                <span className="text-[10px] text-slate-400">
+                  Supports <code className="text-indigo-300 bg-white/5 px-1 py-0.5 rounded font-mono">{"{part}"}</code> placeholder
+                </span>
+              )}
+            </div>
             <input
               type="text"
               className="glass-input text-xs w-full"
-              placeholder="Catchy viral hook / title..."
+              placeholder="e.g. Adventure - Stand-up Comedy by Ravi Gupta"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
+
+            {clips.length > 1 && (
+              <div className="mt-2.5 p-3 rounded-2xl bg-slate-900/60 border border-white/5 text-xs space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                  <span>Sequential Title Preview (Uploading Part 1 to {clips.length})</span>
+                  <span className="font-mono text-indigo-400 text-[10px]">{clips.length} parts queued</span>
+                </div>
+                <div className="font-medium text-white text-xs flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 text-[10px] font-mono shrink-0">
+                    Part 1
+                  </span>
+                  <span className="truncate">
+                    {title.includes('{part}') || title.includes('{n}')
+                      ? title.replace(/\{part\}|\{n\}/gi, '1')
+                      : `${title.trim() || 'Video'} - Part 1`}
+                  </span>
+                </div>
+                <div className="font-medium text-slate-400 text-xs flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded-md bg-white/10 text-slate-400 text-[10px] font-mono shrink-0">
+                    Part {clips.length}
+                  </span>
+                  <span className="truncate">
+                    {title.includes('{part}') || title.includes('{n}')
+                      ? title.replace(/\{part\}|\{n\}/gi, String(clips.length))
+                      : `${title.trim() || 'Video'} - Part ${clips.length}`}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Caption & Hashtags */}

@@ -57,9 +57,28 @@ export const usePublishStore = create<PublishState>((set, get) => ({
   totalBatchCount: 1,
   batchStageMsg: '',
 
-  openPublishModal: (clips) => {
+  openPublishModal: (rawClips) => {
+    // Sort incoming clips ascending by part number (Part 1, Part 2, ... Part 18)
+    const extractPart = (name: string): number => {
+      const m = name.match(/(?:part[_\s\-]*|viral[_\s\-]*#?|[_\s\-])(\d+)(?:\.mp4)?$/i)
+        || name.match(/(\d+)(?:\.mp4)?$/i);
+      return m ? parseInt(m[1], 10) : 999999;
+    };
+    const clips = [...rawClips].sort((a, b) => {
+      const diff = extractPart(a.name) - extractPart(b.name);
+      if (diff !== 0) return diff;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
     const first = clips[0];
-    const initialTitle = first ? first.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ') : '';
+    let cleanBaseTitle = '';
+    if (first) {
+      let s = first.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
+      s = s.replace(/[\s\-_]+(?:part|viral)[\s\-_]*\d*$/i, '');
+      s = s.replace(/[\s\-_]+\d+$/, '');
+      cleanBaseTitle = s.replace(/\s+/g, ' ').trim();
+    }
+    const initialTitle = cleanBaseTitle || (first ? first.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ') : '');
     set({
       modalOpen: true,
       clips,
@@ -116,8 +135,8 @@ export const usePublishStore = create<PublishState>((set, get) => ({
   },
 
   executePublish: async () => {
-    const { clips, selectedAccountIds, title, caption } = get();
-    if (clips.length === 0) {
+    const { clips: rawClips, selectedAccountIds, title, caption } = get();
+    if (rawClips.length === 0) {
       showToast('No clips selected to publish', 'warning');
       return false;
     }
@@ -125,6 +144,18 @@ export const usePublishStore = create<PublishState>((set, get) => ({
       showToast('Please select at least one social media channel', 'warning');
       return false;
     }
+
+    // Ensure clips are strictly sorted ascending by part number (Part 1 to Part N)
+    const extractPart = (name: string): number => {
+      const m = name.match(/(?:part[_\s\-]*|viral[_\s\-]*#?|[_\s\-])(\d+)(?:\.mp4)?$/i)
+        || name.match(/(\d+)(?:\.mp4)?$/i);
+      return m ? parseInt(m[1], 10) : 999999;
+    };
+    const clips = [...rawClips].sort((a, b) => {
+      const diff = extractPart(a.name) - extractPart(b.name);
+      if (diff !== 0) return diff;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
 
     set({ isPublishing: true, overallProgress: 5 });
     try {
@@ -193,6 +224,7 @@ export const usePublishStore = create<PublishState>((set, get) => ({
           clip_paths: clips.map((c) => c.url || c.name),
           clips: clips.map((c) => ({ clip_name: c.name, clip_url: c.url })),
           title,
+          title_prefix: title,
           caption,
           target_account_ids: Array.from(selectedAccountIds),
           targets,

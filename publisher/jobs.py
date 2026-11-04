@@ -3,6 +3,7 @@ publisher/jobs.py — Background multi-account publisher orchestrator and live s
 """
 
 import os
+import re
 import uuid
 import datetime
 import threading
@@ -109,11 +110,12 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                     job["targets"][i]["stage"] = f"Uploading to YouTube... ({pct}%)"
 
             yt_cfg = target.youtube_config
-            video_title = (
+            raw_single_title = (
                 (yt_cfg.title if yt_cfg and yt_cfg.title else None)
                 or request.title
                 or clip_file.stem
             )
+            video_title = (raw_single_title or "ClipForge Short").replace("_", " ").strip()
             video_desc = (yt_cfg.description if yt_cfg else "") or request.caption or ""
             video_tags = (yt_cfg.tags if yt_cfg else []) or ["ClipForge", "Shorts"]
             privacy = (yt_cfg.privacy if yt_cfg else None) or request.privacy or "public"
@@ -430,14 +432,43 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                         rem_t["error"] = f"Held: Waiting for Part {clip_idx + 1} to be resolved"
             return
 
-        clip_title_prefix = request.title_prefix or clip_file.stem
-        # Format title cleanly
-        if len(request.clip_paths) > 1 and "{part}" not in clip_title_prefix and not clip_title_prefix.lower().endswith(f"part {clip_idx+1}"):
-            clip_title = f"{clip_title_prefix} - Part {clip_idx + 1}"
-        else:
-            clip_title = clip_title_prefix.replace("{part}", str(clip_idx + 1))
+        # Determine actual part number of this clip (fallback to clip_idx + 1)
+        part_m = (
+            re.search(r"part[_\s\-]*(\d+)", clip_file.stem, re.IGNORECASE)
+            or re.search(r"viral[_\s\-]*#?(\d+)", clip_file.stem, re.IGNORECASE)
+            or re.search(r"[_\s\-](\d+)$", clip_file.stem)
+            or re.search(r"(\d+)$", clip_file.stem)
+        )
+        actual_part_num = int(part_m.group(1)) if part_m else (clip_idx + 1)
 
-        clip_caption = (request.caption or clip_title).replace("{part}", str(clip_idx + 1))
+        raw_prefix = request.title_prefix or request.title
+        if raw_prefix:
+            clean_prefix = raw_prefix.replace("_", " ").strip()
+            # If user didn't supply an explicit {part} or {n} placeholder, strip accidental trailing part numbers
+            if "{part}" not in clean_prefix.lower() and "{n}" not in clean_prefix.lower():
+                clean_prefix = re.sub(r"[\s\-_]+(part|viral)[\s\-_]*\d*$", "", clean_prefix, flags=re.IGNORECASE).strip()
+                clean_prefix = re.sub(r"[\s\-_]+\d+$", "", clean_prefix).strip()
+        else:
+            stem_clean = clip_file.stem.replace("_", " ").strip()
+            stem_clean = re.sub(r"[\s\-_]+(part|viral)[\s\-_]*\d*$", "", stem_clean, flags=re.IGNORECASE).strip()
+            stem_clean = re.sub(r"[\s\-_]+\d+$", "", stem_clean).strip()
+            clean_prefix = stem_clean or "Video"
+
+        # Format title cleanly
+        if "{part}" in clean_prefix.lower():
+            clip_title = re.sub(r"\{part\}", str(actual_part_num), clean_prefix, flags=re.IGNORECASE)
+        elif "{n}" in clean_prefix.lower():
+            clip_title = re.sub(r"\{n\}", str(actual_part_num), clean_prefix, flags=re.IGNORECASE)
+        elif len(request.clip_paths) > 1:
+            clip_title = f"{clean_prefix} - Part {actual_part_num}"
+        else:
+            clip_title = clean_prefix
+
+        clip_caption = (request.caption or clip_title)
+        if "{part}" in clip_caption.lower():
+            clip_caption = re.sub(r"\{part\}", str(actual_part_num), clip_caption, flags=re.IGNORECASE)
+        if "{n}" in clip_caption.lower():
+            clip_caption = re.sub(r"\{n\}", str(actual_part_num), clip_caption, flags=re.IGNORECASE)
 
         with _jobs_lock:
             batch["current_clip_index"] = clip_idx
@@ -650,8 +681,8 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                 "batch_id": batch_id,
                 "clip_path": str(clip_file),
                 "clip_name": clip_file.name,
-                "title": f"{request.title_prefix or ''} Part {clip_idx + 1}".strip() or clip_file.stem,
-                "caption": request.caption or "",
+                "title": clip_title,
+                "caption": clip_caption,
                 "status": clip_status,
                 "started_at": batch["started_at"],
                 "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -697,6 +728,20 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
 def start_batch_publish_job(request: BatchPublishRequest) -> dict:
     batch_id = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # Ensure clip paths are strictly sorted ascending by part number (Part 1 to Part N)
+    def _extract_part_num(path_str: str) -> tuple:
+        stem = Path(path_str).stem
+        m = (
+            re.search(r"part[_\s\-]*(\d+)", stem, re.IGNORECASE)
+            or re.search(r"viral[_\s\-]*#?(\d+)", stem, re.IGNORECASE)
+            or re.search(r"[_\s\-](\d+)$", stem)
+            or re.search(r"(\d+)$", stem)
+        )
+        return (0, int(m.group(1)), stem) if m else (1, 0, stem)
+
+    if request.clip_paths and len(request.clip_paths) > 1:
+        request.clip_paths = sorted(request.clip_paths, key=_extract_part_num)
 
     clips_list = []
     for clip_path in request.clip_paths:

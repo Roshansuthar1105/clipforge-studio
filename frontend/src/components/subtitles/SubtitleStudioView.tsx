@@ -90,6 +90,23 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
 
   const [overlayScope, setOverlayScope] = useState<'current' | 'folder'>('current');
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewFrameRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(300);
+
+  useEffect(() => {
+    if (previewFrameRef.current) {
+      setContainerWidth(previewFrameRef.current.clientWidth || 300);
+    }
+    const handleResize = () => {
+      if (previewFrameRef.current) {
+        setContainerWidth(previewFrameRef.current.clientWidth || 300);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const previewScale = (containerWidth || 300) / 1080;
 
   // Auto-load subtitles if clipName exists but cues are empty (e.g. on direct route / refresh)
   useEffect(() => {
@@ -98,13 +115,35 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
         .getClipSubtitles(clipName)
         .then((data) => {
           if (data && data.cues) {
+            const rawStyles: any = data.styles || data.style || {};
+            const curStyle = useSubtitleStore.getState().style;
             useSubtitleStore.setState({
               cues: data.cues,
-              style: data.style ? { ...useSubtitleStore.getState().style, ...data.style } : useSubtitleStore.getState().style,
+              style: {
+                ...curStyle,
+                ...rawStyles,
+                font_family: rawStyles.font_family || rawStyles.font_name || curStyle.font_family,
+                font_size: typeof rawStyles.font_size === 'number' ? rawStyles.font_size : curStyle.font_size,
+                text_color: rawStyles.text_color || rawStyles.primary_color || curStyle.text_color,
+                primary_color: rawStyles.primary_color || rawStyles.text_color || curStyle.primary_color,
+                highlight_color: rawStyles.highlight_color || curStyle.highlight_color,
+                outline_color: rawStyles.outline_color || curStyle.outline_color,
+                outline_width: typeof rawStyles.outline_width === 'number' ? rawStyles.outline_width : curStyle.outline_width,
+                shadow_depth: typeof rawStyles.shadow_depth === 'number' ? rawStyles.shadow_depth : curStyle.shadow_depth,
+                position_percent: typeof rawStyles.position_percent === 'number'
+                  ? rawStyles.position_percent
+                  : (typeof rawStyles.margin_v === 'number'
+                      ? Math.round((1 - rawStyles.margin_v / 1920) * 100)
+                      : curStyle.position_percent),
+                uppercase: typeof rawStyles.uppercase === 'boolean'
+                  ? rawStyles.uppercase
+                  : (rawStyles.text_transform ? rawStyles.text_transform === 'uppercase' : curStyle.uppercase),
+              },
               overlay:
                 data.overlays && data.overlays.length > 0
                   ? { ...useSubtitleStore.getState().overlay, ...data.overlays[0] }
                   : useSubtitleStore.getState().overlay,
+              clipUrl: data.clean_url || useSubtitleStore.getState().clipUrl,
             });
           }
         })
@@ -269,6 +308,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
 
           {/* 9:16 Phone Mockup Frame */}
           <div
+            ref={previewFrameRef}
             className="relative w-full max-w-[300px] aspect-[9/16] rounded-[36px] overflow-hidden border-2 border-white/20 shadow-2xl bg-black cursor-crosshair select-none ring-1 ring-white/10"
             onClick={handlePreviewClick}
             title={activeTab === 'overlay' ? 'Click anywhere on the preview to adjust text overlay placement' : 'Click anywhere on the preview to adjust subtitle placement'}
@@ -316,15 +356,19 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                       : 'inline-block px-1'
                   }`}
                   style={{
-                    fontFamily: overlay.font_family,
-                    fontSize: `${Math.round(overlay.font_size * 0.28)}px`,
+                    fontFamily: overlay.font_family || 'Arial Black',
+                    fontSize: `${Math.round(overlay.font_size * previewScale)}px`,
                     color: overlay.text_color,
                     textTransform: overlay.text_transform === 'uppercase' ? 'uppercase' : 'none',
+                    paintOrder: 'stroke fill',
                     WebkitTextStroke:
                       overlay.outline_width > 0
-                        ? `${Math.max(1, overlay.outline_width * 0.28)}px ${overlay.outline_color}`
+                        ? `${Math.max(0.3, overlay.outline_width * previewScale)}px ${overlay.outline_color}`
                         : 'none',
-                    textShadow: '0 4px 12px rgba(0,0,0,0.85)',
+                    textShadow:
+                      overlay.outline_width > 0
+                        ? `${Math.max(0.5, 1.0 * previewScale).toFixed(1)}px ${Math.max(0.5, 1.5 * previewScale).toFixed(1)}px 1px rgba(0,0,0,0.9)`
+                        : 'none',
                     backgroundColor:
                       overlay.box_style !== 'none'
                         ? `${overlay.box_color}${Math.round(overlay.box_opacity * 255)
@@ -350,12 +394,16 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                 <div
                   className="inline-block px-3 py-1.5 rounded font-black tracking-wide leading-tight"
                   style={{
-                    fontFamily: style.font_family,
-                    fontSize: `${Math.round(style.font_size * 0.28)}px`,
+                    fontFamily: style.font_family || 'Arial Black',
+                    fontSize: `${Math.round(style.font_size * previewScale)}px`,
                     color: style.text_color,
                     textTransform: style.uppercase ? 'uppercase' : 'none',
-                    WebkitTextStroke: `${Math.max(1, style.outline_width * 0.28)}px ${style.outline_color}`,
-                    textShadow: '0 4px 12px rgba(0,0,0,0.8)',
+                    paintOrder: 'stroke fill',
+                    WebkitTextStroke:
+                      style.outline_width > 0
+                        ? `${Math.max(0.3, style.outline_width * previewScale)}px ${style.outline_color}`
+                        : 'none',
+                    textShadow: `${Math.max(0.5, 1.0 * previewScale).toFixed(1)}px ${Math.max(0.5, 1.5 * previewScale).toFixed(1)}px 1px rgba(0,0,0,0.9)`,
                   }}
                 >
                   {activeCue.words && activeCue.words.length > 0 ? (
@@ -368,10 +416,9 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                           key={wIdx}
                           style={{
                             color: isHighlighted ? style.highlight_color : style.text_color,
-                            marginRight: '6px',
+                            marginRight: '5px',
                             display: 'inline-block',
-                            transform: isWordActive ? 'scale(1.1)' : 'scale(1)',
-                            transition: 'transform 0.08s ease, color 0.08s ease',
+                            transition: 'color 0.05s ease',
                           }}
                         >
                           {w.word}
@@ -459,7 +506,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                   type="button"
                   className="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
                   onClick={() => downloadSubtitles('ass')}
-                  title="Download Advanced SubStation Alpha (.ASS) style file"
+                  title="Download Hinglish Advanced SubStation Alpha (.ASS) style file"
                 >
                   <Download className="w-3.5 h-3.5 text-emerald-400" /> ASS
                 </button>

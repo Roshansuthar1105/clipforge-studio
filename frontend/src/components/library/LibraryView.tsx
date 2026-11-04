@@ -69,7 +69,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     return () => window.removeEventListener('clipforge:refresh-library', handleRefresh);
   }, []);
 
-  const selectedClipsArray = clips.filter((c) => selectedClips.has(c.id || c.name));
+  const selectedClipsArray = clips
+    .filter((c) => selectedClips.has(c.id || c.name))
+    .sort((a, b) => {
+      const numA = typeof a.part_number === 'number' ? a.part_number : 999999;
+      const numB = typeof b.part_number === 'number' ? b.part_number : 999999;
+      if (numA !== numB) return numA - numB;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
 
   // Filter groups or downloads based on search query
   const filteredGroups = groupedClips

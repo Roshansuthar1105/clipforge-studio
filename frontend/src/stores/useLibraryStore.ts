@@ -59,11 +59,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
       const clips: ClipItem[] = (clipsRes.clips || []).map((c: any) => {
         const rawName = c.name || c.filename || '';
-        const partMatch = c.part_label
+        const partMatch = c.part_number !== undefined && c.part_number !== null
           ? null
-          : rawName.match(/(?:part[_-]?|_|\s)(\d+)(?:\.mp4)?$/i);
-        const partNumber = c.part_number || (partMatch ? parseInt(partMatch[1], 10) : undefined);
-        const partLabel = c.part_label || (partNumber ? `Part ${partNumber}` : undefined);
+          : (rawName.match(/(?:part[_\s\-]*|viral[_\s\-]*#?|[_\s\-])(\d+)(?:\.mp4)?$/i)
+             || rawName.match(/(\d+)(?:\.mp4)?$/i));
+        const partNumber = c.part_number !== undefined && c.part_number !== null
+          ? c.part_number
+          : (partMatch ? parseInt(partMatch[1], 10) : undefined);
+        const partLabel = c.part_label || (partNumber !== undefined ? `Part ${partNumber}` : undefined);
 
         return {
           ...c,
@@ -104,10 +107,21 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         groupMap.get(key)!.clips.push(clip);
       });
 
+      // Natural numerical sort inside each folder group: Part 1, Part 2, ... Part 18
+      groupMap.forEach((grp) => {
+        grp.clips.sort((a, b) => {
+          const numA = typeof a.part_number === 'number' ? a.part_number : 999999;
+          const numB = typeof b.part_number === 'number' ? b.part_number : 999999;
+          if (numA !== numB) return numA - numB;
+          return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
+      });
+
       const groupedClips = Array.from(groupMap.values());
+      const sortedClips = groupedClips.flatMap((g) => g.clips);
 
       set({
-        clips,
+        clips: sortedClips.length > 0 ? sortedClips : clips,
         groupedClips,
         downloads,
         isLoading: false,

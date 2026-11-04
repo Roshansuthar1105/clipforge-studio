@@ -266,10 +266,19 @@ def clean_error_message(err_msg: str) -> str:
 
 
 def safe_name(value: str) -> str:
-    """Remove characters that are unsafe in Windows filenames."""
-    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
-    value = re.sub(r"\s+", " ", value).strip(" .")
-    return value[:100] or "video"
+    """Remove characters that are unsafe in Windows filenames without inserting underscores."""
+    if not value:
+        return "video"
+    # Convert pipe and colon to spaced hyphen
+    value = re.sub(r"[\s]*[|:][\s]*", " - ", value)
+    # Remove forbidden characters: < > " / \ | ? * and control chars
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", value)
+    # Replace existing underscores with spaces
+    value = value.replace("_", " ")
+    # Collapse multiple spaces and clean dangling hyphens
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s*-\s*-+\s*", " - ", value)
+    return value.strip(" .-")[:100] or "video"
 
 
 def clean_source_video_title(stem: str) -> str:
@@ -1101,9 +1110,9 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             stem_base = re.sub(r"[_\-\s]+part[_\-\s]*$", "", stem_base, flags=re.IGNORECASE).strip()
             safe_stem = safe_name(stem_base or "clip")
             if current_moment:
-                filename = f"{safe_stem}_viral_{index + 1}.mp4"
+                filename = f"{safe_stem} Viral {index + 1}.mp4"
             else:
-                filename = f"{safe_stem}_{index + 1}.mp4"
+                filename = f"{safe_stem} Part {index + 1}.mp4"
             output_path = output_folder / filename
 
             # Calculate dynamic vertical positions & styles
@@ -2204,7 +2213,12 @@ def list_available_clips():
                 duration_str = f"{mins}:{secs:02d}"
 
                 stem = file.stem
-                part_match = re.search(r"part_(\d+)", stem, re.IGNORECASE) or re.search(r"_(\d+)$", stem) or re.search(r"\s+(\d+)$", stem)
+                part_match = (
+                    re.search(r"part[_\s\-]*(\d+)", stem, re.IGNORECASE)
+                    or re.search(r"viral[_\s\-]*#?(\d+)", stem, re.IGNORECASE)
+                    or re.search(r"[_\s\-](\d+)$", stem)
+                    or re.search(r"(\d+)$", stem)
+                )
                 part_num = int(part_match.group(1)) if part_match else 1
                 part_label = f"Part {part_num}" if part_match else ""
 
@@ -2285,6 +2299,10 @@ def list_available_clips():
             grp["thumbnail_url"] = grp["clips"][0]["thumbnail_url"]
 
     groups_list.sort(key=lambda g: g["modified"], reverse=True)
+
+    # Sort all_clips naturally by folder recency and ascending part_number within each folder
+    folder_mtimes = {g["folder_name"]: g["modified"] for g in groups_list}
+    all_clips.sort(key=lambda c: (-folder_mtimes.get(c["folder_name"], 0), c["part_number"], c["name"]))
 
     return {
         "clips": all_clips,

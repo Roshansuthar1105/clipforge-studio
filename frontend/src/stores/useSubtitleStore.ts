@@ -6,51 +6,61 @@ export const STYLE_PRESETS: Record<string, Partial<SubtitleStyle>> = {
   hormozi: {
     preset_name: 'hormozi',
     font_family: 'Arial Black',
-    font_size: 78,
+    font_size: 48,
     text_color: '#FFFFFF',
+    primary_color: '#FFFFFF',
     highlight_color: '#FACC15', // Vibrant Yellow
     outline_color: '#000000',
-    outline_width: 8,
+    outline_width: 0.5,
+    shadow_depth: 1.5,
     uppercase: true,
   },
   devin: {
     preset_name: 'devin',
     font_family: 'Arial Black',
-    font_size: 74,
+    font_size: 48,
     text_color: '#FFFFFF',
+    primary_color: '#FFFFFF',
     highlight_color: '#06B6D4', // Electric Cyan
     outline_color: '#000000',
-    outline_width: 7,
+    outline_width: 0.5,
+    shadow_depth: 1.5,
     uppercase: true,
   },
   beast: {
     preset_name: 'beast',
     font_family: 'Arial Black',
-    font_size: 80,
+    font_size: 50,
     text_color: '#FFFFFF',
+    primary_color: '#FFFFFF',
     highlight_color: '#EF4444', // Punchy Red
     outline_color: '#000000',
-    outline_width: 9,
+    outline_width: 0.75,
+    shadow_depth: 1.5,
     uppercase: true,
   },
   neon: {
     preset_name: 'neon',
     font_family: 'Arial Black',
-    font_size: 72,
+    font_size: 46,
     text_color: '#22C55E', // Glowing Green
+    primary_color: '#22C55E',
     highlight_color: '#EC4899', // Bright Pink
     outline_color: '#052e16',
-    outline_width: 6,
+    outline_width: 0.5,
+    shadow_depth: 1.5,
     uppercase: true,
   },
   minimal: {
     preset_name: 'minimal',
     font_family: 'Arial',
-    font_size: 64,
+    font_size: 44,
     text_color: '#FFFFFF',
+    primary_color: '#FFFFFF',
     highlight_color: '#93C5FD', // Soft Blue
     outline_color: '#1E293B',
-    outline_width: 4,
+    outline_width: 0.4,
+    shadow_depth: 1.0,
     uppercase: false,
   },
 };
@@ -58,14 +68,16 @@ export const STYLE_PRESETS: Record<string, Partial<SubtitleStyle>> = {
 const DEFAULT_STYLE: SubtitleStyle = {
   preset_name: 'hormozi',
   font_family: 'Arial Black',
-  font_size: 78,
+  font_size: 48,
   text_color: '#FFFFFF',
+  primary_color: '#FFFFFF',
   highlight_color: '#FACC15',
   outline_color: '#000000',
-  outline_width: 8,
+  outline_width: 0.5,
+  shadow_depth: 1.5,
   position_preset: 'safe',
-  position_percent: 78,
-  position_y: 1498, // 78% of 1920
+  position_percent: 83,
+  position_y: 1594, // 83% of 1920
   uppercase: true,
   words_per_screen: 3,
 };
@@ -245,11 +257,34 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
       }
       const loadedCues = data?.cues || [];
       const loadedCaption = data?.caption || loadedCues.map((c: any) => c.text).join(' ');
+      const rawStyles: any = data?.styles || data?.style || {};
+      const normalizedStyle: SubtitleStyle = {
+        ...DEFAULT_STYLE,
+        ...rawStyles,
+        font_family: rawStyles.font_family || rawStyles.font_name || DEFAULT_STYLE.font_family,
+        font_size: typeof rawStyles.font_size === 'number' ? rawStyles.font_size : DEFAULT_STYLE.font_size,
+        text_color: rawStyles.text_color || rawStyles.primary_color || DEFAULT_STYLE.text_color,
+        primary_color: rawStyles.primary_color || rawStyles.text_color || DEFAULT_STYLE.primary_color,
+        highlight_color: rawStyles.highlight_color || DEFAULT_STYLE.highlight_color,
+        outline_color: rawStyles.outline_color || DEFAULT_STYLE.outline_color,
+        outline_width: typeof rawStyles.outline_width === 'number' ? rawStyles.outline_width : DEFAULT_STYLE.outline_width,
+        shadow_depth: typeof rawStyles.shadow_depth === 'number' ? rawStyles.shadow_depth : DEFAULT_STYLE.shadow_depth,
+        position_percent: typeof rawStyles.position_percent === 'number'
+          ? rawStyles.position_percent
+          : (typeof rawStyles.margin_v === 'number'
+              ? Math.round((1 - rawStyles.margin_v / 1920) * 100)
+              : DEFAULT_STYLE.position_percent),
+        uppercase: typeof rawStyles.uppercase === 'boolean'
+          ? rawStyles.uppercase
+          : (rawStyles.text_transform ? rawStyles.text_transform === 'uppercase' : DEFAULT_STYLE.uppercase),
+      };
+
       set({
         cues: loadedCues,
         caption: loadedCaption,
-        style: data?.style ? { ...DEFAULT_STYLE, ...data.style } : { ...DEFAULT_STYLE },
+        style: normalizedStyle,
         overlay: loadedOverlay,
+        clipUrl: data?.clean_url || clipUrl,
       });
     } catch {
       showToast('Could not load existing subtitles. Creating blank session.', 'info');
@@ -344,11 +379,11 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
   },
 
   setPositionPreset: (preset) => {
-    let pct = 78;
+    let pct = 83;
     if (preset === 'top') pct = 20;
     else if (preset === 'middle') pct = 50;
-    else if (preset === 'safe') pct = 78;
-    else if (preset === 'bottom') pct = 85;
+    else if (preset === 'safe') pct = 83;
+    else if (preset === 'bottom') pct = 88;
 
     const y = Math.round((pct / 100) * 1920);
     set((state) => ({
@@ -566,7 +601,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
     const { clipName, cues, style, overlay } = get();
     try {
       const overlays = overlay.text.trim() ? [overlay] : [];
-      await apiClient.saveClipSubtitles(clipName, { cues, style, overlays });
+      await apiClient.saveClipSubtitles(clipName, { cues, style, styles: style, overlays });
       showToast('Saved subtitle & overlay draft', 'success');
     } catch {
       showToast('Failed to save subtitles draft', 'error');
@@ -587,7 +622,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
     });
     try {
       const overlays = overlay.text.trim() ? [overlay] : [];
-      const res = await apiClient.burnSubtitles(clipName, { cues, style, overlays });
+      const res = await apiClient.burnSubtitles(clipName, { cues, style, styles: style, overlays });
       if (!res?.job_id || res?.status === 'completed') {
         set({ isBurning: false, burnProgress: 100, currentClipProgress: 100, burnStageMsg: 'Done!' });
         showToast('Subtitles & text overlay burned into video successfully!', 'success');
@@ -648,7 +683,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
     });
     try {
       const overlays = overlay.text.trim() ? [overlay] : [];
-      const res = await apiClient.burnGroupSubtitles(folderPath, { style, overlays });
+      const res = await apiClient.burnGroupSubtitles(folderPath, { style, styles: style, overlays });
       const jobId = res.job_id;
       set({ activeSubtitleJobId: jobId });
 

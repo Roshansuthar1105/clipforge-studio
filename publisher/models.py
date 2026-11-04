@@ -70,6 +70,7 @@ class BatchPublishRequest(BaseModel):
     clips: Optional[List[Any]] = None
     targets: Optional[List[PublishTarget]] = None
     target_account_ids: Optional[List[str]] = None
+    title: Optional[str] = None
     title_prefix: Optional[str] = None
     caption: Optional[str] = None
     privacy: Optional[str] = "public"
@@ -78,6 +79,8 @@ class BatchPublishRequest(BaseModel):
     @classmethod
     def populate_defaults(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if not data.get("title_prefix") and data.get("title"):
+                data["title_prefix"] = data["title"]
             if not data.get("clip_paths") and data.get("clips"):
                 paths = []
                 for c in data["clips"]:

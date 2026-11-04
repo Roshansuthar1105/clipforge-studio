@@ -211,13 +211,18 @@ export interface SubtitleStyle {
   font_family: string;
   font_size: number;
   text_color: string;
+  primary_color?: string;
   highlight_color: string;
   outline_color: string;
   outline_width: number;
+  shadow_depth?: number;
   position_preset: 'top' | 'middle' | 'safe' | 'bottom';
   position_percent: number;
   position_y: number;
+  margin_v?: number;
+  font_name?: string;
   uppercase: boolean;
+  text_transform?: string;
   words_per_screen: number;
 }
 

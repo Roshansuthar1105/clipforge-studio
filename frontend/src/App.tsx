@@ -207,6 +207,10 @@ export const App: React.FC = () => {
         videoUrl={phoneVideoUrl}
         videoName={phoneVideoName}
         onPublish={handleOpenPublishSingle}
+        onEditSubtitles={(name, url) => {
+          setPhonePlayerOpen(false);
+          handleOpenSubtitleStudio(name, url);
+        }}
       />
 
       <AuthModal />

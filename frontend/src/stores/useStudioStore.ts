@@ -117,10 +117,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const meta = await apiClient.getVideoPreview(url);
       const cacheCheck = await apiClient.checkCache(url).catch(() => ({ cached: false }));
 
+      const rawTitle = meta.title || '';
+      const cleanTitle = rawTitle
+        .replace(/[\s]*[|:][\s]*/g, ' - ')
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
       set({
         metadata: meta,
         cached: !!cacheCheck.cached,
-        titleText: meta.title || '',
+        titleText: cleanTitle,
         startTime: 0,
         endTime: meta.duration || 300,
         isLoadingPreview: false,
@@ -205,7 +212,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         start_time: s.startTime,
         end_time: isPreview ? s.startTime + Math.min(30, s.clipLength) : s.endTime,
         is_preview: isPreview,
-        video_title: s.metadata?.title || undefined,
+        video_title: s.titleText || s.metadata?.title || undefined,
+        title: s.titleText || s.metadata?.title || undefined,
         show_title: false,
         show_parts: false,
       };

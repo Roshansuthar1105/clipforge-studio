@@ -217,7 +217,9 @@ export const apiClient = {
   // ----------------------------------------------------
   async getClipSubtitles(clipName: string): Promise<{
     cues: SubtitleCue[];
-    style: SubtitleStyle;
+    style?: SubtitleStyle;
+    styles?: SubtitleStyle;
+    clean_url?: string;
     overlays?: TextOverlayConfig[];
     caption?: string;
     full_text?: string;
@@ -228,7 +230,7 @@ export const apiClient = {
   },
   async saveClipSubtitles(
     clipName: string,
-    payload: { cues: SubtitleCue[]; style: SubtitleStyle; overlays?: TextOverlayConfig[] }
+    payload: { cues: SubtitleCue[]; style?: Partial<SubtitleStyle>; styles?: Partial<SubtitleStyle>; overlays?: TextOverlayConfig[] }
   ): Promise<{ success: boolean }> {
     const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/save`, payload);
     return res.data;

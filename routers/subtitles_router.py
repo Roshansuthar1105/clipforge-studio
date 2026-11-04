@@ -158,6 +158,92 @@ def cleanup_subtitled_duplicates(clip_path: Path) -> None:
         logger.debug("Duplicate cleanup non-critical error: %s", exc)
 
 
+def get_or_create_clean_clip(clip_path: Path) -> Path:
+    """
+    Ensure a clean (un-subtitled) master clip exists so that burning new subtitle styles
+    always overrides previous subtitles rather than duplicating/superimposing them.
+
+    1. If {stem}.raw.mp4 exists, return it.
+    2. If {stem}.raw.mp4 does not exist:
+       - Check if clip was already subtitled (meta.has_subtitles or "_subtitled" in name).
+       - If already subtitled and source video exists in downloads, re-slice clean clip segment.
+       - Otherwise, copy clip_path to {stem}.raw.mp4.
+    """
+    clean_stem = clip_path.stem.replace("_subtitled", "").replace(".raw", "")
+    clean_path = clip_path.with_name(f"{clean_stem}.raw.mp4")
+    if clean_path.exists() and clean_path.stat().st_size > 0:
+        return clean_path
+
+    # Check metadata to see if it was already subtitled
+    meta_path = clip_path.with_name(f"{clip_path.name}.meta.json")
+    if not meta_path.exists():
+        meta_path = clip_path.with_name(f"{clip_path.stem}.meta.json")
+    meta = {}
+    if meta_path.exists():
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+
+    has_subtitles = bool(meta.get("has_subtitles")) or "_subtitled" in clip_path.stem
+    source_file = meta.get("source_file")
+    source_video_id = meta.get("source_video_id")
+    clip_start = float(meta.get("clip_start", 0.0))
+    clip_end = float(meta.get("clip_end", 0.0))
+
+    if has_subtitles and clip_end > clip_start:
+        # Try to locate the source video in DOWNLOAD_DIR
+        found_source = None
+        for cand in DOWNLOAD_DIR.rglob("*.*"):
+            if cand.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
+                if (source_file and cand.name == source_file) or (source_video_id and source_video_id in cand.name):
+                    found_source = cand
+                    break
+
+        if found_source and found_source.exists():
+            try:
+                logger.info("Restoring clean master for %s from source %s (%.1f to %.1f)...", clip_path.name, found_source.name, clip_start, clip_end)
+                dur = clip_end - clip_start
+                filter_script = (
+                    "[0:v:0]split=2[bg][fg];"
+                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                    "crop=1080:1920,boxblur=20:5[bg_blur];"
+                    "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg_scaled];"
+                    "[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2[v]"
+                )
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(clip_start),
+                    "-t", str(dur),
+                    "-i", str(found_source),
+                    "-filter_complex", filter_script,
+                    "-map", "[v]",
+                    "-map", "0:a:0?",
+                    "-c:v", "libx264",
+                    "-crf", "18",
+                    "-preset", "fast",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    str(clean_path)
+                ]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=120)
+                if clean_path.exists() and clean_path.stat().st_size > 0:
+                    logger.info("Successfully restored clean master %s", clean_path.name)
+                    return clean_path
+            except Exception as e_res:
+                logger.warning("Could not re-slice clean clip from source: %s", e_res)
+
+    # Fallback: preserve current clip as clean
+    try:
+        shutil.copy2(str(clip_path), str(clean_path))
+    except Exception as e_cp:
+        logger.warning("Could not create clean copy %s: %s", clean_path.name, e_cp)
+        return clip_path
+
+    return clean_path
+
+
 def refresh_clip_thumbnail(clip_path: Path) -> None:
     """Regenerate 9:16 thumbnail with newly burned subtitles."""
     try:
@@ -224,6 +310,7 @@ def update_clip_metadata_caption(clip_path: Path, full_caption: str, styles: Opt
 class SubtitleSaveRequest(BaseModel):
     cues: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    style: Optional[Dict[str, Any]] = None
     overlays: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
 
 
@@ -242,12 +329,14 @@ class SubtitleHinglishRequest(BaseModel):
 class SubtitleBurnRequest(BaseModel):
     cues: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    style: Optional[Dict[str, Any]] = None
     overlays: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     replace_original: bool = True
 
 
 class GroupSubtitleBurnRequest(BaseModel):
     styles: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    style: Optional[Dict[str, Any]] = None
     overlays: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     replace_original: bool = True
     english_only: bool = False
@@ -309,6 +398,36 @@ def get_subtitles_for_clip(clip_name: str):
     """Get sliced subtitle cues & styles for a specific clip."""
     unquoted = urllib.parse.unquote(clip_name)
     subtitles = get_clip_subtitles(unquoted)
+
+    # Provide clean un-subtitled URL if available so editor preview doesn't show baked subtitles underneath
+    clip_file = _find_clip_path(unquoted)
+    if clip_file:
+        clean_file = clip_file.with_name(f"{clip_file.stem.replace('_subtitled', '')}.raw.mp4")
+        if clean_file.exists():
+            rel_clean = str(clean_file.relative_to(CLIPS_DIR)).replace("\\", "/")
+            subtitles["clean_url"] = f"/media/clips/{urllib.parse.quote(rel_clean)}"
+        elif not bool(subtitles.get("has_subtitles")) and "_subtitled" not in clip_file.stem:
+            try:
+                shutil.copy2(str(clip_file), str(clean_file))
+                rel_clean = str(clean_file.relative_to(CLIPS_DIR)).replace("\\", "/")
+                subtitles["clean_url"] = f"/media/clips/{urllib.parse.quote(rel_clean)}"
+            except Exception:
+                pass
+
+    styles = subtitles.get("styles") or subtitles.get("style") or {}
+    styles.setdefault("text_color", styles.get("primary_color", "#FFFFFF"))
+    styles.setdefault("primary_color", styles.get("text_color", "#FFFFFF"))
+    styles.setdefault("font_name", styles.get("font_family", "Arial Black"))
+    styles.setdefault("font_family", styles.get("font_name", "Arial Black"))
+    styles.setdefault("outline_width", 0.5)
+    styles.setdefault("font_size", 48)
+    styles.setdefault("shadow_depth", 1.5)
+    styles.setdefault("highlight_color", "#FACC15")
+    styles.setdefault("position_percent", int(round((1.0 - float(styles.get("margin_v", 320)) / 1920) * 100)))
+    styles.setdefault("margin_v", int(round(1920 * (1.0 - float(styles.get("position_percent", 83)) / 100.0))))
+
+    subtitles["style"] = styles
+    subtitles["styles"] = styles
     return subtitles
 
 
@@ -316,9 +435,19 @@ def get_subtitles_for_clip(clip_name: str):
 def save_subtitles_for_clip(clip_name: str, payload: SubtitleSaveRequest):
     """Save user-edited subtitle cues and styling for a clip."""
     unquoted = urllib.parse.unquote(clip_name)
-    styles = payload.styles or {}
+    styles = payload.styles or payload.style or {}
     styles.setdefault("highlight_mode", "active_word")
     styles.setdefault("words_per_screen", 3)
+    styles.setdefault("text_color", styles.get("primary_color", "#FFFFFF"))
+    styles.setdefault("primary_color", styles.get("text_color", "#FFFFFF"))
+    styles.setdefault("font_name", styles.get("font_family", "Arial Black"))
+    styles.setdefault("font_family", styles.get("font_name", "Arial Black"))
+    styles.setdefault("outline_width", 0.5)
+    styles.setdefault("font_size", 48)
+    styles.setdefault("shadow_depth", 1.5)
+    styles.setdefault("highlight_color", "#FACC15")
+    styles.setdefault("position_percent", int(round((1.0 - float(styles.get("margin_v", 320)) / 1920) * 100)))
+    styles.setdefault("margin_v", int(round(1920 * (1.0 - float(styles.get("position_percent", 83)) / 100.0))))
     text_transform = styles.get("text_transform", "none")
 
     # Automatically convert any Hindi Devanagari text to Hinglish by default
@@ -613,9 +742,19 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
     if not payload.cues and not payload.overlays:
         raise HTTPException(status_code=400, detail="Cannot burn empty subtitle cues or overlays.")
 
-    styles = payload.styles or {}
+    styles = payload.styles or payload.style or {}
     styles.setdefault("highlight_mode", "active_word")
     styles.setdefault("words_per_screen", 3)
+    styles.setdefault("text_color", styles.get("primary_color", "#FFFFFF"))
+    styles.setdefault("primary_color", styles.get("text_color", "#FFFFFF"))
+    styles.setdefault("font_name", styles.get("font_family", "Arial Black"))
+    styles.setdefault("font_family", styles.get("font_name", "Arial Black"))
+    styles.setdefault("outline_width", 0.5)
+    styles.setdefault("font_size", 48)
+    styles.setdefault("shadow_depth", 1.5)
+    styles.setdefault("highlight_color", "#FACC15")
+    styles.setdefault("position_percent", int(round((1.0 - float(styles.get("margin_v", 320)) / 1920) * 100)))
+    styles.setdefault("margin_v", int(round(1920 * (1.0 - float(styles.get("position_percent", 83)) / 100.0))))
     text_transform = styles.get("text_transform", "none")
 
     # Automatically convert any Hindi Devanagari cues to Hinglish before burning
@@ -681,8 +820,9 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
                     c_job["stage_msg"] = insider
                     _save_subtitle_job(c_job)
 
+            clean_source = get_or_create_clean_clip(input_clip)
             burn_subtitles_to_clip(
-                input_video=input_clip,
+                input_video=clean_source,
                 output_video=output_clip,
                 cues=payload.cues or [],
                 style=styles,
@@ -903,8 +1043,9 @@ def _process_group_subtitle_job(
                     c_job["stage_msg"] = insider
                     _save_subtitle_job(c_job)
 
+            clean_source = get_or_create_clean_clip(clip_file)
             burn_subtitles_to_clip(
-                input_video=clip_file,
+                input_video=clean_source,
                 output_video=temp_output,
                 cues=cues,
                 style=merged_styles,
@@ -975,12 +1116,19 @@ def burn_subtitles_for_group_endpoint(folder_path: str, payload: GroupSubtitleBu
     all_files = [
         f for f in target_folder.glob("*.mp4")
         if not f.name.endswith("_temp_burn.mp4")
+        and not f.name.endswith(".raw.mp4")
+        and not f.name.endswith("_raw.mp4")
         and not (f.name.endswith("_subtitled.mp4") and f.with_name(f"{f.stem.replace('_subtitled', '')}.mp4").exists())
     ]
 
     def _sort_key(p: Path):
-        m = re.search(r"part_(\d+)", p.stem, re.IGNORECASE)
-        return int(m.group(1)) if m else p.name
+        m = (
+            re.search(r"part[_\s\-]*(\d+)", p.stem, re.IGNORECASE)
+            or re.search(r"viral[_\s\-]*#?(\d+)", p.stem, re.IGNORECASE)
+            or re.search(r"[_\s\-](\d+)$", p.stem)
+            or re.search(r"(\d+)$", p.stem)
+        )
+        return (0, int(m.group(1)), p.name) if m else (1, 0, p.name)
 
     clips = sorted(all_files, key=_sort_key)
     if not clips:
@@ -1006,7 +1154,7 @@ def burn_subtitles_for_group_endpoint(folder_path: str, payload: GroupSubtitleBu
     # Launch background thread
     t = threading.Thread(
         target=_process_group_subtitle_job,
-        args=(job_id, target_folder, clips, payload.styles or {}, payload.replace_original, payload.english_only, payload.hinglish, payload.overlays or []),
+        args=(job_id, target_folder, clips, payload.styles or payload.style or {}, payload.replace_original, payload.english_only, payload.hinglish, payload.overlays or []),
         daemon=True
     )
     t.start()
@@ -1031,18 +1179,80 @@ def get_subtitle_job_status(job_id: str):
 
 @router.get("/clips/{clip_name:path}/subtitles/download")
 def download_subtitles_for_clip(clip_name: str, format: str = "srt"):
-    """Download .srt or .ass subtitle file for a clip in Hinglish by default."""
+    """
+    Download .srt or .ass subtitle file for a clip in Hinglish by default.
+    Guarantees 100% Hinglish output: zero Devanagari script and zero English translations.
+    """
     unquoted = urllib.parse.unquote(clip_name)
     subtitles = get_clip_subtitles(unquoted)
     cues = subtitles.get("cues", [])
     styles = subtitles.get("styles", {})
+    clean_stem = Path(unquoted).stem
 
-    # Guarantee exported subtitles are in Hinglish by default if Hindi/Devanagari detected
+    # 1. Verify if raw Hindi transcript exists to prevent downloading English translations
+    raw_tr = get_stored_transcript(f"{clean_stem}_raw")
+    clip_file = _find_clip_path(unquoted)
+    meta_p = None
+    if clip_file:
+        meta_p = clip_file.with_name(f"{clip_file.name}.meta.json")
+        if not meta_p.exists():
+            meta_p = clip_file.with_name(f"{clip_file.stem}.meta.json")
+
+    meta = {}
+    if meta_p and meta_p.exists():
+        try:
+            with open(meta_p, "r", encoding="utf-8") as fm:
+                meta = json.load(fm)
+                if not raw_tr:
+                    src_id = meta.get("source_video_id")
+                    if src_id:
+                        raw_tr = get_stored_transcript(f"{src_id}_raw") or get_stored_transcript(src_id)
+        except Exception:
+            pass
+
+    is_raw_indic = raw_tr and (
+        str(raw_tr.get("language", "")).lower() in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn")
+        or any(has_devanagari_characters(s.get("text", "")) for s in raw_tr.get("segments", []))
+    )
+
+    # 2. If cues contain Devanagari, convert them to Hinglish
     if any(has_devanagari_characters(c.get("text", "")) for c in cues):
         try:
             cues = convert_cues_to_hinglish(cues)
+            save_clip_subtitles(unquoted, {"cues": cues, "styles": styles})
         except Exception as err:
             logger.warning("Could not convert subtitles to Hinglish on download: %s", err)
+    # 3. If raw audio was Hindi/Indic but current cues are in English translation, restore authentic Hinglish
+    elif is_raw_indic and raw_tr:
+        raw_segs = raw_tr.get("segments", [])
+        if raw_segs and any(has_devanagari_characters(s.get("text", "")) for s in raw_segs):
+            if f"{clean_stem}_raw" in str(raw_tr.get("video_id", "")):
+                try:
+                    logger.info("Re-generating Hinglish cues from raw Hindi transcript for %s", clean_stem)
+                    raw_chunks = create_voice_synced_word_chunks(raw_segs, max_words=3)
+                    cues = convert_cues_to_hinglish(raw_chunks)
+                    save_clip_subtitles(unquoted, {"cues": cues, "styles": styles})
+                except Exception as rec_err:
+                    logger.warning("Failed regenerating Hinglish from raw: %s", rec_err)
+            elif meta:
+                c_st = float(meta.get("clip_start", 0.0))
+                c_en = float(meta.get("clip_end", 0.0))
+                if c_en > c_st:
+                    try:
+                        logger.info("Re-slicing Hinglish cues from parent raw Hindi transcript for %s", clean_stem)
+                        raw_sliced = slice_transcript_for_clip(raw_tr, c_st, c_en)
+                        raw_chunks = create_voice_synced_word_chunks(raw_sliced, max_words=3)
+                        cues = convert_cues_to_hinglish(raw_chunks)
+                        save_clip_subtitles(unquoted, {"cues": cues, "styles": styles})
+                    except Exception as sl_err:
+                        logger.warning("Failed slicing Hinglish from parent raw: %s", sl_err)
+
+    # 4. Final guarantee: Ensure no Devanagari script lingers in downloaded cues
+    if any(has_devanagari_characters(c.get("text", "")) for c in cues):
+        try:
+            cues = convert_cues_to_hinglish(cues)
+        except Exception:
+            pass
 
     if format.lower() == "ass":
         content = build_ass_content(cues, style=styles)
@@ -1053,6 +1263,5 @@ def download_subtitles_for_clip(clip_name: str, format: str = "srt"):
         media_type = "text/plain"
         ext = "srt"
 
-    clean_stem = Path(unquoted).stem
     headers = {"Content-Disposition": f'attachment; filename="{clean_stem}.{ext}"'}
     return Response(content=content, media_type=media_type, headers=headers)

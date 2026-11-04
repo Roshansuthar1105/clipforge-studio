@@ -242,13 +242,15 @@ def get_yt_dlp_options(
                 "player_client": clients
             }
         },
+        # Prioritize Hinglish / Hindi subtitles; strictly exclude pure English subtitles
+        "subtitleslangs": ["hi-Latn", "hi", "hi-.*"],
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/125.0.0.0 Safari/537.36"
             ),
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": "hi-IN,hi;q=0.9,en;q=0.1",
         },
     }
 
