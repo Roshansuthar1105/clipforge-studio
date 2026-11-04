@@ -725,6 +725,10 @@ def update_job(job_id: str, **values):
             # Prevent overwriting a cancelled job with completed/failed
             if jobs[job_id].get("status") == "cancelled" and values.get("status") not in (None, "cancelled"):
                 return
+            if "message" in values and "stage_msg" not in values:
+                values["stage_msg"] = values["message"]
+            elif "stage_msg" in values and "message" not in values:
+                values["message"] = values["stage_msg"]
             jobs[job_id].update(values)
             jobs[job_id]["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             if db.is_db_connected():
@@ -816,8 +820,12 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
 
                 update_job(
                     job_id,
+                    status="downloading",
+                    stage="downloading",
                     progress=10,
-                    message="Downloading source video",
+                    stage_progress=0,
+                    message="Starting source video download...",
+                    stage_msg="Starting source video download...",
                 )
 
                 def dl_progress_hook(d):
@@ -826,15 +834,41 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     if d.get("status") == "downloading":
                         total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                         downloaded = d.get("downloaded_bytes") or 0
+                        speed = d.get("speed")
+                        eta = d.get("eta")
+
+                        speed_str = f"{(speed / (1024 * 1024)):.1f} MB/s" if speed and speed > 0 else ""
+                        eta_str = f"ETA {int(eta)}s" if eta is not None and eta > 0 else ""
+
                         if total > 0:
                             pct = int(10 + (downloaded / total) * 25)
                             mb_down = downloaded / (1024 * 1024)
                             mb_tot = total / (1024 * 1024)
                             pct_dl = int((downloaded / total) * 100)
+                            
+                            extra_info = []
+                            if speed_str:
+                                extra_info.append(speed_str)
+                            if eta_str:
+                                extra_info.append(eta_str)
+                            extra_part = f" • {' • '.join(extra_info)}" if extra_info else ""
+
+                            insider_msg = f"Downloading source: {mb_down:.1f}/{mb_tot:.1f} MB ({pct_dl}%){extra_part}"
                             update_job(
                                 job_id,
+                                status="downloading",
+                                stage="downloading",
                                 progress=min(35, pct),
-                                message=f"Downloading source: {mb_down:.1f}/{mb_tot:.1f} MB ({pct_dl}%)",
+                                stage_progress=pct_dl,
+                                message=insider_msg,
+                                stage_msg=insider_msg,
+                                download_details={
+                                    "downloaded_mb": round(mb_down, 1),
+                                    "total_mb": round(mb_tot, 1),
+                                    "pct": pct_dl,
+                                    "speed": speed_str or None,
+                                    "eta": eta_str or None,
+                                },
                             )
 
                 base_dl_opts = {
@@ -1428,11 +1462,25 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             def on_clip_progress(processed_secs: float, total_clip_secs: float):
                 if total_clip_secs > 0:
                     sub_pct = min(1.0, processed_secs / total_clip_secs)
+                    clip_pct = int(sub_pct * 100)
                     overall_pct = int(clip_start_pct + sub_pct * clip_range_pct)
+                    insider_msg = (
+                        f"Clipping {index + 1}/{count} ({filename}): "
+                        f"{int(processed_secs)}s/{int(total_clip_secs)}s ({clip_pct}%) • Overall {overall_pct}%"
+                    )
                     update_job(
                         job_id,
+                        status="processing",
+                        stage="clipping",
                         progress=min(96, max(38, overall_pct)),
-                        message=f"Creating clip {index + 1}/{count}: {int(processed_secs)}s/{int(total_clip_secs)}s ({int(sub_pct * 100)}%)",
+                        stage_progress=clip_pct,
+                        current_clip=index + 1,
+                        total_clips=count,
+                        current_clip_name=filename,
+                        current_clip_seconds=round(processed_secs, 1),
+                        current_clip_total_seconds=round(total_clip_secs, 1),
+                        message=insider_msg,
+                        stage_msg=insider_msg,
                     )
 
             run_ffmpeg_with_progress(command, total_render_duration, on_progress=on_clip_progress, cancel_event=cancel_event)
@@ -1569,7 +1617,28 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             try:
                                 from services.subtitle_service import burn_subtitles_to_clip
                                 temp_burn = output_path.with_name(f"{output_path.stem}_burn_temp.mp4")
-                                burn_subtitles_to_clip(output_path, temp_burn, cues, default_styles)
+
+                                def on_burn_clip_progress(p_sec: float, t_sec: float):
+                                    b_pct = int(min(1.0, p_sec / max(t_sec, 1.0)) * 100)
+                                    sub_msg = f"Mounting subtitles to clip {index + 1}/{count} ({filename}): {int(p_sec)}s/{int(t_sec)}s ({b_pct}%)"
+                                    update_job(
+                                        job_id,
+                                        stage="subtitles",
+                                        stage_progress=b_pct,
+                                        current_clip=index + 1,
+                                        total_clips=count,
+                                        current_clip_name=filename,
+                                        message=sub_msg,
+                                        stage_msg=sub_msg,
+                                    )
+
+                                burn_subtitles_to_clip(
+                                    output_path,
+                                    temp_burn,
+                                    cues,
+                                    default_styles,
+                                    progress_callback=on_burn_clip_progress,
+                                )
                                 if temp_burn.exists() and temp_burn.stat().st_size > 0:
                                     import time
                                     time.sleep(0.1)
@@ -1606,7 +1675,13 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 job_id,
                 files=list(created_files),
                 progress=min(96, int(clip_start_pct + clip_range_pct)),
-                message=f"Created clip {index + 1} of {count}",
+                stage="clipping",
+                stage_progress=100,
+                current_clip=index + 1,
+                total_clips=count,
+                current_clip_name=filename,
+                message=f"Created clip {index + 1} of {count} ({filename})",
+                stage_msg=f"Created clip {index + 1} of {count} ({filename})",
             )
 
         if not created_files:

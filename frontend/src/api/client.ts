@@ -3,6 +3,8 @@ import type {
   User,
   VideoMetadata,
   Job,
+  SubtitleJob,
+  BatchPublishJob,
   ClipItem,
   DownloadItem,
   StorageMetrics,
@@ -85,11 +87,19 @@ export const apiClient = {
   },
   async getJobs(): Promise<{ jobs: Job[] }> {
     const res = await api.get('/api/jobs');
-    return res.data;
+    const jobs = (res.data?.jobs || []).map((j: any) => ({
+      ...j,
+      stage_msg: j.stage_msg || j.message || '',
+    }));
+    return { ...res.data, jobs };
   },
   async getJob(jobId: string): Promise<Job> {
     const res = await api.get(`/api/jobs/${encodeURIComponent(jobId)}`);
-    return res.data;
+    const job = res.data;
+    if (job) {
+      job.stage_msg = job.stage_msg || job.message || '';
+    }
+    return job;
   },
   async cancelJob(jobId: string): Promise<{ success: boolean; message?: string }> {
     const res = await api.post(`/api/jobs/${encodeURIComponent(jobId)}/cancel`);
@@ -181,6 +191,10 @@ export const apiClient = {
     const res = await api.post('/publish/batch', payload);
     return res.data;
   },
+  async getBatchPublishJobStatus(batchId: string): Promise<BatchPublishJob> {
+    const res = await api.get(`/publish/batch/${encodeURIComponent(batchId)}/status`);
+    return res.data;
+  },
   async getPublishJobStatus(jobId: string): Promise<any> {
     const res = await api.get(`/publish/status/${encodeURIComponent(jobId)}`);
     return res.data;
@@ -205,6 +219,7 @@ export const apiClient = {
     cues: SubtitleCue[];
     style: SubtitleStyle;
     overlays?: TextOverlayConfig[];
+    caption?: string;
     full_text?: string;
     has_subtitles: boolean;
   }> {
@@ -222,13 +237,25 @@ export const apiClient = {
     const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/auto-sync`);
     return res.data;
   },
-  async translateSubtitles(clipName: string): Promise<{ cues: SubtitleCue[]; full_text?: string }> {
+  async translateSubtitles(clipName: string): Promise<{ cues: SubtitleCue[]; caption?: string; full_text?: string }> {
     const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/translate`);
     return res.data;
   },
-  async hinglishSubtitles(clipName: string, payload: { cues: SubtitleCue[] }): Promise<{ cues: SubtitleCue[] }> {
-    const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/hinglish`, payload);
+  async hinglishSubtitles(clipName: string, payload?: { cues?: SubtitleCue[] }): Promise<{ cues: SubtitleCue[]; caption?: string; transcript?: string }> {
+    const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/hinglish`, payload || {});
     return res.data;
+  },
+  getSubtitleDownloadUrl(clipName: string, format: 'srt' | 'ass' = 'srt'): string {
+    return `/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/download?format=${format}`;
+  },
+  downloadSubtitlesFile(clipName: string, format: 'srt' | 'ass' = 'srt') {
+    const url = `/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/download?format=${format}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${clipName.replace(/\.[^/.]+$/, '')}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   },
   async burnSubtitles(
     clipName: string,
@@ -244,9 +271,13 @@ export const apiClient = {
     const res = await api.post(`/api/subtitles/groups/${encodeURIComponent(folderPath)}/subtitles/burn`, payload);
     return res.data;
   },
-  async getSubtitleJob(jobId: string): Promise<any> {
+  async getSubtitleJob(jobId: string): Promise<SubtitleJob> {
     const res = await api.get(`/api/subtitles/subtitle-jobs/${encodeURIComponent(jobId)}`);
-    return res.data;
+    const data = res.data;
+    if (data) {
+      data.stage_msg = data.stage_msg || data.message || '';
+    }
+    return data;
   },
 
   // ----------------------------------------------------

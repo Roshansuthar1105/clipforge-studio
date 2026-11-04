@@ -29,6 +29,7 @@ from services.transcription_service import (
     translate_clip_to_english_with_groq,
     convert_cues_to_hinglish,
     convert_transcript_to_hinglish,
+    save_transcript,
     has_devanagari_characters,
     get_stored_transcript,
     get_clip_subtitles,
@@ -547,12 +548,35 @@ def translate_clip_subtitles_endpoint(
     full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
     update_clip_metadata_caption(input_clip, full_caption, styles)
 
+    # Also update clip transcript in data/transcripts/
+    clip_transcript_data = {
+        "video_id": input_clip.stem,
+        "source_file": input_clip.name,
+        "language": "hinglish" if mode == "hinglish" else "en",
+        "duration": clip_end - clip_start if clip_end > clip_start else 0.0,
+        "full_text": full_caption,
+        "segments": cues,
+    }
+    save_transcript(input_clip.stem, clip_transcript_data)
+    if mode == "hinglish":
+        save_transcript(f"{input_clip.stem}_hinglish", clip_transcript_data)
+
+    # Also update parent video transcript if available and in Hindi
+    if source_video_id and mode == "hinglish":
+        try:
+            parent_tr = get_stored_transcript(source_video_id)
+            if parent_tr and any(has_devanagari_characters(s.get("text", "")) for s in parent_tr.get("segments", [])):
+                convert_transcript_to_hinglish(parent_tr, video_id=source_video_id)
+        except Exception as p_err:
+            logger.warning("Failed updating parent transcript to Hinglish: %s", p_err)
+
     mode_label = "Hinglish (English Latin alphabet)" if mode == "hinglish" else "English translation"
     return {
         "success": True,
         "cues": cues,
         "styles": styles,
         "caption": full_caption,
+        "transcript": full_caption,
         "mode": mode,
         "message": f"Successfully converted speech to {mode_label} ({len(cues)} cues). Zero Devanagari script."
     }
@@ -624,43 +648,97 @@ def burn_subtitles_for_clip_endpoint(clip_name: str, payload: SubtitleBurnReques
         clean_stem = input_clip.stem.replace("_subtitled", "")
         output_clip = input_clip.with_name(f"{clean_stem}_subtitled.mp4")
 
-    try:
-        burn_subtitles_to_clip(
-            input_video=input_clip,
-            output_video=output_clip,
-            cues=payload.cues or [],
-            style=styles,
-            overlays=payload.overlays or []
-        )
+    job_id = uuid.uuid4().hex
+    job_doc = {
+        "job_id": job_id,
+        "clip_name": input_clip.name,
+        "status": "processing",
+        "progress": 5,
+        "current_clip_progress": 5,
+        "total_clips": 1,
+        "processed_clips": 0,
+        "current_clip": input_clip.name,
+        "message": f"Mounting subtitles to {input_clip.name}...",
+        "stage_msg": f"Mounting subtitles to {input_clip.name}...",
+        "results": [],
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    _save_subtitle_job(job_doc)
 
-        if payload.replace_original:
-            # Safely replace original clip with burned video on Windows
-            safe_replace_file(output_clip, input_clip)
-            cleanup_subtitled_duplicates(input_clip)
-            refresh_clip_thumbnail(input_clip)
-            final_name = input_clip.name
-        else:
-            refresh_clip_thumbnail(output_clip)
-            final_name = output_clip.name
+    def _run_single_burn():
+        try:
+            def _on_single_clip_progress(p_sec: float, t_sec: float):
+                sub_pct = min(1.0, p_sec / max(t_sec, 1.0))
+                c_pct = int(sub_pct * 100)
+                insider = f"Mounting subtitles to {input_clip.name}: {int(p_sec)}s/{int(t_sec)}s ({c_pct}%)"
+                c_job = _get_subtitle_job(job_id)
+                if c_job:
+                    c_job["progress"] = c_pct
+                    c_job["current_clip_progress"] = c_pct
+                    c_job["current_clip_seconds"] = round(p_sec, 1)
+                    c_job["current_clip_total_seconds"] = round(t_sec, 1)
+                    c_job["message"] = insider
+                    c_job["stage_msg"] = insider
+                    _save_subtitle_job(c_job)
 
-        encoded_name = urllib.parse.quote(final_name)
-        return {
-            "success": True,
-            "job_id": "",
-            "status": "completed",
-            "filename": final_name,
-            "url": f"/media/clips/{encoded_name}",
-            "caption": full_caption,
-            "message": "Subtitles burned and clip saved with current configurations."
-        }
+            burn_subtitles_to_clip(
+                input_video=input_clip,
+                output_video=output_clip,
+                cues=payload.cues or [],
+                style=styles,
+                overlays=payload.overlays or [],
+                progress_callback=_on_single_clip_progress,
+            )
 
-    except Exception as exc:
-        if output_clip.exists():
-            try:
-                output_clip.unlink(missing_ok=True)
-            except Exception:
-                pass
-        raise HTTPException(status_code=500, detail=f"Failed to burn subtitles: {exc}")
+            if payload.replace_original:
+                safe_replace_file(output_clip, input_clip)
+                cleanup_subtitled_duplicates(input_clip)
+                refresh_clip_thumbnail(input_clip)
+                final_name = input_clip.name
+            else:
+                refresh_clip_thumbnail(output_clip)
+                final_name = output_clip.name
+
+            encoded_name = urllib.parse.quote(final_name)
+            c_job = _get_subtitle_job(job_id)
+            if c_job:
+                c_job["status"] = "completed"
+                c_job["progress"] = 100
+                c_job["current_clip_progress"] = 100
+                c_job["processed_clips"] = 1
+                c_job["filename"] = final_name
+                c_job["url"] = f"/media/clips/{encoded_name}"
+                c_job["caption"] = full_caption
+                c_job["message"] = f"Subtitles burned into {final_name} successfully!"
+                c_job["stage_msg"] = f"Subtitles burned into {final_name} successfully!"
+                _save_subtitle_job(c_job)
+        except Exception as exc:
+            if output_clip.exists():
+                try:
+                    output_clip.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            c_job = _get_subtitle_job(job_id)
+            if c_job:
+                c_job["status"] = "error"
+                c_job["error"] = str(exc)
+                c_job["message"] = f"Burning failed: {exc}"
+                c_job["stage_msg"] = f"Burning failed: {exc}"
+                _save_subtitle_job(c_job)
+
+    threading.Thread(target=_run_single_burn, daemon=True).start()
+
+    encoded_name = urllib.parse.quote(input_clip.name)
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "processing",
+        "filename": input_clip.name,
+        "url": f"/media/clips/{encoded_name}",
+        "caption": full_caption,
+        "message": f"Mounting subtitles to {input_clip.name}...",
+        "stage_msg": f"Mounting subtitles to {input_clip.name}...",
+    }
 
 
 # ------------------------------------------------------------------ #
@@ -803,12 +881,35 @@ def _process_group_subtitle_job(
 
             # 5. Burn subtitles and text overlays to video
             temp_output = clip_file.with_name(f"{clip_file.stem}_temp_burn.mp4")
+
+            def _on_group_clip_progress(p_sec: float, t_sec: float):
+                sub_pct = min(1.0, p_sec / max(t_sec, 1.0))
+                c_pct = int(sub_pct * 100)
+                overall_p = int(((idx + sub_pct) / total) * 100)
+                insider = (
+                    f"Mounting subtitles to reel {idx + 1}/{total} ({clip_file.name}): "
+                    f"{int(p_sec)}s/{int(t_sec)}s ({c_pct}%) • Overall {overall_p}%"
+                )
+                c_job = _get_subtitle_job(job_id)
+                if c_job:
+                    c_job["progress"] = min(99, max(1, overall_p))
+                    c_job["current_clip_progress"] = c_pct
+                    c_job["current_clip_index"] = idx + 1
+                    c_job["total_clips"] = total
+                    c_job["current_clip"] = clip_file.name
+                    c_job["current_clip_seconds"] = round(p_sec, 1)
+                    c_job["current_clip_total_seconds"] = round(t_sec, 1)
+                    c_job["message"] = insider
+                    c_job["stage_msg"] = insider
+                    _save_subtitle_job(c_job)
+
             burn_subtitles_to_clip(
                 input_video=clip_file,
                 output_video=temp_output,
                 cues=cues,
                 style=merged_styles,
-                overlays=overlays
+                overlays=overlays,
+                progress_callback=_on_group_clip_progress,
             )
 
             # 6. Replace original file or keep subtitled file
@@ -830,16 +931,23 @@ def _process_group_subtitle_job(
         if current_job:
             current_job["processed_clips"] = processed
             current_job["progress"] = int(((idx + 1) / total) * 100)
+            current_job["current_clip_progress"] = 100
+            current_job["current_clip_index"] = idx + 1
+            current_job["total_clips"] = total
             current_job["results"] = results
+            current_job["stage_msg"] = f"Mounted subtitles to {idx + 1} of {total} reels"
+            current_job["message"] = f"Mounted subtitles to {idx + 1} of {total} reels"
             _save_subtitle_job(current_job)
 
     current_job = _get_subtitle_job(job_id)
     if current_job:
         current_job["status"] = "completed"
         current_job["progress"] = 100
+        current_job["current_clip_progress"] = 100
         current_job["message"] = (
             f"Successfully mounted subtitles to {processed} of {total} reels in '{target_folder.name}'!"
         )
+        current_job["stage_msg"] = current_job["message"]
         _save_subtitle_job(current_job)
 
 
@@ -923,11 +1031,18 @@ def get_subtitle_job_status(job_id: str):
 
 @router.get("/clips/{clip_name:path}/subtitles/download")
 def download_subtitles_for_clip(clip_name: str, format: str = "srt"):
-    """Download .srt or .ass subtitle file for a clip."""
+    """Download .srt or .ass subtitle file for a clip in Hinglish by default."""
     unquoted = urllib.parse.unquote(clip_name)
     subtitles = get_clip_subtitles(unquoted)
     cues = subtitles.get("cues", [])
     styles = subtitles.get("styles", {})
+
+    # Guarantee exported subtitles are in Hinglish by default if Hindi/Devanagari detected
+    if any(has_devanagari_characters(c.get("text", "")) for c in cues):
+        try:
+            cues = convert_cues_to_hinglish(cues)
+        except Exception as err:
+            logger.warning("Could not convert subtitles to Hinglish on download: %s", err)
 
     if format.lower() == "ass":
         content = build_ass_content(cues, style=styles)

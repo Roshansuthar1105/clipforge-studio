@@ -50,7 +50,11 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   loadJobsList: async () => {
     try {
       const data = await apiClient.getJobs();
-      set({ jobsList: data.jobs || [] });
+      const normalizedJobs = (data.jobs || []).map((j: any) => ({
+        ...j,
+        stage_msg: j.stage_msg || j.message || '',
+      }));
+      set({ jobsList: normalizedJobs });
     } catch (e) {
       console.error('Failed to load jobs:', e);
     }
@@ -93,7 +97,11 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     const poll = async () => {
       try {
         const job = await apiClient.getJob(jobId);
-        set({ activeJob: job });
+        const normalizedJob = {
+          ...job,
+          stage_msg: job.stage_msg || (job as any).message || '',
+        };
+        set({ activeJob: normalizedJob });
 
         if (job.status === 'completed') {
           get().stopJobPolling();
@@ -117,7 +125,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     };
 
     poll();
-    pollInterval = setInterval(poll, 2000);
+    pollInterval = setInterval(poll, 1500);
   },
 
   stopJobPolling: () => {

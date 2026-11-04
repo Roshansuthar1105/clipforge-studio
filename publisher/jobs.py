@@ -439,6 +439,34 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
 
         clip_caption = (request.caption or clip_title).replace("{part}", str(clip_idx + 1))
 
+        with _jobs_lock:
+            batch["current_clip_index"] = clip_idx
+            batch["current_clip_number"] = clip_idx + 1
+            batch["current_clip_name"] = clip_file.name
+            batch["total_clips"] = len(request.clip_paths)
+            overall_start = int((clip_idx / max(1, len(request.clip_paths))) * 100)
+            batch["progress"] = max(batch.get("progress", 0), overall_start)
+            batch["current_clip_progress"] = 0
+            batch["message"] = f"Posting files {clip_idx + 1}/{len(request.clip_paths)}: {clip_file.name}..."
+            batch["stage_msg"] = batch["message"]
+
+        def _update_batch_target_progress(t_idx: int, t_pct: int, t_alias: str):
+            with _jobs_lock:
+                batch["clips"][clip_idx]["targets"][t_idx]["progress"] = t_pct
+                batch["current_clip_index"] = clip_idx
+                batch["current_clip_number"] = clip_idx + 1
+                batch["current_clip_name"] = clip_file.name
+                batch["total_clips"] = len(request.clip_paths)
+
+                targets_arr = batch["clips"][clip_idx]["targets"]
+                clip_avg = sum(t.get("progress", 0) for t in targets_arr) / max(1, len(targets_arr))
+                overall_p = int(((clip_idx + (clip_avg / 100.0)) / max(1, len(request.clip_paths))) * 100)
+                batch["progress"] = min(99, max(1, overall_p))
+                batch["current_clip_progress"] = int(clip_avg)
+                msg = f"Posting files {clip_idx + 1}/{len(request.clip_paths)} ({clip_file.name}) • {t_alias}: {t_pct}% • Overall {overall_p}%"
+                batch["message"] = msg
+                batch["stage_msg"] = msg
+
         # Upload for each selected target with retry capability (up to 3 attempts)
         for target_idx, target in enumerate(request.targets):
             account = find_account(target.account_id)
@@ -462,8 +490,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                 try:
                     if platform == "youtube":
                         def yt_progress(pct: int):
-                            with _jobs_lock:
-                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
+                            _update_batch_target_progress(target_idx, pct, account.get("alias", "YouTube"))
 
                         res = upload_to_youtube(
                             account=account,
@@ -480,13 +507,13 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                             batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("shorts_url") or res.get("url")
                             batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
                             batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        _update_batch_target_progress(target_idx, 100, account.get("alias", "YouTube"))
                         upload_succeeded = True
                         break
 
                     elif platform == "instagram":
                         def ig_progress(pct: int, msg: str = ""):
-                            with _jobs_lock:
-                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
+                            _update_batch_target_progress(target_idx, pct, account.get("alias", "Instagram"))
 
                         ig_token = account.get("access_token")
                         ig_uid = account.get("channel_id")
@@ -513,6 +540,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                                         batch["clips"][clip_idx]["targets"][target_idx]["url"] = f"https://www.instagram.com/reel/{res.media_id}/" if res.media_id else "https://www.instagram.com"
                                         batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
                                         batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                                    _update_batch_target_progress(target_idx, 100, account.get("alias", "Instagram"))
                                     batch_published = True
                                     upload_succeeded = True
                                     break
@@ -539,13 +567,13 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                                 batch["clips"][clip_idx]["targets"][target_idx]["url"] = res.get("permalink") or res.get("url")
                                 batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
                                 batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                            _update_batch_target_progress(target_idx, 100, account.get("alias", "Instagram"))
                             upload_succeeded = True
                             break
 
                     elif platform == "facebook":
                         def fb_batch_progress(pct: int):
-                            with _jobs_lock:
-                                batch["clips"][clip_idx]["targets"][target_idx]["progress"] = pct
+                            _update_batch_target_progress(target_idx, pct, account.get("alias", "Facebook"))
 
                         fb_cfg = target.facebook_config
                         as_reel = fb_cfg.as_reel if fb_cfg is not None else True
@@ -592,6 +620,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                                 batch["clips"][clip_idx]["targets"][target_idx]["url"] = fb_url
                                 batch["clips"][clip_idx]["targets"][target_idx]["error"] = None
                                 batch["clips"][clip_idx]["targets"][target_idx]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                            _update_batch_target_progress(target_idx, 100, account.get("alias", "Facebook"))
                             upload_succeeded = True
                             break
                         else:
@@ -658,6 +687,11 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
     with _jobs_lock:
         batch["status"] = "completed"
         batch["all_done"] = True
+        batch["progress"] = 100
+        batch["current_clip_progress"] = 100
+        batch["current_clip_number"] = len(request.clip_paths)
+        batch["message"] = f"Successfully posted all {len(request.clip_paths)} files!"
+        batch["stage_msg"] = batch["message"]
 
 
 def start_batch_publish_job(request: BatchPublishRequest) -> dict:
@@ -699,6 +733,13 @@ def start_batch_publish_job(request: BatchPublishRequest) -> dict:
         "batch_id": batch_id,
         "started_at": now,
         "total_clips": len(request.clip_paths),
+        "current_clip_index": 0,
+        "current_clip_number": 1,
+        "current_clip_name": clips_list[0]["clip_name"] if clips_list else "",
+        "current_clip_progress": 0,
+        "progress": 0,
+        "message": f"Queued {len(request.clip_paths)} files for posting...",
+        "stage_msg": f"Queued {len(request.clip_paths)} files for posting...",
         "clips": clips_list,
         "all_done": False,
         "status": "running",

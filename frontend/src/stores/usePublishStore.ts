@@ -21,6 +21,10 @@ interface PublishState {
   activeClipName: string | null;
   targetProgress: PublishTargetStatus[];
   overallProgress: number;
+  currentClipProgress: number;
+  currentBatchIndex: number;
+  totalBatchCount: number;
+  batchStageMsg: string;
 
   // Actions
   openPublishModal: (clips: PublishItem[]) => void;
@@ -48,6 +52,10 @@ export const usePublishStore = create<PublishState>((set, get) => ({
   activeClipName: null,
   targetProgress: [],
   overallProgress: 0,
+  currentClipProgress: 0,
+  currentBatchIndex: 1,
+  totalBatchCount: 1,
+  batchStageMsg: '',
 
   openPublishModal: (clips) => {
     const first = clips[0];
@@ -61,12 +69,24 @@ export const usePublishStore = create<PublishState>((set, get) => ({
       activeBatchId: null,
       targetProgress: [],
       overallProgress: 0,
+      currentClipProgress: 0,
+      currentBatchIndex: 1,
+      totalBatchCount: clips.length,
+      batchStageMsg: '',
     });
   },
 
   closePublishModal: () => set({ modalOpen: false }),
 
-  dismissPublishJob: () => set({ activeJobId: null, activeClipName: null, isPublishing: false }),
+  dismissPublishJob: () => set({
+    activeJobId: null,
+    activeBatchId: null,
+    activeClipName: null,
+    isPublishing: false,
+    overallProgress: 0,
+    currentClipProgress: 0,
+    batchStageMsg: '',
+  }),
 
   toggleAccountSelection: (accountId) => {
     set((state) => {
@@ -178,8 +198,50 @@ export const usePublishStore = create<PublishState>((set, get) => ({
           targets,
         });
 
-        set({ activeBatchId: res.batch_id, isPublishing: false, overallProgress: 100 });
+        const batchId = res.batch_id;
+        set({
+          activeBatchId: batchId,
+          isPublishing: true,
+          currentBatchIndex: 1,
+          totalBatchCount: clips.length,
+          activeClipName: clips[0]?.name || '',
+          overallProgress: 5,
+          batchStageMsg: `Starting sequential batch publish for ${clips.length} clips...`,
+        });
         showToast(`Sequential batch publish dispatched for ${clips.length} clips!`, 'success');
+
+        const pollBatch = setInterval(async () => {
+          try {
+            const batch = await apiClient.getBatchPublishJobStatus(batchId);
+            if (batch) {
+              const curIdx = batch.current_clip_index || 0;
+              const activeClip = batch.clips?.[curIdx];
+              const curTargets = activeClip?.targets || [];
+              set({
+                overallProgress: batch.progress || 0,
+                currentClipProgress: batch.current_clip_progress || 0,
+                currentBatchIndex: batch.current_clip_number || (curIdx + 1),
+                totalBatchCount: batch.total_clips || clips.length,
+                activeClipName: batch.current_clip_name || activeClip?.clip_name || '',
+                targetProgress: curTargets,
+                batchStageMsg: batch.stage_msg || batch.message || `Posting files ${(batch.current_clip_number || curIdx + 1)}/${batch.total_clips}...`,
+              });
+
+              if (batch.status === 'completed' || batch.all_done) {
+                clearInterval(pollBatch);
+                set({ isPublishing: false, overallProgress: 100 });
+                showToast(`Successfully published all ${clips.length} clips!`, 'success');
+                window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
+              } else if (batch.status === 'paused_on_failure') {
+                clearInterval(pollBatch);
+                set({ isPublishing: false });
+                showToast(batch.error_message || 'Batch publication paused on failure', 'error');
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }, 1500);
       }
       return true;
     } catch (err: any) {

@@ -19,16 +19,31 @@ export interface VideoMetadata {
 
 export interface JobProgress {
   pct: number;
-  status: 'pending' | 'downloading' | 'slicing' | 'completed' | 'error' | 'cancelled';
+  status: 'pending' | 'downloading' | 'slicing' | 'processing' | 'completed' | 'error' | 'cancelled';
   msg: string;
   stage?: number;
 }
 
 export interface Job {
   id: string;
-  status: 'pending' | 'downloading' | 'slicing' | 'completed' | 'error' | 'cancelled';
+  status: 'pending' | 'downloading' | 'slicing' | 'processing' | 'completed' | 'error' | 'cancelled';
   progress: number;
   stage_msg: string;
+  message?: string;
+  stage?: string;
+  stage_progress?: number;
+  current_clip?: number;
+  total_clips?: number;
+  current_clip_name?: string;
+  current_clip_seconds?: number;
+  current_clip_total_seconds?: number;
+  download_details?: {
+    downloaded_mb: number;
+    total_mb: number;
+    pct: number;
+    speed?: string | null;
+    eta?: string | null;
+  };
   error?: string;
   url?: string;
   title?: string;
@@ -39,6 +54,47 @@ export interface Job {
   output_clips?: string[];
   output_folder?: string;
   is_viral?: boolean;
+}
+
+export interface SubtitleJob {
+  job_id: string;
+  status: 'processing' | 'completed' | 'error' | string;
+  progress: number;
+  current_clip_progress?: number;
+  current_clip_index?: number;
+  total_clips?: number;
+  current_clip?: string;
+  current_clip_seconds?: number;
+  current_clip_total_seconds?: number;
+  folder_name?: string;
+  folder_path?: string;
+  message?: string;
+  stage_msg?: string;
+  results?: Array<{ clip: string; status: string; error?: string }>;
+  error?: string;
+}
+
+export interface BatchPublishJob {
+  batch_id: string;
+  status: 'running' | 'completed' | 'paused_on_failure' | string;
+  progress?: number;
+  current_clip_progress?: number;
+  current_clip_index?: number;
+  current_clip_number?: number;
+  current_clip_name?: string;
+  total_clips: number;
+  message?: string;
+  stage_msg?: string;
+  clips: Array<{
+    job_id: string;
+    clip_path: string;
+    clip_name: string;
+    targets: PublishTargetStatus[];
+  }>;
+  failed_clip_index?: number | null;
+  failed_clip_name?: string | null;
+  error_message?: string | null;
+  all_done?: boolean;
 }
 
 export interface ClipItem {

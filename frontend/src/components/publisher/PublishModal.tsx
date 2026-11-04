@@ -30,6 +30,12 @@ export const PublishModal: React.FC = () => {
     setCaption,
     appendHashtag,
     isPublishing,
+    activeBatchId,
+    activeClipName,
+    currentClipProgress: publishClipProgress,
+    currentBatchIndex,
+    totalBatchCount,
+    batchStageMsg,
     targetProgress,
     overallProgress,
     executePublish,
@@ -302,13 +308,17 @@ export const PublishModal: React.FC = () => {
           </div>
 
           {/* Live Multi-Channel Uploading Progress */}
-          {targetProgress.length > 0 && (
+          {(targetProgress.length > 0 || isPublishing) && (
             <div className="p-4 rounded-2xl border border-indigo-500/30 bg-indigo-950/20 space-y-3 animate-in fade-in">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   {isPublishing && <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />}
                   <span className="text-xs font-bold text-white uppercase tracking-wider">
-                    {isPublishing ? 'Uploading in Progress...' : 'Publish Results'}
+                    {isPublishing
+                      ? (activeBatchId || clips.length > 1)
+                        ? `Posting files ${currentBatchIndex}/${totalBatchCount}...`
+                        : 'Uploading in Progress...'
+                      : 'Publish Results'}
                   </span>
                 </div>
                 <span className="font-mono text-xs font-extrabold text-indigo-300">
@@ -316,12 +326,43 @@ export const PublishModal: React.FC = () => {
                 </span>
               </div>
 
-              {/* Overall Progress Bar */}
-              <div className="w-full h-2 rounded-full bg-slate-900/80 overflow-hidden border border-white/5">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300"
-                  style={{ width: `${Math.max(5, overallProgress)}%` }}
-                />
+              {batchStageMsg && (
+                <p className="text-[11px] font-mono text-slate-300 truncate" title={batchStageMsg}>
+                  {batchStageMsg}
+                </p>
+              )}
+
+              {/* Progress Bars */}
+              <div className="space-y-1.5">
+                {(activeBatchId || clips.length > 1) && (
+                  <div>
+                    <div className="flex justify-between text-[10px] font-mono text-pink-300 mb-0.5">
+                      <span>Current File: {activeClipName || `Part ${currentBatchIndex}`}</span>
+                      <span>{publishClipProgress}%</span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-slate-900/80 overflow-hidden border border-white/5">
+                      <div
+                        className="h-full bg-pink-500 transition-all duration-300"
+                        style={{ width: `${Math.max(5, publishClipProgress)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  {(activeBatchId || clips.length > 1) && (
+                    <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-0.5">
+                      <span>Overall Sequence Progress</span>
+                      <span>{overallProgress}%</span>
+                    </div>
+                  )}
+                  <div className="w-full h-2 rounded-full bg-slate-900/80 overflow-hidden border border-white/5">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300"
+                      style={{ width: `${Math.max(5, overallProgress)}%` }}
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Target Channel Upload States */}

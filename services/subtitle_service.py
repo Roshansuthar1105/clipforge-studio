@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import logging
+import threading
 import subprocess
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Callable
 
 from services.transcription_service import synthesize_word_timestamps
 
@@ -451,18 +453,38 @@ def build_srt_content(cues: List[Dict[str, Any]], text_transform: str = "none") 
     return "\n".join(lines)
 
 
+def probe_video_duration(video_path: Path) -> float:
+    """Get video duration in seconds using ffprobe."""
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        return float(res.stdout.strip())
+    except Exception:
+        return 0.0
+
+
 def burn_subtitles_to_clip(
     input_video: Path,
     output_video: Path,
     cues: List[Dict[str, Any]],
     style: Optional[Dict[str, Any]] = None,
-    overlays: Optional[List[Dict[str, Any]]] = None
+    overlays: Optional[List[Dict[str, Any]]] = None,
+    progress_callback: Optional[Callable[[float, float], None]] = None,
 ) -> Path:
     """
     Burn custom styled ASS subtitles and text overlays into video using FFmpeg.
+    Supports real-time frame/second progress callbacks.
     """
     if not input_video.exists():
         raise FileNotFoundError(f"Input video not found: {input_video}")
+
+    total_duration = probe_video_duration(input_video)
 
     ass_path = input_video.with_suffix(".temp.ass")
     try:
@@ -476,7 +498,9 @@ def burn_subtitles_to_clip(
         cmd = [
             "ffmpeg", "-y",
             "-hide_banner",
+            "-nostats",
             "-loglevel", "error",
+            "-progress", "pipe:1",
             "-i", str(input_video),
             "-vf", f"ass='{escaped_ass}'",
             "-c:v", "libx264",
@@ -487,10 +511,62 @@ def burn_subtitles_to_clip(
         ]
 
         logger.info("Burning subtitles into %s...", output_video.name)
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode != 0:
-            logger.error("FFmpeg burning error: %s", res.stderr)
-            raise RuntimeError(f"FFmpeg subtitle burning failed: {res.stderr.strip()}")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        )
+
+        stderr_lines = []
+
+        def _drain_stderr():
+            try:
+                for l in proc.stderr:
+                    stderr_lines.append(l)
+            except Exception:
+                pass
+
+        t_err = threading.Thread(target=_drain_stderr, daemon=True)
+        t_err.start()
+
+        last_update = 0.0
+
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.01)
+                continue
+
+            line = line.strip()
+            if line.startswith("out_time_us="):
+                try:
+                    us = int(line.split("=")[1])
+                    secs = us / 1_000_000.0
+                    now = time.time()
+                    if progress_callback and (now - last_update >= 0.25 or (total_duration > 0 and secs >= total_duration)):
+                        last_update = now
+                        progress_callback(secs, total_duration)
+                except Exception:
+                    pass
+            elif line == "progress=end":
+                if progress_callback and total_duration > 0:
+                    progress_callback(total_duration, total_duration)
+                break
+
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        t_err.join(timeout=1)
+
+        if proc.returncode != 0:
+            err_msg = "".join(stderr_lines).strip()
+            logger.error("FFmpeg burning error: %s", err_msg)
+            raise RuntimeError(f"FFmpeg subtitle burning failed: {err_msg}")
 
         return output_video
 

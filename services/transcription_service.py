@@ -635,328 +635,116 @@ def has_devanagari_characters(text: str) -> bool:
 
 
 # ------------------------------------------------------------------ #
-# 1-to-1 Word-Preserving Hinglish Transliteration Engine              #
-# Guarantees authentic [a-z] Romanized Hindi, 0 Devanagari script,    #
-# and preserves 100% exact Whisper millisecond word audio timestamps. #
+# Context-Aware Batch Hinglish Transliteration Engine                #
+# Transliterates Hindi Devanagari into everyday Romanized Hinglish   #
+# [a-z], guarantees 0 Devanagari characters, and retains original    #
+# spoken reel vocabulary and English loanwords.                      #
 # ------------------------------------------------------------------ #
 
-HINGLISH_WORD_CACHE_FILE = BASE_DIR / "hinglish_word_cache.json"
-
-DEFAULT_COMMON_HINGLISH_WORDS: Dict[str, str] = {
-    "है": "hai", "हैं": "hain", "था": "tha", "थी": "thi", "थे": "the",
-    "तो": "to", "नहीं": "nahi", "ना": "na", "हाँ": "haan", "हां": "haan",
-    "मैं": "main", "तू": "tu", "तुम": "tum", "तुम्हें": "tumhein",
-    "तुम्हारी": "tumhari", "तुम्हारा": "tumhara", "तुमने": "tumne",
-    "आप": "aap", "आपका": "aapka", "आपकी": "aapki", "आपने": "aapne",
-    "हम": "hum", "हमारा": "humara", "हमारी": "humari", "हमने": "humne",
-    "ये": "ye", "यह": "yeh", "वो": "woh", "वह": "woh",
-    "क्या": "kya", "क्यों": "kyun", "कैसे": "kaise", "कब": "kab",
-    "कहाँ": "kahan", "कहां": "kahan", "कौन": "kaun", "किस": "kis",
-    "किसे": "kise", "किसका": "kiska", "अगर": "agar", "मगर": "magar",
-    "लेकिन": "lekin", "पर": "par", "और": "aur", "भी": "bhi", "या": "ya",
-    "जैसे": "jaise", "वैसे": "waise", "बहुत": "bahut", "ज्यादा": "zyada",
-    "कम": "kam", "थोड़ा": "thoda", "थोड़ी": "thodi", "कुछ": "kuch",
-    "सब": "sab", "सारे": "saare", "कोई": "koi", "हर": "har",
-    "एक": "ek", "दो": "do", "तीन": "teen", "चार": "chaar",
-    "पाँच": "paanch", "पांच": "paanch", "छह": "chhah", "सात": "saat",
-    "आठ": "aath", "नौ": "nau", "दस": "dus",
-    "भाई": "bhai", "यार": "yaar", "दोस्त": "dost", "बेटा": "beta",
-    "पापा": "papa", "मम्मी": "mummy", "लड़का": "ladka", "लड़की": "ladki",
-    "लड़के": "ladke", "लड़कियां": "ladkiyan", "लोग": "log",
-    "बात": "baat", "बातें": "baatein", "काम": "kaam", "नाम": "naam",
-    "टाइम": "time", "दिन": "din", "रात": "raat", "साल": "saal",
-    "घर": "ghar", "पैसा": "paisa", "पैसे": "paise", "गाड़ी": "gaadi",
-    "जगह": "jagah", "करना": "karna", "कर": "kar", "करते": "karte",
-    "करता": "karta", "करती": "karti", "किया": "kiya", "किये": "kiye",
-    "कि": "ki", "की": "ki", "के": "ke", "का": "ka", "को": "ko",
-    "से": "se", "में": "mein", "पे": "pe", "हो": "ho", "होगा": "hoga",
-    "होगी": "hogi", "होंगे": "honge", "होता": "hota", "होती": "hoti",
-    "होते": "hote", "हुआ": "hua", "हुई": "hui", "हुए": "hue",
-    "रहा": "raha", "रही": "rahi", "रहे": "rahe", "बोल": "bol",
-    "बोला": "bola", "बोली": "boli", "बोले": "bole", "बोलना": "bolna",
-    "कहा": "kaha", "कहते": "kahte", "कहना": "kahna",
-    "देख": "dekh", "देखा": "dekha", "देखी": "dekhi", "देखे": "dekhe",
-    "देखना": "dekhna", "सुन": "sun", "सुना": "suna", "सुनी": "suni",
-    "सुनना": "sunna", "जा": "ja", "जाना": "jaana", "जाता": "jaata",
-    "जाती": "jaati", "जाते": "jaate", "गया": "gaya", "गयी": "gayi",
-    "गए": "gaye", "आ": "aa", "आना": "aana", "आता": "aata",
-    "आती": "aati", "आते": "aate", "आया": "aaya", "आयी": "aayi",
-    "आए": "aaye", "दे": "de", "देना": "dena", "दिया": "diya",
-    "दिए": "diye", "दी": "di", "ले": "le", "लेना": "lena",
-    "लिया": "liya", "लिए": "liye", "ली": "li",
-    "समझ": "samajh", "समझा": "samjha", "याद": "yaad",
-    "सोच": "soch", "सोचा": "socha", "मालूम": "maaloom", "पता": "pata",
-    "सही": "sahi", "गलत": "galat", "अच्छा": "accha", "अच्छी": "acchi",
-    "अच्छे": "acche", "बुरा": "bura", "बड़ा": "bada", "बड़ी": "badi",
-    "बड़े": "bade", "छोटा": "chhota", "छोटी": "chhoti", "छोटे": "chhote",
-    "नया": "naya", "नई": "nayi", "पुराना": "purana",
-    "पहला": "pehla", "पहली": "pehli", "पहले": "pehle", "बाद": "baad",
-    "अभी": "abhi", "तब": "tab", "अब": "ab",
-    "यहाँ": "yahan", "यहां": "yahan", "वहाँ": "wahan", "वहां": "wahan",
-    "अंदर": "andar", "बाहर": "baahar", "ऊपर": "upar", "नीचे": "neeche",
-    "साथ": "saath", "पास": "paas", "दूर": "door",
-    "हूँ": "hoon", "हूं": "hoon", "बैठ": "baith", "बैठा": "baitha",
-    "बैठी": "baithi", "बैठे": "baithe", "पड़ा": "pada", "पड़ी": "padi",
-    "पड़े": "pade", "रहेंगे": "rahenge", "बताता": "batata",
-    "बताती": "batati", "बताते": "batate", "वीडियो": "video",
-    "मुझे": "mujhe", "तुझे": "tujhe", "उसे": "use", "उन्हें": "unhein",
-    "इनको": "inko", "उनको": "unko", "किसने": "kisne", "उसने": "usne",
-    "शायद": "shayad", "ज़रूर": "zaroor", "जरूर": "zaroor", "सिर्फ": "sirf",
-    "खास": "khaas", "वजह": "wajah", "तरह": "tarah", "वक्त": "waqt"
-}
-
-_memory_word_cache: Dict[str, str] = dict(DEFAULT_COMMON_HINGLISH_WORDS)
-_cache_loaded = False
-
-
-def _load_hinglish_word_cache() -> Dict[str, str]:
-    """Load persistent Hinglish word dictionary from disk."""
-    global _memory_word_cache, _cache_loaded
-    if not _cache_loaded:
-        if HINGLISH_WORD_CACHE_FILE.exists():
-            try:
-                with open(HINGLISH_WORD_CACHE_FILE, "r", encoding="utf-8") as f:
-                    disk_cache = json.load(f)
-                    if isinstance(disk_cache, dict):
-                        _memory_word_cache.update(disk_cache)
-            except Exception as e:
-                logger.warning("Could not load hinglish word cache: %s", e)
-        _cache_loaded = True
-    return _memory_word_cache
-
-
-def _save_hinglish_word_cache(new_entries: Dict[str, str]) -> None:
-    """Save newly learned word mappings atomically to disk."""
-    if not new_entries:
-        return
-    _load_hinglish_word_cache()
-    _memory_word_cache.update(new_entries)
-    try:
-        tmp = HINGLISH_WORD_CACHE_FILE.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(_memory_word_cache, f, ensure_ascii=False, indent=2)
-        tmp.replace(HINGLISH_WORD_CACHE_FILE)
-    except Exception as e:
-        logger.warning("Could not persist hinglish word cache: %s", e)
-
-
-# Deterministic phonetic converter (offline / zero-latency fallback)
-_VOWELS = {
-    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
-    'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'an', 'अः': 'ah'
-}
-_MATRAS = {
-    'ा': 'a', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
-    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', 'ँ': 'n', 'ः': 'h'
-}
-_CONSONANTS = {
-    'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'ng',
-    'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'ny',
-    'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
-    'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
-    'प': 'p', 'फ': 'f', 'ब': 'b', 'भ': 'bh', 'म': 'm',
-    'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v',
-    'श': 'sh', 'ष': 'sh', 'स': 's', 'ह': 'h',
-    'ड़': 'd', 'ढ़': 'dh', 'फ़': 'f', 'ज़': 'z', 'क़': 'q', 'ख़': 'kh', 'ग़': 'g'
-}
-
-
-def rule_based_hindi_to_hinglish(word: str) -> str:
+def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> List[str]:
     """
-    Deterministic rule-based Hindi Devanagari to Roman Hinglish transliterator.
-    Handles matras, conjuncts, and Hindi schwa deletion with 0ms latency.
+    Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq.
+    Preserves original English words and phrasing without translating meaning to English words.
+    Guarantees 0 Devanagari characters in output.
     """
-    if not word or not re.search(r'[\u0900-\u097F]', word):
-        return word
-
-    res = []
-    n = len(word)
-    i = 0
-    while i < n:
-        c = word[i]
-        nxt = word[i+1] if i+1 < n else ''
-        if c + nxt in _CONSONANTS:
-            base = _CONSONANTS[c + nxt]
-            i += 2
-            nxt = word[i] if i < n else ''
-            if nxt == '्':
-                res.append(base)
-                i += 1
-            elif nxt in _MATRAS:
-                res.append(base + _MATRAS[nxt])
-                i += 1
-            elif i >= n:
-                res.append(base)
-            else:
-                res.append(base + 'a')
-        elif c in _CONSONANTS:
-            base = _CONSONANTS[c]
-            i += 1
-            nxt = word[i] if i < n else ''
-            if nxt == '्':
-                res.append(base)
-                i += 1
-            elif nxt in _MATRAS:
-                res.append(base + _MATRAS[nxt])
-                i += 1
-            elif i >= n:
-                res.append(base)
-            else:
-                res.append(base + 'a')
-        elif c in _VOWELS:
-            res.append(_VOWELS[c])
-            i += 1
-        elif c in _MATRAS:
-            res.append(_MATRAS[c])
-            i += 1
-        elif c == '्':
-            i += 1
-        else:
-            res.append(c)
-            i += 1
-
-    return ''.join(res)
-
-
-def transliterate_hindi_words_1to1(unique_words: List[str]) -> Dict[str, str]:
-    """
-    Transliterate a list of unique Hindi Devanagari words into colloquial Hinglish.
-    Checks memory/disk cache first. For any uncached words, queries Groq chat model
-    (or falls back to deterministic rule-based transliteration).
-    Guarantees 1:1 word mapping and zero Devanagari characters in output.
-    """
-    if not unique_words:
-        return {}
-
-    cache = _load_hinglish_word_cache()
-    result_map: Dict[str, str] = {}
-    missing_words: List[str] = []
-
-    for w in unique_words:
-        w_clean = re.sub(r'[^\u0900-\u097F]', '', str(w)).strip()
-        if not w_clean:
-            continue
-        if w_clean in cache:
-            result_map[w_clean] = cache[w_clean]
-        else:
-            missing_words.append(w_clean)
-
-    missing_words = list(dict.fromkeys(missing_words))  # deduplicate
-    if not missing_words:
-        return result_map
-
-    new_mappings: Dict[str, str] = {}
-    api_key = get_groq_api_key()
-
-    if api_key:
-        try:
-            from groq import Groq
-            client = Groq(api_key=api_key, timeout=30.0, max_retries=1)
-            prompt = (
-                "You are a strict Hindi-to-Hinglish 1-to-1 word transliterator.\n"
-                "Convert each Hindi Devanagari word into its common, everyday Romanized Hinglish [a-z] spelling (as used on Indian Instagram Reels / YouTube Shorts).\n\n"
-                "RULES:\n"
-                "1. DO NOT translate meaning into English words. Spoken Hindi words MUST remain Hindi words (e.g. 'अगर' -> 'agar', 'नहीं' -> 'nahi', 'वीडियो' -> 'video', 'लड़कियां' -> 'ladkiyan').\n"
-                "2. Return ONLY a valid JSON object mapping each Hindi word directly to its lowercase Hinglish string.\n"
-                "3. Output MUST contain ZERO Devanagari characters (only standard English a-z)."
-            )
-
-            models_to_try = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-            for model_name in models_to_try:
-                try:
-                    res = client.chat.completions.create(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": prompt},
-                            {"role": "user", "content": json.dumps(missing_words, ensure_ascii=False)}
-                        ],
-                        temperature=0.0,
-                        max_tokens=800,
-                    )
-                    raw = (res.choices[0].message.content or "").strip()
-                    if raw.startswith("```"):
-                        raw = re.sub(r'^```(?:json)?\s*', '', raw)
-                        raw = re.sub(r'\s*```$', '', raw)
-                    parsed = json.loads(raw)
-                    if isinstance(parsed, dict):
-                        for k, v in parsed.items():
-                            k_clean = str(k).strip()
-                            v_clean = str(v).strip().lower()
-                            # Ensure output contains no Devanagari
-                            if not has_devanagari_characters(v_clean) and v_clean:
-                                new_mappings[k_clean] = v_clean
-                        if new_mappings:
-                            break
-                except Exception as m_err:
-                    logger.warning("Groq Hinglish word transliteration (%s) failed: %s", model_name, m_err)
-                    continue
-        except Exception as groq_err:
-            logger.warning("Groq client setup for Hinglish transliteration failed: %s", groq_err)
-
-    # For any words that still failed or were missed, use the rule-based fallback
-    for mw in missing_words:
-        if mw not in new_mappings:
-            new_mappings[mw] = rule_based_hindi_to_hinglish(mw)
-
-    if new_mappings:
-        _save_hinglish_word_cache(new_mappings)
-        result_map.update(new_mappings)
-
-    return result_map
-
-
-def transliterate_text_preserving_punctuation(text: str, word_map: Dict[str, str]) -> str:
-    """
-    Replace all Devanagari words in text with their Hinglish equivalent from word_map.
-    Preserves all surrounding English words, punctuation, spaces, and formatting intact.
-    """
-    if not text or not re.search(r'[\u0900-\u097F]', text):
-        return text
-
-    def _replace_match(match):
-        hindi_word = match.group(0)
-        return word_map.get(hindi_word, rule_based_hindi_to_hinglish(hindi_word))
-
-    return re.sub(r'[\u0900-\u097F]+', _replace_match, str(text))
-
-
-def convert_words_to_hinglish_1to1(
-    words: List[Dict[str, Any]],
-    word_map: Optional[Dict[str, str]] = None
-) -> List[Dict[str, Any]]:
-    """
-    Transliterate word-level timestamps in-place from Hindi Devanagari to Hinglish [a-z].
-    STRICTLY preserves Whisper's exact 'start' and 'end' audio timestamps for each word.
-    """
-    if not words:
+    if not texts:
         return []
 
-    if word_map is None:
-        # Collect unique Devanagari words from the word stream
-        unique_devanagari: List[str] = []
-        for w in words:
-            raw_w = str(w.get("word", "")).strip()
-            found = re.findall(r'[\u0900-\u097F]+', raw_w)
-            unique_devanagari.extend(found)
-        word_map = transliterate_hindi_words_1to1(unique_devanagari)
+    # If no Devanagari characters in any line, return immediately
+    if not any(has_devanagari_characters(t) for t in texts):
+        return [clean_hallucinated_text(t) for t in texts]
 
-    converted_words: List[Dict[str, Any]] = []
-    for w in words:
-        w_copy = dict(w)
-        orig_word = str(w_copy.get("word", "")).strip()
-        w_copy["word"] = transliterate_text_preserving_punctuation(orig_word, word_map)
-        converted_words.append(w_copy)
+    api_key = get_groq_api_key()
+    if not api_key:
+        logger.warning("GROQ_API_KEY is not set for Hinglish conversion.")
+        return texts
 
-    return converted_words
+    from groq import Groq
+    client = Groq(api_key=api_key, timeout=45.0, max_retries=2)
+
+    system_prompt = (
+        "You are a strict Hinglish transliteration engine.\n"
+        "Your task is to convert Hindi text written in Devanagari script into Hinglish (Romanized Hindi using the English Latin alphabet).\n\n"
+        "RULES:\n"
+        "1. Preserve existing English words as-is with their original spelling (e.g. 'started', 'realizing', 'considerate', 'trauma trigger', 'make sure', 'community').\n"
+        "2. Convert all Hindi / Devanagari words into everyday standard Hinglish (e.g. 'लड़कियां' -> 'ladkiyan', 'बहुत' -> 'bahut', 'दोस्त' -> 'dost', 'हैं' -> 'hain', 'हो जाए' -> 'ho jaye', 'खुश हूँ' -> 'khush hoon').\n"
+        "3. DO NOT translate the meaning into English. The spoken Hindi words MUST remain Hindi words, just written in English Latin letters.\n"
+        "4. Output MUST contain ZERO Devanagari characters (only standard English A-Z, numbers, and basic punctuation).\n"
+        "5. Return ONLY a valid JSON array of strings, with exactly one output string corresponding to each input string in the exact same order."
+    )
+
+    models_to_try = [
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b"
+    ]
+
+    import time
+    results: List[str] = []
+    for i in range(0, len(texts), batch_size):
+        if i > 0:
+            time.sleep(0.2)  # Gentle pacing
+        chunk = texts[i:i + batch_size]
+        # If this entire chunk has no Devanagari, pass it through directly
+        if not any(has_devanagari_characters(t) for t in chunk):
+            results.extend([clean_hallucinated_text(t) for t in chunk])
+            continue
+
+        chunk_success = False
+        user_msg = "Convert this JSON array of subtitle lines to Hinglish:\n" + json.dumps(chunk, ensure_ascii=False)
+
+        for model_name in models_to_try:
+            try:
+                res = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg}
+                    ],
+                    temperature=0.0,
+                    max_tokens=800
+                )
+
+                raw = res.choices[0].message.content.strip()
+                if raw.startswith("```"):
+                    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+                    raw = re.sub(r'\s*```$', '', raw)
+
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    for val in parsed.values():
+                        if isinstance(val, list):
+                            parsed = val
+                            break
+
+                if isinstance(parsed, list) and len(parsed) == len(chunk):
+                    # Clean any accidental lingering Devanagari or hallucinations
+                    cleaned_items = [clean_hallucinated_text(str(item)).strip() for item in parsed]
+                    results.extend(cleaned_items)
+                    chunk_success = True
+                    break
+                elif isinstance(parsed, list) and len(parsed) >= len(chunk):
+                    logger.warning("Hinglish transliteration count overflow via %s (expected %d, got %d)",
+                                   model_name, len(chunk), len(parsed))
+                    results.extend([clean_hallucinated_text(str(x)).strip() for x in parsed[:len(chunk)]])
+                    chunk_success = True
+                    break
+            except Exception as exc:
+                logger.warning("Hinglish transliteration model %s failed for chunk %d: %s", model_name, i, exc)
+                continue
+
+        if not chunk_success:
+            logger.error("All Hinglish models failed for chunk %d; retaining original lines", i)
+            results.extend(chunk)
+
+    return results
 
 
 def convert_cues_to_hinglish(cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Convert cues list containing Hindi Devanagari text into clean [a-z] Hinglish.
-    1. Collects unique Devanagari vocabulary across all cues.
-    2. Transliterates words 1:1.
-    3. Replaces words in-place while keeping 100% of Whisper's millisecond timestamps.
-    4. Guarantees ZERO Devanagari characters and perfect voice-synchronized subtitle burns.
+    Convert cues list with Hindi Devanagari text into Hinglish (English alphabet).
+    Regenerates voice-synced word timestamps with Hinglish words so active word
+    illumination and subtitle burns contain zero Devanagari glyphs.
     """
     if not cues:
         return []
@@ -965,53 +753,46 @@ def convert_cues_to_hinglish(cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     if not cues:
         return []
 
-    # Collect all unique Devanagari words across all cues and word tokens
-    unique_hindi: List[str] = []
-    for c in cues:
-        raw_text = str(c.get("text", "")).strip()
-        unique_hindi.extend(re.findall(r'[\u0900-\u097F]+', raw_text))
-        for w in c.get("words", []) or []:
-            w_text = str(w.get("word", "")).strip()
-            unique_hindi.extend(re.findall(r'[\u0900-\u097F]+', w_text))
-
-    if not unique_hindi:
+    # If no Devanagari in any cue, return as-is
+    if not any(has_devanagari_characters(c.get("text", "")) for c in cues):
         return cues
 
-    word_map = transliterate_hindi_words_1to1(unique_hindi)
+    texts = [c.get("text", "") for c in cues]
+    hinglish_texts = convert_text_to_hinglish_batch(texts)
 
-    converted_cues: List[Dict[str, Any]] = []
-    for cue in cues:
+    converted_cues = []
+    for cue, hing_text in zip(cues, hinglish_texts):
         c_copy = dict(cue)
-        raw_words = c_copy.get("words") or []
-
-        if raw_words:
-            # 1:1 transliterate existing word timestamps without shifting time by even 1ms
-            new_words = convert_words_to_hinglish_1to1(raw_words, word_map)
-            c_copy["words"] = new_words
-            c_copy["text"] = " ".join([w["word"] for w in new_words if w.get("word")]).strip()
-        else:
-            # Transliterate cue text and synthesize if words were missing
-            hing_text = transliterate_text_preserving_punctuation(c_copy.get("text", ""), word_map)
-            c_copy["text"] = hing_text
-            c_st = _safe_float(c_copy.get("start"), 0.0)
-            c_en = _safe_float(c_copy.get("end"), c_st + 1.0)
-            c_copy["words"] = synthesize_word_timestamps(hing_text, c_st, c_en)
-
+        c_copy["text"] = hing_text
+        c_start = _safe_float(cue.get("start"), 0.0)
+        c_end = _safe_float(cue.get("end"), c_start + 1.0)
+        # Re-synthesize word timestamps for new Hinglish words so ASS active-word
+        # illumination and frontend preview use Hinglish words without Devanagari
+        c_copy["words"] = synthesize_word_timestamps(hing_text, c_start, c_end)
         converted_cues.append(c_copy)
-
     return converted_cues
 
 
 def convert_transcript_to_hinglish(transcript: Dict[str, Any], video_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Convert an entire transcript to 1-to-1 Hinglish, preserving all segments,
-    precise word timestamps, and full audio synchronization.
+    Convert an entire transcript to Hinglish, regenerate segment word timestamps,
+    and cache on disk and MongoDB.
     """
     segments = transcript.get("segments", [])
     if not segments:
         return transcript
 
-    new_segments = convert_cues_to_hinglish(segments)
+    texts = [s.get("text", "") for s in segments]
+    hing_texts = convert_text_to_hinglish_batch(texts)
+
+    new_segments = []
+    for s, h_text in zip(segments, hing_texts):
+        s_copy = dict(s)
+        s_copy["text"] = h_text
+        seg_st = _safe_float(s.get("start"), 0.0)
+        seg_en = _safe_float(s.get("end"), seg_st + 1.0)
+        s_copy["words"] = synthesize_word_timestamps(h_text, seg_st, seg_en)
+        new_segments.append(s_copy)
 
     new_transcript = dict(transcript)
     new_transcript["segments"] = new_segments
@@ -1262,6 +1043,7 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
                     styles.setdefault("margin_v", 320)
                     saved["cues"] = cues
                     saved["styles"] = styles
+                    saved["caption"] = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
 
                     # If cues exist and are valid, return them
                     if cues:
@@ -1343,10 +1125,12 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
             styles.setdefault("margin_v", 320)
 
             # Persist to disk so subsequent loads are instant
+            full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
             save_clip_subtitles(clip_name, {"cues": cues, "styles": styles})
             return {
                 "cues": cues,
                 "styles": styles,
+                "caption": full_caption,
                 "source_video_id": clip_file.stem,
                 "clip_start": 0.0,
                 "clip_end": round(float(clip_transcript.get("duration", 0.0)), 2),
@@ -1411,10 +1195,12 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
         styles.setdefault("margin_v", 320)
 
         # Cache sliced subtitles to disk
+        full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
         save_clip_subtitles(clip_name, {"cues": cues, "styles": styles})
         return {
             "cues": cues,
             "styles": styles,
+            "caption": full_caption,
             "source_video_id": source_video_id or (clip_file.stem if clip_file else "clip"),
             "clip_start": clip_start,
             "clip_end": clip_end,

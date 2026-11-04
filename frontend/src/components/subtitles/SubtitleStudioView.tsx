@@ -23,9 +23,10 @@ import {
   CheckCircle2,
   FolderOpen,
   X,
+  Copy,
 } from 'lucide-react';
 import { useSubtitleStore, STYLE_PRESETS } from '../../stores/useSubtitleStore';
-import { apiClient } from '../../api/client';
+import { apiClient, showToast } from '../../api/client';
 
 interface SubtitleStudioViewProps {
   onBack: () => void;
@@ -39,6 +40,9 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
     folderPath,
     groupClipsCount,
     cues,
+    caption,
+    setCaption,
+    downloadSubtitles,
     style,
     overlay,
     overlayPromptOpen,
@@ -77,6 +81,10 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
     burnTextOverlay,
     isBurning,
     burnProgress,
+    currentClipProgress,
+    currentClipIndex,
+    totalClips,
+    currentClipName,
     burnStageMsg,
   } = useSubtitleStore();
 
@@ -439,6 +447,22 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                 >
                   <Languages className="w-3.5 h-3.5 text-sky-400" /> Translate to EN
                 </button>
+                <button
+                  type="button"
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                  onClick={() => downloadSubtitles('srt')}
+                  title="Download Hinglish SubRip (.SRT) subtitle file"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-400" /> SRT
+                </button>
+                <button
+                  type="button"
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                  onClick={() => downloadSubtitles('ass')}
+                  title="Download Advanced SubStation Alpha (.ASS) style file"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-400" /> ASS
+                </button>
               </div>
             </div>
 
@@ -586,15 +610,33 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
 
                 {/* Full Caption Text Preview */}
                 <div>
-                  <label className="text-xs text-slate-400 font-semibold mb-2 block">
-                    Complete Spoken Caption ({cues.length} speech segments)
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs text-slate-400 font-semibold block">
+                      Complete Spoken Caption / Transcript ({cues.length} speech segments)
+                    </label>
+                    <button
+                      type="button"
+                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-300 transition-all cursor-pointer flex items-center gap-1.5"
+                      onClick={() => {
+                        const text = caption || cues.map((c) => c.text).join(' ');
+                        navigator.clipboard.writeText(text);
+                        showToast('Copied full caption to clipboard!', 'success');
+                      }}
+                      title="Copy complete transcript to clipboard"
+                    >
+                      <Copy className="w-3 h-3 text-indigo-400" /> Copy Caption
+                    </button>
+                  </div>
                   <textarea
                     className="glass-input text-xs leading-relaxed w-full font-sans"
                     rows={8}
-                    readOnly
-                    value={cues.map((c) => c.text).join(' ')}
+                    value={caption || cues.map((c) => c.text).join(' ')}
+                    onChange={(e) => setCaption(e.target.value)}
+                    placeholder="Full caption text derived from subtitles preview..."
                   />
+                  <span className="text-[11px] text-slate-500 mt-1 block">
+                    Automatically updated when translating to Hinglish or English and saved to reel metadata.
+                  </span>
                 </div>
               </div>
             ) : activeTab === 'cues' ? (
@@ -1187,14 +1229,44 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
             <Flame className="w-8 h-8" />
           </div>
           <h3 className="text-base font-bold text-white mb-1">
-            Burning Subtitles & Text Overlay into 9:16 Video
+            {totalClips > 1
+              ? `Mounting Subtitles (Reel ${currentClipIndex} of ${totalClips})`
+              : 'Burning Subtitles into 9:16 Video'}
           </h3>
-          <p className="text-xs text-slate-400 max-w-sm mb-5">{burnStageMsg}</p>
-          <div className="w-72 h-2.5 rounded-full bg-slate-800 overflow-hidden p-0.5 border border-white/10">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-rose-500 via-purple-500 to-indigo-500 transition-all duration-300"
-              style={{ width: `${burnProgress}%` }}
-            />
+          <p className="text-xs text-slate-300 max-w-md mb-5 font-mono truncate" title={burnStageMsg}>
+            {burnStageMsg}
+          </p>
+
+          <div className="w-80 max-w-full space-y-3">
+            {totalClips > 1 && (
+              <div>
+                <div className="flex justify-between text-xs font-mono text-rose-300 mb-1">
+                  <span className="truncate max-w-[200px]">
+                    {currentClipName || `Reel ${currentClipIndex}`}
+                  </span>
+                  <span className="font-bold">{currentClipProgress}%</span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden border border-white/10">
+                  <div
+                    className="h-full rounded-full bg-rose-500 transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.max(5, currentClipProgress))}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div className="flex justify-between text-xs font-mono text-slate-300 mb-1">
+                <span>{totalClips > 1 ? 'Overall Folder Progress' : 'Rendering Progress'}</span>
+                <span className="font-bold">{burnProgress}%</span>
+              </div>
+              <div className="w-full h-2.5 rounded-full bg-slate-800 overflow-hidden p-0.5 border border-white/10">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-rose-500 via-purple-500 to-indigo-500 transition-all duration-300"
+                  style={{ width: `${Math.min(100, Math.max(5, burnProgress))}%` }}
+                />
+              </div>
+            </div>
           </div>
         </div>
       )}

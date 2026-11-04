@@ -98,6 +98,7 @@ interface SubtitleState {
   groupClipsCount: number;
 
   cues: SubtitleCue[];
+  caption: string;
   style: SubtitleStyle;
   overlay: TextOverlayConfig;
   overlayPromptOpen: boolean;
@@ -112,6 +113,12 @@ interface SubtitleState {
 
   isBurning: boolean;
   burnProgress: number;
+  currentClipProgress: number;
+  currentClipIndex: number;
+  totalClips: number;
+  currentClipName: string;
+  activeSubtitleJobId: string | null;
+  activeSubtitleJobName: string | null;
   burnStageMsg: string;
 
   // Actions
@@ -122,6 +129,7 @@ interface SubtitleState {
   setIsPlaying: (playing: boolean) => void;
   toggleSafeZones: () => void;
   setActiveTab: (tab: 'bulk' | 'cues' | 'overlay') => void;
+  dismissSubtitleJob: () => void;
 
   setOverlayValue: (key: keyof TextOverlayConfig, val: any) => void;
   setOverlayPreset: (preset: 'top' | 'safe_top' | 'center' | 'safe_bottom' | 'bottom') => void;
@@ -147,6 +155,8 @@ interface SubtitleState {
 
   convertToHinglish: () => Promise<void>;
   translateToEnglish: () => Promise<void>;
+  setCaption: (caption: string) => void;
+  downloadSubtitles: (format: 'srt' | 'ass') => void;
   burnSubtitlesToVideo: () => Promise<boolean>;
   burnGroupSubtitles: () => Promise<boolean>;
   saveDraft: () => Promise<void>;
@@ -167,6 +177,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
   groupClipsCount: savedClipData?.groupClipsCount || 0,
 
   cues: [],
+  caption: '',
   style: { ...DEFAULT_STYLE },
   overlay: { ...DEFAULT_OVERLAY },
   overlayPromptOpen: false,
@@ -181,7 +192,22 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
 
   isBurning: false,
   burnProgress: 0,
+  currentClipProgress: 0,
+  currentClipIndex: 1,
+  totalClips: 1,
+  currentClipName: '',
+  activeSubtitleJobId: null,
+  activeSubtitleJobName: null,
   burnStageMsg: '',
+
+  dismissSubtitleJob: () => set({
+    activeSubtitleJobId: null,
+    activeSubtitleJobName: null,
+    isBurning: false,
+    burnProgress: 0,
+    currentClipProgress: 0,
+    burnStageMsg: '',
+  }),
 
   openSubtitleStudio: async (clipName, clipUrl, groupOptions) => {
     try {
@@ -217,14 +243,17 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
       if (data && data.overlays && data.overlays.length > 0) {
         loadedOverlay = { ...DEFAULT_OVERLAY, ...data.overlays[0] };
       }
+      const loadedCues = data?.cues || [];
+      const loadedCaption = data?.caption || loadedCues.map((c: any) => c.text).join(' ');
       set({
-        cues: data?.cues || [],
+        cues: loadedCues,
+        caption: loadedCaption,
         style: data?.style ? { ...DEFAULT_STYLE, ...data.style } : { ...DEFAULT_STYLE },
         overlay: loadedOverlay,
       });
     } catch {
       showToast('Could not load existing subtitles. Creating blank session.', 'info');
-      set({ cues: [], overlay: { ...DEFAULT_OVERLAY } });
+      set({ cues: [], caption: '', overlay: { ...DEFAULT_OVERLAY } });
     }
   },
 
@@ -237,6 +266,7 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
       clipName: '',
       clipUrl: '',
       cues: [],
+      caption: '',
       isPlaying: false,
       overlayPromptOpen: false,
     });
@@ -484,17 +514,33 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
     });
   },
 
+  setCaption: (caption: string) => set({ caption }),
+
+  downloadSubtitles: (format: 'srt' | 'ass') => {
+    const { clipName } = get();
+    if (!clipName) {
+      showToast('No active clip selected', 'warning');
+      return;
+    }
+    apiClient.downloadSubtitlesFile(clipName, format);
+    showToast(`Downloading ${format.toUpperCase()} subtitles in Hinglish...`, 'info');
+  },
+
   convertToHinglish: async () => {
     const { clipName, cues } = get();
     try {
-      showToast('Converting to Hinglish via AI...', 'info');
+      showToast('Converting speech transcript & captions to Hinglish via AI...', 'info');
       const res = await apiClient.hinglishSubtitles(clipName, { cues });
       if (res && res.cues) {
-        set({ cues: res.cues });
-        showToast('Converted Hindi text into Hinglish!', 'success');
+        const newCaption = res.caption || res.cues.map((c) => c.text).join(' ');
+        set({
+          cues: res.cues,
+          caption: newCaption,
+        });
+        showToast('Converted Hindi text, transcript & captions into Hinglish!', 'success');
       }
-    } catch {
-      showToast('Failed to convert to Hinglish', 'error');
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Failed to convert to Hinglish', 'error');
     }
   },
 
@@ -504,11 +550,15 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
       showToast('Translating subtitles to English via Whisper...', 'info');
       const res = await apiClient.translateSubtitles(clipName);
       if (res && res.cues) {
-        set({ cues: res.cues });
-        showToast('Translated subtitles to English!', 'success');
+        const newCaption = res.caption || res.cues.map((c) => c.text).join(' ');
+        set({
+          cues: res.cues,
+          caption: newCaption,
+        });
+        showToast('Translated subtitles & captions to English!', 'success');
       }
-    } catch {
-      showToast('Translation failed', 'error');
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Translation failed', 'error');
     }
   },
 
@@ -525,28 +575,46 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
 
   burnSubtitlesToVideo: async () => {
     const { clipName, cues, style, overlay } = get();
-    set({ isBurning: true, burnProgress: 10, burnStageMsg: 'Compiling ASS subtitle & text overlay filtergraph...' });
+    set({
+      isBurning: true,
+      burnProgress: 10,
+      currentClipProgress: 10,
+      currentClipIndex: 1,
+      totalClips: 1,
+      currentClipName: clipName,
+      activeSubtitleJobName: clipName,
+      burnStageMsg: `Mounting subtitles to ${clipName}...`,
+    });
     try {
       const overlays = overlay.text.trim() ? [overlay] : [];
       const res = await apiClient.burnSubtitles(clipName, { cues, style, overlays });
       if (!res?.job_id || res?.status === 'completed') {
-        set({ isBurning: false, burnProgress: 100, burnStageMsg: 'Done!' });
+        set({ isBurning: false, burnProgress: 100, currentClipProgress: 100, burnStageMsg: 'Done!' });
         showToast('Subtitles & text overlay burned into video successfully!', 'success');
         set((state) => ({ clipUrl: `${state.clipUrl.split('?')[0]}?t=${Date.now()}` }));
         window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
         return true;
       }
 
-      set({ burnProgress: 50, burnStageMsg: 'Encoding 1080x1920 video with FFmpeg...' });
+      const jobId = res.job_id;
+      set({ activeSubtitleJobId: jobId, burnProgress: 15, currentClipProgress: 15 });
 
       // Poll subtitle job
-      const jobId = res.job_id;
       const pollTimer = setInterval(async () => {
         try {
           const job = await apiClient.getSubtitleJob(jobId);
+          set({
+            burnProgress: job.progress || 0,
+            currentClipProgress: job.current_clip_progress || job.progress || 0,
+            currentClipIndex: job.current_clip_index || 1,
+            totalClips: job.total_clips || 1,
+            currentClipName: job.current_clip || clipName,
+            burnStageMsg: job.stage_msg || job.message || `Mounting subtitles to ${clipName}...`,
+          });
+
           if (job.status === 'completed') {
             clearInterval(pollTimer);
-            set({ isBurning: false, burnProgress: 100, burnStageMsg: 'Done!' });
+            set({ isBurning: false, burnProgress: 100, currentClipProgress: 100, burnStageMsg: 'Done!' });
             showToast('Subtitles & text overlay burned into video successfully!', 'success');
             // Refresh video preview
             set((state) => ({ clipUrl: `${state.clipUrl.split('?')[0]}?t=${Date.now()}` }));
@@ -559,11 +627,11 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
         } catch {
           // ignore
         }
-      }, 1500);
+      }, 1000);
 
       return true;
     } catch (err: any) {
-      set({ isBurning: false });
+      set({ isBurning: false, activeSubtitleJobId: null });
       showToast(err.response?.data?.detail || 'Failed to start burn process', 'error');
       return false;
     }
@@ -571,18 +639,34 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
 
   burnGroupSubtitles: async () => {
     const { folderPath, style, overlay } = get();
-    set({ isBurning: true, burnProgress: 15, burnStageMsg: 'Mounting subtitles & text overlays to all reels in folder...' });
+    set({
+      isBurning: true,
+      burnProgress: 5,
+      currentClipProgress: 0,
+      activeSubtitleJobName: folderPath,
+      burnStageMsg: `Starting subtitle mount for reels in '${folderPath}'...`,
+    });
     try {
       const overlays = overlay.text.trim() ? [overlay] : [];
       const res = await apiClient.burnGroupSubtitles(folderPath, { style, overlays });
       const jobId = res.job_id;
+      set({ activeSubtitleJobId: jobId });
 
       const pollTimer = setInterval(async () => {
         try {
           const job = await apiClient.getSubtitleJob(jobId);
+          set({
+            burnProgress: job.progress || 0,
+            currentClipProgress: job.current_clip_progress || 0,
+            currentClipIndex: job.current_clip_index || 1,
+            totalClips: job.total_clips || res.total_clips || 1,
+            currentClipName: job.current_clip || '',
+            burnStageMsg: job.stage_msg || job.message || 'Mounting subtitles...',
+          });
+
           if (job.status === 'completed') {
             clearInterval(pollTimer);
-            set({ isBurning: false, burnProgress: 100 });
+            set({ isBurning: false, burnProgress: 100, currentClipProgress: 100, burnStageMsg: 'Done!' });
             showToast('Subtitles & text overlays mounted to all reels in folder!', 'success');
             window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
           } else if (job.status === 'error') {
@@ -593,11 +677,11 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
         } catch {
           // ignore
         }
-      }, 1500);
+      }, 1000);
 
       return true;
     } catch {
-      set({ isBurning: false });
+      set({ isBurning: false, activeSubtitleJobId: null });
       showToast('Failed to mount group subtitles & overlays', 'error');
       return false;
     }

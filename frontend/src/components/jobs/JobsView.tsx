@@ -18,9 +18,11 @@ import {
   ArrowUpRight,
   Filter,
   Eye,
+  Flame,
 } from 'lucide-react';
 import { useJobsStore } from '../../stores/useJobsStore';
 import { useScheduleStore } from '../../stores/useScheduleStore';
+import { useSubtitleStore } from '../../stores/useSubtitleStore';
 import { PublishDetailsModal } from '../publisher/PublishDetailsModal';
 import type { PublishRecord, ScheduledPost } from '../../types';
 
@@ -40,6 +42,18 @@ export const JobsView: React.FC = () => {
     activePublishFilter,
     setPublishFilter,
   } = useJobsStore();
+
+  const {
+    isBurning: isSubtitleBurning,
+    activeSubtitleJobId,
+    burnProgress,
+    currentClipProgress: subtitleClipProgress,
+    currentClipIndex: subtitleClipIndex,
+    totalClips: subtitleTotalClips,
+    currentClipName: subtitleClipName,
+    burnStageMsg,
+    dismissSubtitleJob,
+  } = useSubtitleStore();
 
   const {
     scheduledPosts,
@@ -213,6 +227,75 @@ export const JobsView: React.FC = () => {
             ))}
           </div>
 
+          {/* Active Subtitle Mounting Card if running */}
+          {(isSubtitleBurning || (activeSubtitleJobId && burnProgress > 0 && burnProgress < 100)) && (
+            <div className="glass-panel p-5 border border-amber-500/40 bg-amber-950/20 rounded-2xl relative overflow-hidden mb-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2.5">
+                    <span className="font-mono text-xs text-amber-400 font-semibold px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                      SUBTITLE-JOB
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                      Mounting Subtitles
+                    </span>
+                    {subtitleTotalClips > 1 && (
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        Reel {subtitleClipIndex}/{subtitleTotalClips}
+                      </span>
+                    )}
+                  </div>
+
+                  <h4 className="text-sm font-bold text-white mt-2 truncate">
+                    {subtitleClipName || 'Subtitle Mounting Pipeline'}
+                  </h4>
+                  <p className="text-xs text-amber-300 mt-1 flex items-center gap-1.5 font-mono">
+                    <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                    <span>{burnStageMsg || 'Rendering and burning subtitles...'}</span>
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-base font-extrabold text-amber-300">
+                    {burnProgress}%
+                  </span>
+                  <button
+                    type="button"
+                    className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                    onClick={() => dismissSubtitleJob()}
+                    title="Dismiss notification"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress Bars */}
+              <div className="mt-4 space-y-1.5">
+                {subtitleTotalClips > 1 && (
+                  <div>
+                    <div className="flex justify-between text-[10px] font-mono text-amber-300 mb-0.5">
+                      <span>Current Reel: {subtitleClipName || `Reel ${subtitleClipIndex}`}</span>
+                      <span>{subtitleClipProgress}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-slate-800/80 overflow-hidden border border-white/5">
+                      <div
+                        className="h-full rounded-full bg-amber-400 transition-all duration-300"
+                        style={{ width: `${Math.min(100, Math.max(5, subtitleClipProgress))}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="h-2 w-full rounded-full bg-slate-800/80 overflow-hidden border border-white/5">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-amber-500 to-yellow-400 transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.max(0, burnProgress))}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {filteredJobs.length === 0 ? (
             <div className="p-16 text-center border border-white/10 rounded-3xl bg-slate-900/30 backdrop-blur-md">
               <div className="w-16 h-16 rounded-3xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4 text-indigo-400">
@@ -227,7 +310,9 @@ export const JobsView: React.FC = () => {
             <div className="space-y-3">
               {filteredJobs.map((job) => {
                 const isRunning =
-                  job.status === 'pending' || job.status === 'downloading' || job.status === 'slicing';
+                  job.status === 'pending' || job.status === 'downloading' || job.status === 'slicing' || job.status === 'processing';
+                const isDownloading = job.status === 'downloading' || job.stage === 'downloading';
+                const isClipping = (job.status === 'slicing' || job.status === 'processing') && job.stage === 'clipping';
 
                 return (
                   <div
@@ -235,8 +320,8 @@ export const JobsView: React.FC = () => {
                     className="glass-panel p-5 transition-all hover:border-indigo-500/40"
                   >
                     <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2.5">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-mono text-xs text-indigo-400 font-semibold px-2 py-0.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
                             #{job.id.slice(0, 8)}
                           </span>
@@ -246,26 +331,46 @@ export const JobsView: React.FC = () => {
                                 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                                 : job.status === 'error' || job.status === 'cancelled'
                                 ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                : isDownloading
+                                ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
                                 : 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30'
                             }`}
                           >
-                            {job.status}
+                            {isDownloading ? 'Downloading' : isClipping ? 'Clipping' : job.status}
                           </span>
+                          {job.current_clip && job.total_clips && (
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                              Clip {job.current_clip}/{job.total_clips}
+                            </span>
+                          )}
+                          {job.download_details && isDownloading && (
+                            <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                              {job.download_details.downloaded_mb}/{job.download_details.total_mb} MB ({job.download_details.pct}%)
+                              {job.download_details.speed ? ` • ${job.download_details.speed}` : ''}
+                            </span>
+                          )}
                         </div>
 
                         <h4 className="text-sm font-bold text-white mt-2 truncate">
                           {job.title || job.url || 'Video Slice Job'}
                         </h4>
-                        <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
-                          {isRunning && <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />}
-                          <span>{job.stage_msg || 'Processing...'}</span>
+                        <p className="text-xs text-slate-300 mt-1 flex items-center gap-1.5 font-mono truncate" title={job.stage_msg || job.message}>
+                          {isRunning && <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />}
+                          <span className="truncate">{job.stage_msg || job.message || 'Processing...'}</span>
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono text-base font-extrabold text-white">
-                          {Math.round(job.progress)}%
-                        </span>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="text-right">
+                          <span className="font-mono text-base font-extrabold text-white">
+                            {Math.round(job.progress)}%
+                          </span>
+                          {isRunning && job.stage_progress !== undefined && job.stage_progress > 0 && (
+                            <span className="text-[10px] font-mono text-slate-400 block">
+                              Step: {Math.round(job.stage_progress)}%
+                            </span>
+                          )}
+                        </div>
                         {isRunning ? (
                           <button
                             type="button"
@@ -288,12 +393,29 @@ export const JobsView: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Progress Bar */}
-                    <div className="mt-4 h-2 w-full rounded-full bg-slate-800/80 overflow-hidden p-0.5 border border-white/5">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300"
-                        style={{ width: `${Math.min(100, Math.max(0, job.progress))}%` }}
-                      />
+                    {/* Progress Bars */}
+                    <div className="mt-3.5 space-y-1.5">
+                      {isRunning && job.stage_progress !== undefined && job.stage_progress > 0 && (
+                        <div>
+                          <div className="flex justify-between text-[10px] font-mono text-purple-300 mb-0.5">
+                            <span>{isClipping ? `Clip ${job.current_clip || 1} Progress` : 'Stage Progress'}</span>
+                            <span>{job.stage_progress}%</span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-slate-800/80 overflow-hidden border border-white/5">
+                            <div
+                              className="h-full rounded-full bg-purple-500 transition-all duration-300"
+                              style={{ width: `${Math.min(100, Math.max(0, job.stage_progress))}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="h-2 w-full rounded-full bg-slate-800/80 overflow-hidden p-0.5 border border-white/5">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300"
+                          style={{ width: `${Math.min(100, Math.max(0, job.progress))}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
                 );
