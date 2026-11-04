@@ -10,6 +10,7 @@ import re
 import base64
 import shutil
 import logging
+import http.cookiejar
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -18,6 +19,56 @@ logger = logging.getLogger("clipforge.ytdlp")
 APP_DIR = Path(__file__).resolve().parent.parent
 BASE_DIR = Path(os.getenv("DATA_DIR", str(APP_DIR / "data"))).resolve()
 DEFAULT_COOKIES_FILE = BASE_DIR / "cookies.txt"
+
+
+def ensure_netscape_cookie_format(text: str) -> str:
+    """
+    Ensure the cookies string strictly begins with the Netscape HTTP Cookie File header.
+    Python's MozillaCookieJar rejects any file whose first line does not match `# Netscape HTTP Cookie File`.
+    """
+    cleaned = text.strip().strip('"\'').replace("\\n", "\n")
+    if not cleaned:
+        return cleaned
+
+    # Check first non-empty line
+    lines = cleaned.splitlines()
+    first_non_empty = next((l.strip() for l in lines if l.strip()), "")
+    if not (first_non_empty.startswith("# Netscape HTTP Cookie File") or first_non_empty.startswith("# HTTP Cookie File")):
+        header = "# Netscape HTTP Cookie File\n# https://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
+        cleaned = header + cleaned.lstrip()
+
+    return cleaned
+
+
+def is_valid_cookie_file(file_path: Path, auto_repair: bool = True) -> bool:
+    """
+    Verify whether the given file is a valid Netscape cookies file readable by MozillaCookieJar.
+    If auto_repair is True and the file only lacks the magic header, fix it in-place.
+    """
+    if not file_path.exists() or not file_path.is_file() or file_path.stat().st_size < 10:
+        return False
+
+    try:
+        cj = http.cookiejar.MozillaCookieJar(str(file_path))
+        cj.load(ignore_discard=True, ignore_expires=True)
+        return True
+    except Exception as e:
+        if not auto_repair:
+            return False
+        try:
+            raw = file_path.read_text(encoding="utf-8", errors="ignore")
+            if not raw.strip():
+                return False
+            fixed = ensure_netscape_cookie_format(raw)
+            file_path.write_text(fixed, encoding="utf-8")
+            # Try reloading
+            cj = http.cookiejar.MozillaCookieJar(str(file_path))
+            cj.load(ignore_discard=True, ignore_expires=True)
+            logger.info("Automatically repaired Netscape cookie file format at %s", file_path)
+            return True
+        except Exception as repair_err:
+            logger.warning("Cookie file at %s is invalid and could not be repaired: %s", file_path, repair_err)
+            return False
 
 
 def init_cookies_from_env() -> Optional[Path]:
@@ -50,8 +101,8 @@ def init_cookies_from_env() -> Optional[Path]:
                 logger.warning("Failed to decode COOKIES_BASE64: %s", e)
 
         if raw_cookies:
-            # Handle quoted multiline strings or JSON-escaped newlines (\n)
-            cleaned = raw_cookies.strip('"\'').replace("\\n", "\n")
+            # Ensure proper Netscape format and write
+            cleaned = ensure_netscape_cookie_format(raw_cookies)
             DEFAULT_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
             DEFAULT_COOKIES_FILE.write_text(cleaned, encoding="utf-8")
             logger.info("Successfully initialized YouTube cookies from environment variable to %s", DEFAULT_COOKIES_FILE)
@@ -68,7 +119,7 @@ def find_cookies_file() -> Optional[Path]:
     """
     # 1. First check if cookies can be synthesized from env var
     env_file = init_cookies_from_env()
-    if env_file and env_file.is_file() and env_file.stat().st_size > 0:
+    if env_file and is_valid_cookie_file(env_file, auto_repair=True):
         return env_file
 
     # 2. Check candidate paths
@@ -78,8 +129,11 @@ def find_cookies_file() -> Optional[Path]:
         os.getenv("YOUTUBE_COOKIES_FILE"),
         DEFAULT_COOKIES_FILE,
         BASE_DIR / "cookies.txt",
+        BASE_DIR / "www.youtube.com_cookies.txt",
         APP_DIR / "cookies.txt",
+        APP_DIR / "www.youtube.com_cookies.txt",
         Path("cookies.txt"),
+        Path("www.youtube.com_cookies.txt"),
         Path("/etc/secrets/cookies.txt"),   # Render Secret Files mount path
         Path("/app/cookies.txt"),           # Docker root
         Path.home() / "cookies.txt",        # User home
@@ -90,7 +144,7 @@ def find_cookies_file() -> Optional[Path]:
             continue
         try:
             cand_p = Path(cand).resolve()
-            if cand_p.exists() and cand_p.is_file() and cand_p.stat().st_size > 10:
+            if is_valid_cookie_file(cand_p, auto_repair=True):
                 return cand_p
         except Exception:
             continue
@@ -152,7 +206,7 @@ def get_cookies_status() -> Dict[str, Any]:
 
 def save_cookies_text(text: str) -> Path:
     """Save user-provided raw Netscape cookies text directly to disk."""
-    cleaned = text.strip().strip('"\'').replace("\\n", "\n")
+    cleaned = ensure_netscape_cookie_format(text)
     DEFAULT_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
     DEFAULT_COOKIES_FILE.write_text(cleaned, encoding="utf-8")
     logger.info("Saved %d bytes of cookies to %s", len(cleaned), DEFAULT_COOKIES_FILE)
@@ -168,13 +222,14 @@ def get_yt_dlp_options(
     in both local and cloud deployment environments.
     """
     cookies_path = find_cookies_file()
+    valid_cookies = bool(cookies_path and is_valid_cookie_file(cookies_path, auto_repair=True))
     browser_env = os.getenv("COOKIES_FROM_BROWSER", "").strip()
 
     # When cookies are available, web and mweb clients authenticate seamlessly with web session cookies.
     # When cookies are not available, mobile app API clients (android/ios) have higher success on local IPs.
     if player_clients:
         clients = player_clients
-    elif cookies_path or browser_env:
+    elif valid_cookies or browser_env:
         clients = ["web", "mweb", "android", "ios"]
     else:
         clients = ["android", "ios", "mweb"]
@@ -198,7 +253,7 @@ def get_yt_dlp_options(
     }
 
     # Pass cookies file or browser
-    if cookies_path:
+    if valid_cookies and cookies_path:
         opts["cookiefile"] = str(cookies_path)
     elif browser_env:
         opts["cookiesfrombrowser"] = (browser_env, None, None, None)

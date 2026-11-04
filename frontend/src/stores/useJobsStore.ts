@@ -106,8 +106,13 @@ export const useJobsStore = create<JobsState>((set, get) => ({
           showToast(job.error || `Job ${job.status}`, 'error');
           get().loadJobsList();
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Poll error:', err);
+        // If the job no longer exists on the server (404), stop polling and clear activeJobId
+        if (err?.response?.status === 404 || err?.status === 404 || String(err).includes('404')) {
+          get().stopJobPolling();
+          get().setActiveJobId(null);
+        }
       }
     };
 
