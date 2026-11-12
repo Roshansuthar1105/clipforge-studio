@@ -641,6 +641,15 @@ def has_devanagari_characters(text: str) -> bool:
 # spoken reel vocabulary and English loanwords.                      #
 # ------------------------------------------------------------------ #
 
+# ==============================================================================
+# WARNING: DO NOT MODIFY, REFACTOR, OR BYPASS THIS SUBTITLE / HINGLISH LOGIC.
+# This pipeline is strictly calibrated to:
+# 1. Transcribe rendered clips directly with Groq Whisper for 100% voice sync.
+# 2. Transliterate Hindi/Indic speech into Hinglish (English Latin alphabet).
+# 3. Prevent English translations and Devanagari glyphs from leaking into subtitles.
+# Altering the priority order or caching mechanisms breaks subtitle generation.
+# ==============================================================================
+
 def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> List[str]:
     """
     Transliterate Hindi text written in Devanagari into Hinglish (English Latin alphabet) using Groq.
@@ -676,7 +685,9 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
     models_to_try = [
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b"
+        "openai/gpt-oss-20b",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant"
     ]
 
     import time
@@ -702,7 +713,7 @@ def convert_text_to_hinglish_batch(texts: List[str], batch_size: int = 25) -> Li
                         {"role": "user", "content": user_msg}
                     ],
                     temperature=0.0,
-                    max_tokens=800
+                    max_tokens=2048
                 )
 
                 raw = res.choices[0].message.content.strip()
@@ -1086,71 +1097,14 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
     clip_start = float(meta.get("clip_start", 0.0)) if meta else 0.0
     clip_end = float(meta.get("clip_end", 0.0)) if meta else 0.0
 
-    # 1. Fast path: if a cached parent video transcript already covers this clip's time bounds,
-    # slice directly in <5ms instead of extracting audio & uploading every clip to Groq.
+    # ==============================================================================
+    # WARNING: DO NOT MODIFY, REFACTOR, OR BYPASS THIS SUBTITLE / HINGLISH LOGIC.
+    # Priority 1: Direct Groq Whisper transcription produces 100% exact voice sync
+    # and generates authentic Hinglish subtitles directly for this rendered clip.
+    # ==============================================================================
     if not clip_file or not clip_file.exists():
         clip_file = _find_clip_path(clip_name)
 
-    parent_transcript = None
-    if source_video_id:
-        parent_transcript = get_stored_transcript(source_video_id)
-    if not parent_transcript and source_file_name:
-        parent_transcript = get_stored_transcript(Path(source_file_name).stem)
-
-    if parent_transcript and parent_transcript.get("segments") and clip_end > clip_start:
-        if meta and meta.get("has_prepended_hook") and float(meta.get("hook_duration", 0.0)) > 0:
-            h_st = float(meta.get("hook_start", clip_start))
-            h_dur = float(meta.get("hook_duration", 0.0))
-            raw_hook = slice_transcript_for_clip(parent_transcript, h_st, h_st + h_dur)
-            hook_chunks = create_voice_synced_word_chunks(raw_hook, max_words=3)
-            for hc in hook_chunks:
-                hc["end"] = min(h_dur, hc["end"])
-
-            raw_body = slice_transcript_for_clip(parent_transcript, clip_start, clip_end)
-            body_chunks = create_voice_synced_word_chunks(raw_body, max_words=3)
-            for bc in body_chunks:
-                bc["start"] = round(bc["start"] + h_dur, 2)
-                bc["end"] = round(bc["end"] + h_dur, 2)
-                for w in bc.get("words", []):
-                    w["start"] = round(w["start"] + h_dur, 2)
-                    w["end"] = round(w["end"] + h_dur, 2)
-
-            cues = hook_chunks + body_chunks
-            for idx, c in enumerate(cues):
-                c["id"] = idx
-        else:
-            raw_cues = slice_transcript_for_clip(parent_transcript, clip_start, clip_end)
-            cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
-
-        if cues:
-            if any(has_devanagari_characters(c.get("text", "")) for c in cues) or str(parent_transcript.get("language", "")).lower() in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn"):
-                cues = convert_cues_to_hinglish(cues)
-
-            styles = (meta or {}).get("styles", {})
-            styles.setdefault("highlight_mode", "active_word")
-            styles.setdefault("words_per_screen", 3)
-            styles.setdefault("font_family", "Montserrat")
-            styles.setdefault("font_size", 48)
-            styles.setdefault("primary_color", "#FFFFFF")
-            styles.setdefault("highlight_color", "#FACC15")
-            styles.setdefault("outline_color", "#000000")
-            styles.setdefault("outline_width", 0.5)
-            styles.setdefault("text_transform", "uppercase")
-            styles.setdefault("margin_v", 320)
-
-            full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
-            save_clip_subtitles(clip_name, {"cues": cues, "styles": styles})
-            return {
-                "cues": cues,
-                "styles": styles,
-                "caption": full_caption,
-                "source_video_id": source_video_id or (clip_file.stem if clip_file else "clip"),
-                "clip_start": clip_start,
-                "clip_end": clip_end,
-                "has_groq_key": bool(get_groq_api_key())
-            }
-
-    # 2. Fallback: Direct Groq Whisper transcription on the clip when no parent transcript is cached
     if clip_file and clip_file.exists() and get_groq_api_key():
         try:
             logger.info("Auto-transcribing clip %s directly for 100%% voice-audio sync...", clip_file.name)
@@ -1191,9 +1145,14 @@ def get_clip_subtitles(clip_name: str) -> Dict[str, Any]:
                 "has_groq_key": True
             }
         except Exception as exc:
-            logger.warning("Direct clip transcription failed: %s", exc)
+            logger.warning("Direct clip transcription failed, falling back to parent slice: %s", exc)
 
-    transcript = parent_transcript
+    # 2. Fallback: retrieve parent video transcript and slice cleanly
+    transcript = None
+    if source_video_id:
+        transcript = get_stored_transcript(source_video_id)
+    if not transcript and source_file_name:
+        transcript = get_stored_transcript(Path(source_file_name).stem)
 
     if transcript and transcript.get("segments"):
         if meta and meta.get("has_prepended_hook") and float(meta.get("hook_duration", 0.0)) > 0:

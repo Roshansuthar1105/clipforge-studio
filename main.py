@@ -433,34 +433,12 @@ def find_file_in_dir(directory: Path, filename: str) -> Path | None:
 
 
 def ensure_clip_thumbnail(clip_path: Path) -> Path | None:
-    """Generate and cache a 9:16 vertical JPEG thumbnail for a video clip."""
+    """Return thumbnail path if already existing on disk (thumbnail image creation disabled)."""
     if not clip_path.exists() or not clip_path.is_file():
         return None
     thumb_path = clip_path.with_name(f"{clip_path.stem}.thumb.jpg")
     if thumb_path.exists() and thumb_path.stat().st_size > 0:
         return thumb_path
-
-    try:
-        cmd = [
-            "ffmpeg", "-y", "-ss", "00:00:01", "-i", str(clip_path),
-            "-vframes", "1",
-            "-vf", "scale=180:320:force_original_aspect_ratio=decrease,pad=180:320:(ow-iw)/2:(oh-ih)/2:black",
-            "-q:v", "3", str(thumb_path)
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-        if not thumb_path.exists() or thumb_path.stat().st_size == 0:
-            cmd_fallback = [
-                "ffmpeg", "-y", "-ss", "00:00:00", "-i", str(clip_path),
-                "-vframes", "1",
-                "-vf", "scale=180:320:force_original_aspect_ratio=decrease,pad=180:320:(ow-iw)/2:(oh-ih)/2:black",
-                "-q:v", "3", str(thumb_path)
-            ]
-            subprocess.run(cmd_fallback, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-
-        if thumb_path.exists() and thumb_path.stat().st_size > 0:
-            return thumb_path
-    except Exception as e:
-        logger.warning("Could not generate thumbnail for %s: %s", clip_path.name, e)
     return None
 
 
@@ -1744,10 +1722,15 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 }
                 meta_path = output_path.with_name(f"{filename}.meta.json")
 
-                cues = pre_cues
-                # Fallback ONLY if no parent transcript covered this clip
-                if not cues and output_path.exists() and get_groq_api_key():
+                # ======================================================================
+                # WARNING: DO NOT MODIFY THIS SUBTITLE TRANSCRIPTION / HINGLISH PIPELINE.
+                # 1. Primary method: Transcribe the rendered clip directly with Groq Whisper
+                # for 100% audio sync and authentic Hinglish (Romanized Hindi).
+                # ======================================================================
+                cues = []
+                if output_path.exists() and get_groq_api_key():
                     try:
+                        logger.info("Transcribing generated clip %s directly for 100%% voice-audio sync...", filename)
                         if sub_lang == "english":
                             clip_tr = translate_clip_to_english_with_groq(output_path)
                         else:
@@ -1761,7 +1744,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             ):
                                 cues = convert_cues_to_hinglish(cues)
                     except Exception as c_err:
-                        logger.warning("Direct clip auto-transcribe fallback failed (%s)", c_err)
+                        logger.warning("Direct clip auto-transcribe failed (%s), falling back to parent slice", c_err)
+
+                # 2. Fallback: Slicing parent transcript if direct transcription failed
+                if not cues:
+                    cues = pre_cues
 
                 if cues or clip_overlays:
                     sub_file = output_path.with_name(f"{filename}.subtitles.json")
@@ -1780,7 +1767,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     raw_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
                     clip_meta["caption"] = clean_hallucinated_text(raw_caption)
 
-                    if should_burn and not burned_in_single_pass:
+                    if should_burn and (not burned_in_single_pass or cues != pre_cues):
                         try:
                             from services.subtitle_service import burn_subtitles_to_clip
                             temp_burn = output_path.with_name(f"{output_path.stem}_burn_temp.mp4")
@@ -1804,11 +1791,6 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     db.db_save_clip_metadata(filename, clip_meta)
             except Exception as meta_err:
                 logger.warning("Could not persist clip metadata: %s", meta_err)
-
-            try:
-                ensure_clip_thumbnail(output_path)
-            except Exception:
-                pass
 
             rel_clip_path = str(output_path.relative_to(CLIPS_DIR)).replace("\\", "/")
             file_entry = {
@@ -2396,7 +2378,7 @@ def list_available_clips():
 
     if CLIPS_DIR.exists():
         for file in sorted(CLIPS_DIR.glob("**/*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
-            if file.name.endswith("_temp_burn.mp4"):
+            if file.name.endswith("_temp_burn.mp4") or file.name.endswith(".raw.mp4") or file.name.endswith("_raw.mp4"):
                 continue
             try:
                 stat = file.stat()
@@ -2461,7 +2443,8 @@ def list_available_clips():
 
                 encoded_rel = urllib.parse.quote(rel_path)
                 url = f"/media/clips/{encoded_rel}"
-                thumb_url = f"/media/clip-thumbs/{encoded_rel}"
+                has_disk_thumb = file.with_name(f"{file.stem}.thumb.jpg").exists()
+                thumb_url = f"/media/clip-thumbs/{encoded_rel}" if has_disk_thumb else ""
 
                 clip_data = {
                     "id": file.name,

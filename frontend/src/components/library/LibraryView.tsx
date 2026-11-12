@@ -344,17 +344,21 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             >
                               {/* 9:16 Vertical Phone Preview Frame */}
                               <div className="relative aspect-[9/16] bg-black overflow-hidden select-none">
-                                <img
-                                  src={
-                                    clip.thumb_url ||
-                                    `/media/clip-thumbs/${encodeURIComponent(clip.relative_path || clip.name)}`
-                                  }
-                                  alt={clip.name}
-                                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                  onError={(e: any) => {
-                                    e.target.style.display = 'none';
-                                  }}
-                                />
+                                {clip.thumb_url && !clip.thumb_url.includes('clip-thumbs') ? (
+                                  <img
+                                    src={clip.thumb_url}
+                                    alt={clip.name}
+                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                  />
+                                ) : (
+                                  <video
+                                    src={`${clip.url}#t=0.001`}
+                                    preload="metadata"
+                                    playsInline
+                                    muted
+                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 pointer-events-none"
+                                  />
+                                )}
 
                                 {/* Subtle Dark Gradient at top and bottom */}
                                 <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/70 to-transparent pointer-events-none" />

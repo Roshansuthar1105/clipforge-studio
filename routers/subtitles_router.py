@@ -1,6 +1,13 @@
 """
 routers/subtitles_router.py — FastAPI endpoints for video transcription,
 clip subtitle retrieval, live editing, single clip burning, and group batch mounting.
+
+==============================================================================
+WARNING: DO NOT MODIFY, REFACTOR, OR BYPASS THIS SUBTITLE / HINGLISH PIPELINE.
+1. Subtitle retrieval and auto-sync strictly default to Romanized Hinglish (Latin A-Z).
+2. Clip playback MUST NOT create duplicate .raw.mp4 copies of videos on disk.
+3. Thumbnail image generation (.thumb.jpg) is permanently disabled.
+==============================================================================
 """
 
 from __future__ import annotations
@@ -244,39 +251,13 @@ def get_or_create_clean_clip(clip_path: Path) -> Path:
             except Exception as e_res:
                 logger.warning("Could not re-slice clean clip from source: %s", e_res)
 
-    # Fallback: preserve current clip as clean
-    try:
-        shutil.copy2(str(clip_path), str(clean_path))
-    except Exception as e_cp:
-        logger.warning("Could not create clean copy %s: %s", clean_path.name, e_cp)
-        return clip_path
-
-    return clean_path
+    # Fallback: preserve current clip as clean without creating unwanted .raw.mp4 copies on disk
+    return clip_path
 
 
 def refresh_clip_thumbnail(clip_path: Path) -> None:
-    """Regenerate 9:16 thumbnail with newly burned subtitles."""
-    try:
-        thumb = clip_path.with_name(f"{clip_path.stem}.thumb.jpg")
-        if thumb.exists():
-            thumb.unlink(missing_ok=True)
-        cmd = [
-            "ffmpeg", "-y", "-ss", "00:00:01", "-i", str(clip_path),
-            "-vframes", "1",
-            "-vf", "scale=180:320:force_original_aspect_ratio=decrease,pad=180:320:(ow-iw)/2:(oh-ih)/2:black",
-            "-q:v", "3", str(thumb)
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12)
-        if not thumb.exists() or thumb.stat().st_size == 0:
-            cmd_fallback = [
-                "ffmpeg", "-y", "-ss", "00:00:00", "-i", str(clip_path),
-                "-vframes", "1",
-                "-vf", "scale=180:320:force_original_aspect_ratio=decrease,pad=180:320:(ow-iw)/2:(oh-ih)/2:black",
-                "-q:v", "3", str(thumb)
-            ]
-            subprocess.run(cmd_fallback, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12)
-    except Exception as exc:
-        logger.warning("Could not refresh thumbnail for %s: %s", clip_path.name, exc)
+    """Regenerate thumbnail with newly burned subtitles (No-op: thumbnail image creation disabled)."""
+    return None
 
 
 def update_clip_metadata_caption(clip_path: Path, full_caption: str, styles: Optional[Dict[str, Any]] = None) -> None:
@@ -409,20 +390,16 @@ def get_subtitles_for_clip(clip_name: str):
     unquoted = urllib.parse.unquote(clip_name)
     subtitles = get_clip_subtitles(unquoted)
 
-    # Provide clean un-subtitled URL if available so editor preview doesn't show baked subtitles underneath
+    # Provide clean URL for editor preview. Never copy or create .raw.mp4 copies upon playback!
     clip_file = _find_clip_path(unquoted)
     if clip_file:
         clean_file = clip_file.with_name(f"{clip_file.stem.replace('_subtitled', '')}.raw.mp4")
         if clean_file.exists():
             rel_clean = str(clean_file.relative_to(CLIPS_DIR)).replace("\\", "/")
             subtitles["clean_url"] = f"/media/clips/{urllib.parse.quote(rel_clean)}"
-        elif not bool(subtitles.get("has_subtitles")) and "_subtitled" not in clip_file.stem:
-            try:
-                shutil.copy2(str(clip_file), str(clean_file))
-                rel_clean = str(clean_file.relative_to(CLIPS_DIR)).replace("\\", "/")
-                subtitles["clean_url"] = f"/media/clips/{urllib.parse.quote(rel_clean)}"
-            except Exception:
-                pass
+        else:
+            rel_clip = str(clip_file.relative_to(CLIPS_DIR)).replace("\\", "/")
+            subtitles["clean_url"] = f"/media/clips/{urllib.parse.quote(rel_clip)}"
 
     styles = subtitles.get("styles") or subtitles.get("style") or {}
     styles.setdefault("text_color", styles.get("primary_color", "#FFFFFF"))
