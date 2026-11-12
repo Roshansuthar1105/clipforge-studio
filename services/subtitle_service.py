@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List, Callable
 
 from services.transcription_service import synthesize_word_timestamps
+from services.ffmpeg_utils import build_video_encoder_args, run_ffmpeg_with_fallback
 
 logger = logging.getLogger("clipforge.subtitles")
 
@@ -486,7 +487,7 @@ def burn_subtitles_to_clip(
 
     total_duration = probe_video_duration(input_video)
 
-    ass_path = input_video.with_suffix(".temp.ass")
+    ass_path = output_video.with_name(f"{output_video.stem}.{threading.get_ident()}.temp.ass")
     try:
         ass_content = build_ass_content(cues, style=style, overlays=overlays)
         with open(ass_path, "w", encoding="utf-8") as f:
@@ -495,79 +496,28 @@ def burn_subtitles_to_clip(
         # Escape path for FFmpeg filter syntax
         escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
-        cmd = [
-            "ffmpeg", "-y",
-            "-hide_banner",
-            "-nostats",
-            "-loglevel", "error",
-            "-progress", "pipe:1",
-            "-i", str(input_video),
-            "-vf", f"ass='{escaped_ass}'",
-            "-c:v", "libx264",
-            "-crf", "20",
-            "-preset", "fast",
-            "-c:a", "copy",
-            str(output_video)
-        ]
+        def _build_burn_cmd(encoder: str) -> list[str]:
+            return [
+                "ffmpeg", "-y",
+                "-hide_banner",
+                "-nostats",
+                "-loglevel", "error",
+                "-threads", "0",
+                "-progress", "pipe:1",
+                "-i", str(input_video),
+                "-vf", f"ass='{escaped_ass}'",
+                *build_video_encoder_args(encoder, crf=21, preset="veryfast"),
+                "-c:a", "copy",
+                "-movflags", "+faststart",
+                str(output_video),
+            ]
 
         logger.info("Burning subtitles into %s...", output_video.name)
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
+        run_ffmpeg_with_fallback(
+            _build_burn_cmd,
+            total_duration=total_duration,
+            progress_callback=progress_callback,
         )
-
-        stderr_lines = []
-
-        def _drain_stderr():
-            try:
-                for l in proc.stderr:
-                    stderr_lines.append(l)
-            except Exception:
-                pass
-
-        t_err = threading.Thread(target=_drain_stderr, daemon=True)
-        t_err.start()
-
-        last_update = 0.0
-
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                if proc.poll() is not None:
-                    break
-                time.sleep(0.01)
-                continue
-
-            line = line.strip()
-            if line.startswith("out_time_us="):
-                try:
-                    us = int(line.split("=")[1])
-                    secs = us / 1_000_000.0
-                    now = time.time()
-                    if progress_callback and (now - last_update >= 0.25 or (total_duration > 0 and secs >= total_duration)):
-                        last_update = now
-                        progress_callback(secs, total_duration)
-                except Exception:
-                    pass
-            elif line == "progress=end":
-                if progress_callback and total_duration > 0:
-                    progress_callback(total_duration, total_duration)
-                break
-
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            pass
-        t_err.join(timeout=1)
-
-        if proc.returncode != 0:
-            err_msg = "".join(stderr_lines).strip()
-            logger.error("FFmpeg burning error: %s", err_msg)
-            raise RuntimeError(f"FFmpeg subtitle burning failed: {err_msg}")
-
         return output_video
 
     finally:

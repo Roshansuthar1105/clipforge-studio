@@ -122,6 +122,7 @@ def sync_accounts_from_env_endpoint(authorization: Optional[str] = Header(None))
     synced = sync_accounts_from_env(user_id=user_id)
     return {
         "success": True,
+        "synced_count": len(synced),
         "message": f"Successfully synced {len(synced)} account(s) from .env",
         "accounts": list_accounts_safe(user_id),
     }

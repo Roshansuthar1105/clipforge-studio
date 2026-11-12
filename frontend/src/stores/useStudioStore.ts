@@ -1,36 +1,52 @@
 import { create } from 'zustand';
-import type { VideoMetadata, ViralMoment } from '../types';
+import type { DownloadItem, VideoMetadata, ViralMoment } from '../types';
 import { apiClient, showToast } from '../api/client';
+
+function extractLocalDownloadFilename(input: string): string | null {
+  const trimmed = (input || '').trim();
+  if (!trimmed) return null;
+
+  const mediaMatch = trimmed.match(/^(?:https?:\/\/[^/]+)?\/media\/downloads\/(.+)$/i);
+  if (mediaMatch && mediaMatch[1]) {
+    try {
+      return decodeURIComponent(mediaMatch[1].split('?')[0]);
+    } catch {
+      return mediaMatch[1].split('?')[0];
+    }
+  }
+
+  if (!trimmed.includes('://') && !/youtube\.com|youtu\.be/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return null;
+}
+
+function cleanVideoTitle(rawTitle: string): string {
+  return (rawTitle || '')
+    .replace(/[\s]*[|:][\s]*/g, ' - ')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 interface StudioState {
   url: string;
+  sourceFile: string | null;
   metadata: VideoMetadata | null;
   cached: boolean;
   isLoadingPreview: boolean;
+  downloadedVideos: DownloadItem[];
+  isLoadingDownloads: boolean;
   slicingMode: 'parts' | 'viral';
-  
+
   // Timeline Scrubber & Sequential Options
   startTime: number;
   endTime: number;
   clipLength: number;
   maxClips: number;
   selectedStyle: 'blur' | 'crop' | 'fit';
-
-  // Dynamic Text Overlays
-  overlayDrawerOpen: boolean;
-  showSafeZones: boolean;
   titleText: string;
-  titleFontSize: number;
-  titleY: number; // Y pixel in 1080x1920
-  titleAlignment: 'center' | 'left' | 'right';
-  titleColor: string;
-  
-  partEnabled: boolean;
-  partFormat: 'Part {n}' | 'PART {n}' | 'Pt. {n}' | 'Episode {n}';
-  partFontSize: number;
-  partY: number;
-  partAlignment: 'center' | 'left' | 'right';
-  partColor: string;
 
   // AI Viral Moments Options (Opus Clip)
   isScanningViral: boolean;
@@ -44,6 +60,8 @@ interface StudioState {
   // Actions
   setUrl: (url: string) => void;
   fetchPreview: (url: string) => Promise<void>;
+  loadDownloadedVideos: () => Promise<void>;
+  selectDownloadedVideo: (filename: string) => Promise<void>;
   clearUrl: () => void;
   setSlicingMode: (mode: 'parts' | 'viral') => void;
   setTimelineRange: (start: number, end: number) => void;
@@ -51,12 +69,7 @@ interface StudioState {
   setClipLength: (seconds: number) => void;
   setMaxClips: (count: number) => void;
   setSelectedStyle: (style: 'blur' | 'crop' | 'fit') => void;
-  
-  toggleOverlayDrawer: () => void;
-  toggleSafeZones: () => void;
-  setOverlaySetting: (key: string, val: any) => void;
-  setTitleYPreset: (preset: 'top' | 'safe' | 'center') => void;
-  setPartYPreset: (preset: 'top' | 'safe' | 'center') => void;
+  setTitleText: (title: string) => void;
 
   scanViralMoments: () => Promise<void>;
   setViralSetting: (key: string, val: any) => void;
@@ -65,9 +78,12 @@ interface StudioState {
 
 export const useStudioStore = create<StudioState>((set, get) => ({
   url: '',
+  sourceFile: null,
   metadata: null,
   cached: false,
   isLoadingPreview: false,
+  downloadedVideos: [],
+  isLoadingDownloads: false,
   slicingMode: 'parts',
 
   startTime: 0,
@@ -75,21 +91,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   clipLength: 60,
   maxClips: 5,
   selectedStyle: 'blur',
-
-  overlayDrawerOpen: false,
-  showSafeZones: false,
   titleText: '',
-  titleFontSize: 54,
-  titleY: 280,
-  titleAlignment: 'center',
-  titleColor: '#FFFFFF',
-
-  partEnabled: false,
-  partFormat: 'Part {n}',
-  partFontSize: 36,
-  partY: 360,
-  partAlignment: 'center',
-  partColor: '#F59E0B',
 
   isScanningViral: false,
   viralMoments: [],
@@ -99,37 +101,79 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   viralBurnSubtitles: true,
   viralIncludeTeaser: true,
 
-  setUrl: (url) => set({ url }),
+  setUrl: (url) => set({ url, sourceFile: extractLocalDownloadFilename(url) }),
 
   clearUrl: () => set({
     url: '',
+    sourceFile: null,
     metadata: null,
     cached: false,
+    titleText: '',
     startTime: 0,
     endTime: 0,
     viralMoments: []
   }),
 
-  fetchPreview: async (url: string) => {
-    if (!url.trim()) return;
-    set({ isLoadingPreview: true });
+  loadDownloadedVideos: async () => {
+    set({ isLoadingDownloads: true });
     try {
-      const meta = await apiClient.getVideoPreview(url);
-      const cacheCheck = await apiClient.checkCache(url).catch(() => ({ cached: false }));
+      const res = await apiClient.getDownloads();
+      set({ downloadedVideos: res.downloads || [], isLoadingDownloads: false });
+    } catch {
+      set({ isLoadingDownloads: false });
+    }
+  },
 
-      const rawTitle = meta.title || '';
-      const cleanTitle = rawTitle
-        .replace(/[\s]*[|:][\s]*/g, ' - ')
-        .replace(/_/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+  selectDownloadedVideo: async (filename: string) => {
+    const cleanName = (filename || '').trim();
+    if (!cleanName) return;
+    set({ isLoadingPreview: true, sourceFile: cleanName });
+    try {
+      const meta = await apiClient.getDownloadInfo(cleanName);
+      const cleanTitle = cleanVideoTitle(meta.title || cleanName);
+      set({
+        url: meta.url || '',
+        sourceFile: meta.source_file || cleanName,
+        metadata: meta,
+        cached: true,
+        titleText: cleanTitle,
+        startTime: 0,
+        endTime: meta.duration || 300,
+        viralMoments: [],
+        isLoadingPreview: false,
+      });
+      showToast(`Selected local video "${meta.title?.slice(0, 40) || cleanName}"`, 'info');
+    } catch (err: any) {
+      set({ isLoadingPreview: false });
+      showToast(err.response?.data?.detail || 'Failed to load downloaded video details', 'error');
+    }
+  },
+
+  fetchPreview: async (url: string) => {
+    const trimmed = (url || '').trim();
+    if (!trimmed) return;
+
+    const localFilename = extractLocalDownloadFilename(trimmed);
+    if (localFilename) {
+      await get().selectDownloadedVideo(localFilename);
+      return;
+    }
+
+    set({ isLoadingPreview: true, sourceFile: null });
+    try {
+      const meta = await apiClient.getVideoPreview(trimmed);
+      const cacheCheck = await apiClient.checkCache(trimmed).catch(() => ({ cached: false }));
+      const cleanTitle = cleanVideoTitle(meta.title || '');
 
       set({
+        url: trimmed,
+        sourceFile: null,
         metadata: meta,
         cached: !!cacheCheck.cached,
         titleText: cleanTitle,
         startTime: 0,
         endTime: meta.duration || 300,
+        viralMoments: [],
         isLoadingPreview: false,
       });
 
@@ -142,7 +186,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   setSlicingMode: (mode) => set({ slicingMode: mode }),
   setTimelineRange: (start, end) => set({ startTime: start, endTime: end }),
-  
+
   setTimelinePreset: (preset) => {
     const total = get().metadata?.duration || 300;
     if (preset === '30s') set({ startTime: 0, endTime: Math.min(30, total) });
@@ -154,34 +198,19 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setClipLength: (seconds) => set({ clipLength: seconds }),
   setMaxClips: (count) => set({ maxClips: count }),
   setSelectedStyle: (style) => set({ selectedStyle: style }),
-
-  toggleOverlayDrawer: () => set((state) => ({ overlayDrawerOpen: !state.overlayDrawerOpen })),
-  toggleSafeZones: () => set((state) => ({ showSafeZones: !state.showSafeZones })),
-  
-  setOverlaySetting: (key, val) => set({ [key]: val } as any),
-
-  setTitleYPreset: (preset) => {
-    if (preset === 'top') set({ titleY: 260 });
-    else if (preset === 'safe') set({ titleY: 340 });
-    else if (preset === 'center') set({ titleY: 960 });
-  },
-
-  setPartYPreset: (preset) => {
-    if (preset === 'top') set({ partY: 330 });
-    else if (preset === 'safe') set({ partY: 410 });
-    else if (preset === 'center') set({ partY: 1040 });
-  },
+  setTitleText: (titleText) => set({ titleText }),
 
   scanViralMoments: async () => {
-    const { url, viralMaxClips, viralMinDuration, viralMaxDuration } = get();
-    if (!url) {
-      showToast('Please enter a YouTube video URL first', 'warning');
+    const { url, sourceFile, viralMaxClips, viralMinDuration, viralMaxDuration } = get();
+    if (!url.trim() && !sourceFile) {
+      showToast('Please enter a YouTube URL or select a downloaded video first', 'warning');
       return;
     }
     set({ isScanningViral: true });
     try {
       const data = await apiClient.detectViralMoments({
-        url,
+        url: sourceFile ? undefined : url.trim(),
+        source_file: sourceFile || undefined,
         max_moments: viralMaxClips,
         min_duration: viralMinDuration,
         max_duration: viralMaxDuration,
@@ -198,15 +227,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   submitStudioJob: async (isPreview = false) => {
     const s = get();
-    if (!s.url) {
-      showToast('Please provide a video URL', 'warning');
+    if (!s.url.trim() && !s.sourceFile) {
+      showToast('Please provide a video URL or select a downloaded video', 'warning');
       return null;
     }
 
     try {
       const payload: any = {
-        url: s.url,
+        url: s.sourceFile ? '' : s.url.trim(),
+        source_file: s.sourceFile || undefined,
         style: s.selectedStyle,
+        background_style: s.selectedStyle === 'fit' ? 'black' : s.selectedStyle,
         clip_length: isPreview ? Math.min(30, s.clipLength) : s.clipLength,
         max_clips: isPreview ? 1 : s.maxClips,
         start_time: s.startTime,
@@ -219,8 +250,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
 
       if (s.slicingMode === 'viral' && s.viralMoments.length > 0) {
-        payload.viral_moments = s.viralMoments;
-        payload.include_teaser_hook = s.viralIncludeTeaser;
+        payload.slicing_mode = 'ai_viral';
+        payload.moments = s.viralMoments;
+        payload.prepend_hook = s.viralIncludeTeaser;
         payload.burn_subtitles = s.viralBurnSubtitles;
       }
 

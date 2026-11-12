@@ -45,7 +45,7 @@ export const App: React.FC = () => {
   const { activeJobId, startJobPolling } = useJobsStore();
   const { openSubtitleStudio } = useSubtitleStore();
   const { openPublishModal } = usePublishStore();
-  const { setUrl, fetchPreview } = useStudioStore();
+  const { fetchPreview } = useStudioStore();
 
   useEffect(() => {
     // Sync initial route from URL hash
@@ -127,9 +127,8 @@ export const App: React.FC = () => {
     openPublishModal([{ name, url }]);
   };
 
-  const handleSliceInStudio = (downloadUrl: string) => {
-    setUrl(downloadUrl);
-    fetchPreview(downloadUrl);
+  const handleSliceInStudio = (filenameOrUrl: string) => {
+    fetchPreview(filenameOrUrl);
     handleSwitchView('studio');
   };
 
@@ -144,14 +143,7 @@ export const App: React.FC = () => {
       {/* Main View Router */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Main Tab 1: Slicing Studio */}
-        {currentView === 'studio' && (
-          <StudioView
-            onOpenViralModal={() => {
-              handleOpenViralView(undefined, useStudioStore.getState().url);
-            }}
-            onOpenPhonePlayer={handleOpenPhonePlayer}
-          />
-        )}
+        {currentView === 'studio' && <StudioView />}
 
         {/* Main Tab 2: Job Queue & Auto-Scheduler */}
         {currentView === 'jobs' && <JobsView />}

@@ -30,12 +30,9 @@ interface PublishState {
   openPublishModal: (clips: PublishItem[]) => void;
   closePublishModal: () => void;
   toggleAccountSelection: (accountId: string) => void;
-  selectAllAccounts: (accountIds: string[]) => void;
-  clearAccountSelection: () => void;
   setTitle: (title: string) => void;
   setCaption: (caption: string) => void;
   appendHashtag: (tag: string) => void;
-  removeClipFromQueue: (index: number) => void;
   dismissPublishJob: () => void;
   executePublish: () => Promise<boolean>;
 }
@@ -116,9 +113,6 @@ export const usePublishStore = create<PublishState>((set, get) => ({
     });
   },
 
-  selectAllAccounts: (accountIds) => set({ selectedAccountIds: new Set(accountIds) }),
-  clearAccountSelection: () => set({ selectedAccountIds: new Set() }),
-
   setTitle: (title) => set({ title }),
   setCaption: (caption) => set({ caption }),
   appendHashtag: (tag) => {
@@ -126,12 +120,6 @@ export const usePublishStore = create<PublishState>((set, get) => ({
     const curr = get().caption;
     if (curr.includes(cleanTag)) return;
     set({ caption: curr ? `${curr} ${cleanTag}` : cleanTag });
-  },
-
-  removeClipFromQueue: (index) => {
-    set((state) => ({
-      clips: state.clips.filter((_, i) => i !== index),
-    }));
   },
 
   executePublish: async () => {

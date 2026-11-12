@@ -77,6 +77,10 @@ export const apiClient = {
     const res = await api.get(`/api/cache-check?url=${encodeURIComponent(url)}`);
     return res.data;
   },
+  async getDownloadInfo(filename: string): Promise<VideoMetadata> {
+    const res = await api.get(`/api/downloads/${encodeURIComponent(filename)}/info`);
+    return res.data;
+  },
 
   // ----------------------------------------------------
   // JOBS
@@ -122,11 +126,11 @@ export const apiClient = {
     return res.data;
   },
   async deleteClip(clipKey: string): Promise<{ success: boolean }> {
-    const res = await api.delete(`/api/media/clips?name=${encodeURIComponent(clipKey)}`);
+    const res = await api.delete(`/api/media/clips?filename=${encodeURIComponent(clipKey)}`);
     return res.data;
   },
   async deleteFolder(folderPath: string): Promise<{ success: boolean }> {
-    const res = await api.delete(`/api/media/clips/folder?folder=${encodeURIComponent(folderPath)}`);
+    const res = await api.delete(`/api/media/clips/folder?folder_path=${encodeURIComponent(folderPath)}`);
     return res.data;
   },
   async getDownloads(): Promise<{ downloads: DownloadItem[] }> {
@@ -247,9 +251,6 @@ export const apiClient = {
     const res = await api.post(`/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/hinglish`, payload || {});
     return res.data;
   },
-  getSubtitleDownloadUrl(clipName: string, format: 'srt' | 'ass' = 'srt'): string {
-    return `/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/download?format=${format}`;
-  },
   downloadSubtitlesFile(clipName: string, format: 'srt' | 'ass' = 'srt') {
     const url = `/api/subtitles/clips/${encodeURIComponent(clipName)}/subtitles/download?format=${format}`;
     const a = document.createElement('a');
@@ -293,7 +294,7 @@ export const apiClient = {
     max_duration?: number;
     force_refresh?: boolean;
   }): Promise<{ moments: ViralMoment[]; source_title?: string; duration?: number }> {
-    const res = await api.post('/api/viral/detect-moments', payload);
+    const res = await api.post('/api/viral-moments/detect', payload);
     return res.data;
   },
   async sliceViralMoments(payload: {
@@ -303,7 +304,14 @@ export const apiClient = {
     include_teaser_hook?: boolean;
     burn_subtitles?: boolean;
   }): Promise<{ job_id: string }> {
-    const res = await api.post('/api/viral/slice-moments', payload);
+    const res = await api.post('/api/jobs', {
+      url: payload.url || '',
+      source_file: payload.source_file || undefined,
+      slicing_mode: 'ai_viral',
+      moments: payload.moments,
+      prepend_hook: payload.include_teaser_hook ?? true,
+      burn_subtitles: payload.burn_subtitles ?? true,
+    });
     return res.data;
   },
 
@@ -337,10 +345,6 @@ export const apiClient = {
     const res = await api.get(`/api/schedule?status=${encodeURIComponent(status)}`);
     return res.data;
   },
-  async getScheduledPost(scheduleId: string): Promise<any> {
-    const res = await api.get(`/api/schedule/${encodeURIComponent(scheduleId)}`);
-    return res.data;
-  },
   async updateScheduledPost(scheduleId: string, updates: any): Promise<any> {
     const res = await api.put(`/api/schedule/${encodeURIComponent(scheduleId)}`, updates);
     return res.data;
@@ -368,10 +372,6 @@ export const apiClient = {
     timestamp: number;
   }> {
     const res = await api.get('/api/speedtest/server');
-    return res.data;
-  },
-  async getPing(): Promise<{ status: string; timestamp: number }> {
-    const res = await api.get('/api/speedtest/ping');
     return res.data;
   },
 };

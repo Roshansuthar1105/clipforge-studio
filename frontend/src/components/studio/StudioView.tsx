@@ -1,36 +1,32 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Link2,
   Sparkles,
   Play,
   Scissors,
   Eye,
-  Sliders,
   CheckCircle2,
   Flame,
   Zap,
-  Clock,
-  Layers,
-  ChevronDown,
-  ChevronUp,
   X,
-  Tv,
+  FolderOpen,
+  RefreshCw,
 } from 'lucide-react';
 import { useStudioStore } from '../../stores/useStudioStore';
 import { useJobsStore } from '../../stores/useJobsStore';
 
-interface StudioViewProps {
-  onOpenViralModal: () => void;
-  onOpenPhonePlayer: (url: string, name: string) => void;
-}
-
-export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
+export const StudioView: React.FC = () => {
   const {
     url,
+    sourceFile,
     setUrl,
     metadata,
     cached,
     isLoadingPreview,
+    downloadedVideos,
+    isLoadingDownloads,
+    loadDownloadedVideos,
+    selectDownloadedVideo,
     fetchPreview,
     clearUrl,
     slicingMode,
@@ -45,20 +41,8 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
     setMaxClips,
     selectedStyle,
     setSelectedStyle,
-    overlayDrawerOpen,
-    toggleOverlayDrawer,
     titleText,
-    titleFontSize,
-    titleY,
-    titleColor,
-    partEnabled,
-    partFormat,
-    partFontSize,
-    partY,
-    partColor,
-    setOverlaySetting,
-    setTitleYPreset,
-    setPartYPreset,
+    setTitleText,
     isScanningViral,
     viralMoments,
     scanViralMoments,
@@ -68,7 +52,13 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
     submitStudioJob,
   } = useStudioStore();
 
+  useEffect(() => {
+    loadDownloadedVideos();
+  }, [loadDownloadedVideos]);
+
   const { startJobPolling } = useJobsStore();
+
+  const hasSource = Boolean(url.trim() || sourceFile);
 
   const handleUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,35 +88,42 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
               <span className="w-6 h-6 rounded-lg bg-indigo-600/30 text-indigo-400 border border-indigo-500/40 flex items-center justify-center text-xs">
                 1
               </span>
-              Source YouTube Video
+              Source Video (YouTube or Downloaded)
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Paste any YouTube video or Shorts URL to slice into 9:16 vertical clips.
+              Paste a YouTube link or choose an already-downloaded video below to slice into 9:16 vertical clips.
             </p>
           </div>
 
-          {cached && (
-            <span className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-500/30">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Cached on Server
-            </span>
-          )}
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            {sourceFile && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
+                <FolderOpen className="w-3.5 h-3.5" /> Local Video
+              </span>
+            )}
+            {cached && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-500/30">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Cached on Server
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Input & Fetch Bar */}
         <form onSubmit={handleUrlSubmit} className="flex flex-col sm:flex-row gap-2.5">
           <div className="relative flex-1">
             <input
-              type="url"
+              type="text"
               className="w-full pl-10 pr-10 py-3 rounded-2xl glass-input text-sm text-white placeholder:text-slate-500"
-              placeholder="https://www.youtube.com/watch?v=..."
-              value={url}
+              placeholder="https://www.youtube.com/watch?v=... or /media/downloads/..."
+              value={url || sourceFile || ''}
               onChange={(e) => setUrl(e.target.value)}
               onBlur={() => {
-                if (url && !metadata) fetchPreview(url);
+                if ((url || sourceFile) && !metadata) fetchPreview(url || sourceFile || '');
               }}
             />
             <Link2 className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
-            {url && (
+            {(url || sourceFile) && (
               <button
                 type="button"
                 className="absolute right-3.5 top-3.5 text-slate-400 hover:text-white"
@@ -141,7 +138,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
           <button
             type="submit"
             className="px-6 py-3 rounded-2xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/25 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-            disabled={isLoadingPreview || !url.trim()}
+            disabled={isLoadingPreview || !hasSource}
           >
             {isLoadingPreview ? (
               <span>Fetching Details...</span>
@@ -152,6 +149,51 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
             )}
           </button>
         </form>
+
+        {/* Downloaded Videos Quick Selector */}
+        {downloadedVideos.length > 0 && (
+          <div className="mt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className="flex items-center gap-2 text-xs text-slate-400 shrink-0">
+              <FolderOpen className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Or pick downloaded ({downloadedVideos.length}):</span>
+            </div>
+            <div className="flex flex-1 items-center gap-2">
+              <select
+                className="flex-1 py-2 px-3 rounded-xl glass-input text-xs text-white bg-slate-900/80"
+                value={sourceFile || ''}
+                onChange={(e) => {
+                  if (e.target.value) selectDownloadedVideo(e.target.value);
+                }}
+              >
+                <option value="">-- Select a downloaded video --</option>
+                {downloadedVideos.map((d) => {
+                  const fname = d.filename || d.name || '';
+                  const label = d.title || d.clean_title || fname;
+                  const metaSuffix = [
+                    d.size_mb ? `${d.size_mb} MB` : '',
+                    d.duration_formatted || (d.duration ? formatSeconds(d.duration) : ''),
+                  ]
+                    .filter(Boolean)
+                    .join(' • ');
+                  return (
+                    <option key={fname} value={fname}>
+                      {label}{metaSuffix ? ` (${metaSuffix})` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+              <button
+                type="button"
+                className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-all cursor-pointer"
+                onClick={loadDownloadedVideos}
+                title="Refresh downloaded videos"
+                disabled={isLoadingDownloads}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDownloads ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Video Preview Metadata Card */}
         {metadata && (
@@ -193,7 +235,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
                   className="glass-input text-xs w-full py-1.5 px-3"
                   placeholder="Custom title prefix for clips and uploads..."
                   value={titleText}
-                  onChange={(e) => setOverlaySetting('titleText', e.target.value)}
+                  onChange={(e) => setTitleText(e.target.value)}
                 />
               </div>
             </div>
@@ -453,7 +495,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
               type="button"
               className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-lg shadow-purple-600/25 flex items-center gap-2 cursor-pointer disabled:opacity-50"
               onClick={scanViralMoments}
-              disabled={isScanningViral || !url}
+              disabled={isScanningViral || !hasSource}
             >
               <Zap className="w-3.5 h-3.5" />
               {isScanningViral ? 'Analyzing Transcript...' : 'Scan Viral Moments'}
@@ -529,7 +571,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
           type="button"
           className="flex-1 py-3.5 px-6 rounded-2xl border border-white/10 bg-slate-900/60 hover:bg-slate-900 text-slate-300 hover:text-white font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           onClick={() => handleStartRender(true)}
-          disabled={!url}
+          disabled={!hasSource}
         >
           <Eye className="w-4 h-4 text-slate-400" /> Preview First Clip (Fast Slice)
         </button>
@@ -538,7 +580,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ onOpenViralModal }) => {
           type="button"
           className="flex-2 py-3.5 px-6 rounded-2xl text-white font-bold text-sm bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 shadow-xl shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           onClick={() => handleStartRender(false)}
-          disabled={!url}
+          disabled={!hasSource}
         >
           <Play className="w-4 h-4 fill-current" />
           {slicingMode === 'viral' && viralMoments.length > 0

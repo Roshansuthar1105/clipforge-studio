@@ -27,7 +27,6 @@ interface LibraryState {
   expandAllFolders: (expand: boolean) => void;
   toggleClipSelection: (clipId: string) => void;
   toggleFolderSelection: (folderName: string, select: boolean) => void;
-  selectAllClips: (select: boolean) => void;
   clearSelection: () => void;
   deleteClip: (clipId: string, name: string) => Promise<void>;
   deleteFolder: (folderPath: string, title: string) => Promise<void>;
@@ -205,12 +204,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       });
       return { selectedClips: next };
     });
-  },
-
-  selectAllClips: (select) => {
-    set((state) => ({
-      selectedClips: select ? new Set(state.clips.map((c) => c.id || c.name)) : new Set(),
-    }));
   },
 
   clearSelection: () => set({ selectedClips: new Set() }),

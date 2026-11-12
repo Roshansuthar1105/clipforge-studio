@@ -15,18 +15,19 @@ export interface VideoMetadata {
   duration_string?: string;
   views?: number;
   cached?: boolean;
+  source_file?: string;
 }
 
 export interface JobProgress {
   pct: number;
-  status: 'pending' | 'downloading' | 'slicing' | 'processing' | 'completed' | 'error' | 'cancelled';
+  status: 'queued' | 'pending' | 'downloading' | 'slicing' | 'processing' | 'completed' | 'error' | 'failed' | 'cancelled';
   msg: string;
   stage?: number;
 }
 
 export interface Job {
   id: string;
-  status: 'pending' | 'downloading' | 'slicing' | 'processing' | 'completed' | 'error' | 'cancelled';
+  status: 'queued' | 'pending' | 'downloading' | 'slicing' | 'processing' | 'completed' | 'error' | 'failed' | 'cancelled';
   progress: number;
   stage_msg: string;
   message?: string;
@@ -101,6 +102,7 @@ export interface ClipItem {
   id: string;
   name: string;
   filename?: string;
+  relative_path?: string;
   url: string;
   thumb_url: string;
   thumbnail_url?: string;

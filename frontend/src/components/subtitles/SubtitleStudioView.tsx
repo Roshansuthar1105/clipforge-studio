@@ -66,6 +66,7 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
     addCue,
     deleteCue,
     shiftAllCues,
+    autoSyncSubtitles,
     findWord,
     replaceWord,
     bulkFindAndReplace,
@@ -705,6 +706,14 @@ export const SubtitleStudioView: React.FC<SubtitleStudioViewProps> = ({ onBack }
                       onClick={() => shiftAllCues(0.5)}
                     >
                       +0.5s
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-1 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-[11px] font-bold text-sky-300 transition-all cursor-pointer flex items-center gap-1"
+                      onClick={autoSyncSubtitles}
+                      title="Re-sync subtitle timings from voice audio via Whisper"
+                    >
+                      <Clock className="w-3 h-3" /> Auto-Sync
                     </button>
                     <button
                       type="button"

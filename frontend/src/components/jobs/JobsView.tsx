@@ -84,9 +84,16 @@ export const JobsView: React.FC = () => {
 
   const filteredJobs = jobsList.filter((j) => {
     if (activeJobFilter === 'running')
-      return j.status === 'pending' || j.status === 'downloading' || j.status === 'slicing';
+      return (
+        j.status === 'queued' ||
+        j.status === 'pending' ||
+        j.status === 'downloading' ||
+        j.status === 'slicing' ||
+        j.status === 'processing'
+      );
     if (activeJobFilter === 'completed') return j.status === 'completed';
-    if (activeJobFilter === 'error') return j.status === 'error' || j.status === 'cancelled';
+    if (activeJobFilter === 'error')
+      return j.status === 'error' || j.status === 'failed' || j.status === 'cancelled';
     return true;
   });
 
@@ -310,7 +317,11 @@ export const JobsView: React.FC = () => {
             <div className="space-y-3">
               {filteredJobs.map((job) => {
                 const isRunning =
-                  job.status === 'pending' || job.status === 'downloading' || job.status === 'slicing' || job.status === 'processing';
+                  job.status === 'queued' ||
+                  job.status === 'pending' ||
+                  job.status === 'downloading' ||
+                  job.status === 'slicing' ||
+                  job.status === 'processing';
                 const isDownloading = job.status === 'downloading' || job.stage === 'downloading';
                 const isClipping = (job.status === 'slicing' || job.status === 'processing') && job.stage === 'clipping';
 
@@ -329,7 +340,7 @@ export const JobsView: React.FC = () => {
                             className={`px-2.5 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wider ${
                               job.status === 'completed'
                                 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                : job.status === 'error' || job.status === 'cancelled'
+                                : job.status === 'error' || job.status === 'failed' || job.status === 'cancelled'
                                 ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
                                 : isDownloading
                                 ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'

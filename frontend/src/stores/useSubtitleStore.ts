@@ -167,6 +167,7 @@ interface SubtitleState {
 
   convertToHinglish: () => Promise<void>;
   translateToEnglish: () => Promise<void>;
+  autoSyncSubtitles: () => Promise<void>;
   setCaption: (caption: string) => void;
   downloadSubtitles: (format: 'srt' | 'ass') => void;
   burnSubtitlesToVideo: () => Promise<boolean>;
@@ -594,6 +595,25 @@ export const useSubtitleStore = create<SubtitleState>((set, get) => ({
       }
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Translation failed', 'error');
+    }
+  },
+
+  autoSyncSubtitles: async () => {
+    const { clipName } = get();
+    if (!clipName) return;
+    try {
+      showToast('Auto-syncing subtitle timings with Whisper audio...', 'info');
+      const res = await apiClient.autoSyncSubtitles(clipName);
+      if (res && res.cues) {
+        const newCaption = res.cues.map((c) => c.text).join(' ');
+        set({
+          cues: res.cues,
+          caption: newCaption,
+        });
+        showToast('Subtitles synced with clip voice audio!', 'success');
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Auto-sync failed', 'error');
     }
   },
 

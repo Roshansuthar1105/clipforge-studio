@@ -47,6 +47,11 @@ from services.subtitle_service import (
     build_srt_content,
     build_ass_content,
 )
+from services.ffmpeg_utils import (
+    build_video_encoder_args,
+    get_max_encode_workers,
+    run_ffmpeg_with_fallback,
+)
 
 logger = logging.getLogger("clipforge.subtitles_router")
 router = APIRouter(tags=["subtitles"])
@@ -55,29 +60,34 @@ SUBTITLE_JOBS_FILE = BASE_DIR / "subtitle_jobs.json"
 
 _subtitle_jobs: Dict[str, Dict[str, Any]] = {}
 _sub_lock = threading.Lock()
+_sub_last_disk_flush: Dict[str, float] = {}
 
 
-def _save_subtitle_job(job_doc: Dict[str, Any]) -> None:
-    """Save subtitle job in-memory and persist to disk."""
+def _save_subtitle_job(job_doc: Dict[str, Any], force_disk: bool = False) -> None:
+    """Save subtitle job in-memory and throttle JSON disk writes during progress ticks."""
     job_id = job_doc.get("job_id")
     if not job_id:
         return
     with _sub_lock:
-        _subtitle_jobs[job_id] = job_doc
-        try:
-            from storage import read_json, write_json
-            all_jobs = read_json(SUBTITLE_JOBS_FILE, {})
-            all_jobs[job_id] = job_doc
-            write_json(SUBTITLE_JOBS_FILE, all_jobs)
-        except Exception:
-            pass
+        _subtitle_jobs[job_id] = dict(job_doc)
+        now = time.time()
+        is_terminal = job_doc.get("status") in ("completed", "error", "failed")
+        if force_disk or is_terminal or (now - _sub_last_disk_flush.get(job_id, 0.0) >= 2.0):
+            _sub_last_disk_flush[job_id] = now
+            try:
+                from storage import read_json, write_json
+                all_jobs = read_json(SUBTITLE_JOBS_FILE, {})
+                all_jobs[job_id] = _subtitle_jobs[job_id]
+                write_json(SUBTITLE_JOBS_FILE, all_jobs)
+            except Exception:
+                pass
 
 
 def _get_subtitle_job(job_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve subtitle job from in-memory cache or disk."""
     with _sub_lock:
         if job_id in _subtitle_jobs:
-            return _subtitle_jobs[job_id]
+            return dict(_subtitle_jobs[job_id])
     try:
         from storage import read_json
         all_jobs = read_json(SUBTITLE_JOBS_FILE, {})
@@ -207,27 +217,27 @@ def get_or_create_clean_clip(clip_path: Path) -> Path:
                 dur = clip_end - clip_start
                 filter_script = (
                     "[0:v:0]split=2[bg][fg];"
-                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                    "crop=1080:1920,boxblur=20:5[bg_blur];"
+                    "[bg]scale=180:320:force_original_aspect_ratio=increase,"
+                    "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[bg_blur];"
                     "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg_scaled];"
                     "[bg_blur][fg_scaled]overlay=(W-w)/2:(H-h)/2[v]"
                 )
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-ss", str(clip_start),
-                    "-t", str(dur),
-                    "-i", str(found_source),
-                    "-filter_complex", filter_script,
-                    "-map", "[v]",
-                    "-map", "0:a:0?",
-                    "-c:v", "libx264",
-                    "-crf", "18",
-                    "-preset", "fast",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    str(clean_path)
-                ]
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=120)
+                def _build_clean_cmd(encoder: str) -> list[str]:
+                    return [
+                        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-threads", "0",
+                        "-ss", str(clip_start),
+                        "-t", str(dur),
+                        "-i", str(found_source),
+                        "-filter_complex", filter_script,
+                        "-map", "[v]",
+                        "-map", "0:a:0?",
+                        *build_video_encoder_args(encoder, crf=20, preset="veryfast"),
+                        "-c:a", "aac",
+                        "-b:a", "192k",
+                        "-movflags", "+faststart",
+                        str(clean_path),
+                    ]
+                run_ffmpeg_with_fallback(_build_clean_cmd, total_duration=dur)
                 if clean_path.exists() and clean_path.stat().st_size > 0:
                     logger.info("Successfully restored clean master %s", clean_path.name)
                     return clean_path
@@ -925,17 +935,17 @@ def _process_group_subtitle_job(
                         logger.warning("Could not pre-translate parent video: %s", exc)
                     break
 
-    for idx, clip_file in enumerate(clips):
-        rel_clip_path = str(clip_file.relative_to(CLIPS_DIR)).replace("\\", "/")
-        current_job = _get_subtitle_job(job_id)
-        if current_job:
-            current_job["current_clip"] = clip_file.name
-            current_job["progress"] = int((idx / total) * 100)
-            current_job["message"] = f"Mounting subtitles to reel {idx + 1} of {total}: {clip_file.name}..."
-            _save_subtitle_job(current_job)
+    from concurrent.futures import ThreadPoolExecutor
 
+    max_workers = get_max_encode_workers() if total > 1 else 1
+    progress_lock = threading.Lock()
+    clip_fractions = [0.0] * total
+    completed_flags = [False] * total
+    results_slots: list[Optional[Dict[str, Any]]] = [None] * total
+
+    def _process_single_group_clip(idx: int, clip_file: Path) -> None:
+        rel_clip_path = str(clip_file.relative_to(CLIPS_DIR)).replace("\\", "/")
         try:
-            # 1. Retrieve or slice subtitles (English only or Hinglish if requested)
             cues = []
             sub_data = get_clip_subtitles(rel_clip_path)
 
@@ -975,7 +985,6 @@ def _process_group_subtitle_job(
             if not cues:
                 cues = sub_data.get("cues", [])
 
-            # Fallback to direct clip transcription if needed
             if not cues and get_groq_api_key():
                 try:
                     logger.info("Auto-transcribing clip %s for group mount...", clip_file.name)
@@ -986,17 +995,18 @@ def _process_group_subtitle_job(
 
             if not cues and not overlays:
                 logger.warning("No subtitle cues or overlays found for %s; skipping.", clip_file.name)
-                results.append({"clip": clip_file.name, "status": "skipped", "reason": "No speech cues or overlays found"})
-                continue
+                with progress_lock:
+                    clip_fractions[idx] = 1.0
+                    completed_flags[idx] = True
+                    results_slots[idx] = {"clip": clip_file.name, "status": "skipped", "reason": "No speech cues or overlays found"}
+                return
 
-            # Guarantee zero Devanagari characters: auto-convert Hindi speech to Hinglish by default
             if cues and not english_only and (hinglish or any(has_devanagari_characters(c.get("text", "")) for c in cues)):
                 try:
                     cues = convert_cues_to_hinglish(cues)
                 except Exception as h_err:
                     logger.warning("Hinglish cue conversion failed for %s: %s", clip_file.name, h_err)
 
-            # 2. Merge styles and apply preview text transform
             merged_styles = {**(sub_data.get("styles") or {}), **styles}
             merged_hl = merged_styles.get("highlight_mode", "active_word")
             if cues and merged_hl in ("active_word", "voice_synced"):
@@ -1008,33 +1018,33 @@ def _process_group_subtitle_job(
                 if raw_text:
                     cue["text"] = apply_text_transform(raw_text, text_transform)
 
-            # 3. Save subtitle cues and overlays
             save_clip_subtitles(rel_clip_path, {
                 "cues": cues,
                 "styles": merged_styles,
                 "overlays": overlays or []
             })
 
-            # 4. Save metadata caption/description
             full_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
             update_clip_metadata_caption(clip_file, full_caption, merged_styles)
 
-            # 5. Burn subtitles and text overlays to video
             temp_output = clip_file.with_name(f"{clip_file.stem}_temp_burn.mp4")
 
             def _on_group_clip_progress(p_sec: float, t_sec: float):
                 sub_pct = min(1.0, p_sec / max(t_sec, 1.0))
                 c_pct = int(sub_pct * 100)
-                overall_p = int(((idx + sub_pct) / total) * 100)
+                with progress_lock:
+                    clip_fractions[idx] = sub_pct
+                    done_count = sum(1 for f in completed_flags if f)
+                    overall_p = int((sum(clip_fractions) / max(total, 1)) * 100)
                 insider = (
-                    f"Mounting subtitles to reel {idx + 1}/{total} ({clip_file.name}): "
+                    f"Mounting subtitles ({done_count}/{total} done, rendering {clip_file.name}): "
                     f"{int(p_sec)}s/{int(t_sec)}s ({c_pct}%) • Overall {overall_p}%"
                 )
                 c_job = _get_subtitle_job(job_id)
                 if c_job:
                     c_job["progress"] = min(99, max(1, overall_p))
                     c_job["current_clip_progress"] = c_pct
-                    c_job["current_clip_index"] = idx + 1
+                    c_job["current_clip_index"] = min(total, done_count + 1)
                     c_job["total_clips"] = total
                     c_job["current_clip"] = clip_file.name
                     c_job["current_clip_seconds"] = round(p_sec, 1)
@@ -1053,7 +1063,6 @@ def _process_group_subtitle_job(
                 progress_callback=_on_group_clip_progress,
             )
 
-            # 6. Replace original file or keep subtitled file
             if replace_original:
                 safe_replace_file(temp_output, clip_file)
                 cleanup_subtitled_duplicates(clip_file)
@@ -1061,35 +1070,55 @@ def _process_group_subtitle_job(
             else:
                 refresh_clip_thumbnail(temp_output)
 
-            processed += 1
-            results.append({"clip": clip_file.name, "status": "success"})
-
+            with progress_lock:
+                clip_fractions[idx] = 1.0
+                completed_flags[idx] = True
+                results_slots[idx] = {"clip": clip_file.name, "status": "success"}
         except Exception as exc:
             logger.error("Error mounting subtitles to %s: %s", clip_file.name, exc)
-            results.append({"clip": clip_file.name, "status": "error", "error": str(exc)})
+            with progress_lock:
+                clip_fractions[idx] = 1.0
+                completed_flags[idx] = True
+                results_slots[idx] = {"clip": clip_file.name, "status": "error", "error": str(exc)}
+
+        with progress_lock:
+            done_count = sum(1 for f in completed_flags if f)
+            ok_count = sum(1 for r in results_slots if r and r.get("status") == "success")
+            overall_p = int((sum(clip_fractions) / max(total, 1)) * 100)
+            current_results = [r for r in results_slots if r is not None]
 
         current_job = _get_subtitle_job(job_id)
         if current_job:
-            current_job["processed_clips"] = processed
-            current_job["progress"] = int(((idx + 1) / total) * 100)
-            current_job["current_clip_progress"] = 100
-            current_job["current_clip_index"] = idx + 1
+            current_job["processed_clips"] = ok_count
+            current_job["progress"] = min(99 if done_count < total else 100, overall_p)
+            current_job["current_clip_progress"] = 100 if done_count == total else current_job.get("current_clip_progress", 0)
+            current_job["current_clip_index"] = done_count
             current_job["total_clips"] = total
-            current_job["results"] = results
-            current_job["stage_msg"] = f"Mounted subtitles to {idx + 1} of {total} reels"
-            current_job["message"] = f"Mounted subtitles to {idx + 1} of {total} reels"
+            current_job["results"] = current_results
+            current_job["stage_msg"] = f"Mounted subtitles to {done_count} of {total} reels"
+            current_job["message"] = f"Mounted subtitles to {done_count} of {total} reels"
             _save_subtitle_job(current_job)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_process_single_group_clip, idx, clip_file) for idx, clip_file in enumerate(clips)]
+        for fut in futures:
+            fut.result()
+
+    processed = sum(1 for r in results_slots if r and r.get("status") == "success")
+    results = [r for r in results_slots if r is not None]
 
     current_job = _get_subtitle_job(job_id)
     if current_job:
         current_job["status"] = "completed"
+        current_job["processed_clips"] = processed
+        current_job["results"] = results
         current_job["progress"] = 100
         current_job["current_clip_progress"] = 100
         current_job["message"] = (
             f"Successfully mounted subtitles to {processed} of {total} reels in '{target_folder.name}'!"
         )
         current_job["stage_msg"] = current_job["message"]
-        _save_subtitle_job(current_job)
+        _save_subtitle_job(current_job, force_disk=True)
 
 
 @router.post("/groups/{folder_path:path}/subtitles/burn")

@@ -345,7 +345,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                               {/* 9:16 Vertical Phone Preview Frame */}
                               <div className="relative aspect-[9/16] bg-black overflow-hidden select-none">
                                 <img
-                                  src={clip.thumb_url || `/media/clips/${clip.name}/thumb`}
+                                  src={
+                                    clip.thumb_url ||
+                                    `/media/clip-thumbs/${encodeURIComponent(clip.relative_path || clip.name)}`
+                                  }
                                   alt={clip.name}
                                   className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                                   onError={(e: any) => {
@@ -485,7 +488,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`
                     : `${durationSec}s`
                   : null);
-              const downloadUrl = item.url || `/media/downloads/${encodeURIComponent(filename)}`;
 
               return (
                 <div
@@ -527,7 +529,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <button
                       type="button"
                       className="px-3.5 py-2 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-indigo-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                      onClick={() => onSliceInStudio(downloadUrl)}
+                      onClick={() => onSliceInStudio(filename)}
                     >
                       <Scissors className="w-3.5 h-3.5 text-indigo-400" /> Slice in Studio
                     </button>

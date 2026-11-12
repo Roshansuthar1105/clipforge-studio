@@ -7,7 +7,6 @@ interface JobsState {
   activeJob: Job | null;
   jobsList: Job[];
   publishHistory: PublishRecord[];
-  isPolling: boolean;
   activeJobFilter: 'all' | 'running' | 'completed' | 'error';
   activePublishFilter: 'all' | 'youtube' | 'instagram' | 'facebook';
 
@@ -34,7 +33,6 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   activeJob: null,
   jobsList: [],
   publishHistory: [],
-  isPolling: false,
   activeJobFilter: 'all',
   activePublishFilter: 'all',
 
@@ -92,7 +90,6 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   startJobPolling: (jobId: string) => {
     get().stopJobPolling();
     get().setActiveJobId(jobId);
-    set({ isPolling: true });
 
     const poll = async () => {
       try {
@@ -109,7 +106,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
           get().loadJobsList();
           // Dispatch global refresh event for library
           window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
-        } else if (job.status === 'error' || job.status === 'cancelled') {
+        } else if (job.status === 'error' || job.status === 'failed' || job.status === 'cancelled') {
           get().stopJobPolling();
           showToast(job.error || `Job ${job.status}`, 'error');
           get().loadJobsList();
@@ -133,7 +130,6 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       clearInterval(pollInterval);
       pollInterval = null;
     }
-    set({ isPolling: false });
   },
 
   dismissActiveJob: () => {

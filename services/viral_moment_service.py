@@ -397,13 +397,10 @@ def generate_synthetic_timeline_transcript(video_path: Path, video_id: str) -> D
     """
     duration = 60.0
     try:
-        import subprocess
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        if probe.stdout.strip():
-            duration = float(probe.stdout.strip())
+        from services.subtitle_service import probe_video_duration
+        probed = probe_video_duration(video_path)
+        if probed and probed > 0:
+            duration = probed
     except Exception:
         pass
 

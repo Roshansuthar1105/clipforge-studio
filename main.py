@@ -2,6 +2,7 @@
 import os
 import re
 import sys
+import json
 import time
 import uuid
 import math
@@ -21,6 +22,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from concurrent.futures import ThreadPoolExecutor
+
+from services.ffmpeg_utils import (
+    build_video_encoder_args,
+    get_max_encode_workers,
+    run_ffmpeg_with_fallback,
+)
 
 # --------------------------------------------------
 # LOGGING
@@ -38,9 +46,7 @@ logging.basicConfig(
 # --------------------------------------------------
 
 APP_DIR = Path(__file__).resolve().parent
-BASE_DIR = Path(os.getenv("DATA_DIR", str(APP_DIR / "data")).resolve()) if False else Path(
-    os.getenv("DATA_DIR", str(APP_DIR / "data"))
-).resolve()
+BASE_DIR = Path(os.getenv("DATA_DIR", str(APP_DIR / "data"))).resolve()
 
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 CLIPS_DIR = BASE_DIR / "clips"
@@ -148,10 +154,8 @@ async def on_startup():
 app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(publish_router)
-app.include_router(publish_router, prefix="/api")
 app.include_router(meta_publish_router)
 app.include_router(subtitles_router, prefix="/api/subtitles")
-app.include_router(subtitles_router, prefix="/api")
 app.include_router(viral_router)
 app.include_router(schedule_router)
 app.include_router(speedtest_router)
@@ -418,11 +422,10 @@ def ensure_clip_thumbnail(clip_path: Path) -> Path | None:
 def find_cached_source(download_folder: Path, video_id: str) -> Path | None:
     """
     Search *download_folder* for a previously downloaded file whose name
-    contains *[video_id]* and whose size is greater than zero.
+    contains *video_id* and whose size is greater than zero.
     Returns the Path if found, else None.
     """
-    pattern = rf"*\[{video_id}\]*"
-    for p in download_folder.glob(f"*{video_id}*"):
+    for p in download_folder.rglob(f"*{video_id}*"):
         if p.is_file() and p.stat().st_size > 0 and p.suffix.lower() in (".mp4", ".mkv", ".webm"):
             return p
     return None
@@ -1059,15 +1062,58 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             update_job(job_id, status="cancelled", progress=0, message="Job cancelled by user")
             return
 
-        created_files = []
+        from services.transcription_service import (
+            get_stored_transcript,
+            slice_transcript_for_clip,
+            create_voice_synced_word_chunks,
+            transcribe_video_with_groq,
+            get_groq_api_key,
+            convert_cues_to_hinglish,
+            has_devanagari_characters,
+            clean_hallucinated_text,
+        )
+        from services.subtitle_service import build_ass_content
 
+        # Check or generate parent transcript ONCE so every clip gets instant <5ms subtitle cues
+        # and burn_subtitles=True can render in a single FFmpeg pass without double re-encoding.
+        parent_tr = get_stored_transcript(eff_video_id)
+        if not parent_tr and source_path:
+            parent_tr = get_stored_transcript(source_path.stem)
+
+        should_burn = bool(getattr(request, "burn_subtitles", False))
+        if should_burn and not (parent_tr and parent_tr.get("segments")) and get_groq_api_key():
+            try:
+                update_job(
+                    job_id,
+                    status="processing",
+                    stage="transcribing",
+                    progress=37,
+                    message="Transcribing source audio once for fast single-pass subtitles...",
+                    stage_msg="Transcribing source audio once for fast single-pass subtitles...",
+                )
+                parent_tr = transcribe_video_with_groq(source_path, video_id=eff_video_id)
+            except Exception as tr_err:
+                logger.warning("Pre-clipping parent transcription failed (%s), will slice/transcribe per clip", tr_err)
+
+        default_sub_styles = {
+            "font_family": "Montserrat",
+            "font_size": 48,
+            "primary_color": "#FFFFFF",
+            "highlight_color": "#FACC15",
+            "outline_color": "#000000",
+            "outline_width": 0.5,
+            "text_transform": "uppercase",
+            "highlight_mode": "active_word",
+            "words_per_screen": 3,
+            "margin_v": 320,
+        }
+
+        source_has_audio = has_audio_stream(source_path)
+
+        # Build clip specifications up front so workers can process clips concurrently
+        clip_specs = []
         for index in range(count):
-            if cancel_event and cancel_event.is_set():
-                update_job(job_id, status="cancelled", message="Job cancelled by user", files=created_files)
-                return
-
             current_moment = active_moments[index] if active_moments and index < len(active_moments) else None
-
             if current_moment:
                 clip_start = float(current_moment.get("start_time", start))
                 clip_end_val = float(current_moment.get("end_time", clip_start + request.clip_length))
@@ -1077,16 +1123,114 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 clip_start = start + index * request.clip_length
                 if clip_start >= end:
                     break
-                clip_duration = min(
-                    request.clip_length,
-                    end - clip_start,
-                )
+                clip_duration = min(request.clip_length, end - clip_start)
                 raw_title = (request.title or "").strip()
                 if not raw_title or raw_title.lower() in ("my video", "untitled", "clip", "video"):
                     raw_title = clean_source_video_title(
                         request.video_title or request.source_title or (source_path.stem if source_path else "") or "clip"
                     )
-            # Support {part} placeholder in title (if user provided one)
+            clip_specs.append((index, current_moment, clip_start, clip_duration, raw_title))
+
+        actual_count = len(clip_specs)
+        if actual_count == 0:
+            raise RuntimeError("No clips were created. Check the selected time range.")
+
+        clip_fractions = [0.0] * actual_count
+        completed_flags = [False] * actual_count
+        created_slots: list[Optional[dict]] = [None] * actual_count
+        progress_lock = threading.Lock()
+
+        def _append_overlay_filters(in_pad: str, title: str, part: str, out_prefix: str, title_x_expr: str, part_x_expr: str, title_y: int, part_y: int, title_size: int, part_size: int, title_color: str, part_color: str, title_box: str, part_box: str) -> tuple[str, str]:
+            chains = []
+            last = in_pad
+            if title:
+                title_fontfile = escape_filter_path(find_windows_font(title))
+                safe_title = escape_drawtext(title)
+                nxt = f"{out_prefix}t1"
+                chains.append(
+                    f"[{last}]drawtext=text='{safe_title}':"
+                    f"fontfile='{title_fontfile}':"
+                    f"fontcolor={title_color}:fontsize={title_size}:"
+                    f"x={title_x_expr}:y={title_y}:box=1:"
+                    f"boxcolor={title_box}:boxborderw=14[{nxt}]"
+                )
+                last = nxt
+            if part:
+                part_fontfile = escape_filter_path(find_windows_font(part))
+                safe_part = escape_drawtext(part)
+                nxt = f"{out_prefix}t2"
+                chains.append(
+                    f"[{last}]drawtext=text='{safe_part}':"
+                    f"fontfile='{part_fontfile}':"
+                    f"fontcolor={part_color}:fontsize={part_size}:"
+                    f"x={part_x_expr}:y={part_y}:box=1:"
+                    f"boxcolor={part_box}:boxborderw=10[{nxt}]"
+                )
+                last = nxt
+            return (";".join(chains), last)
+
+        def _build_base_916_chain(src_pad: str, out_pad: str, style_mode: str) -> str:
+            if style_mode == "blur":
+                return (
+                    f"[{src_pad}]split=2[{out_pad}_bg][{out_pad}_fg];"
+                    f"[{out_pad}_bg]scale=180:320:force_original_aspect_ratio=increase,"
+                    f"crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[{out_pad}_blur];"
+                    f"[{out_pad}_fg]scale=1080:1440:force_original_aspect_ratio=decrease[{out_pad}_fgs];"
+                    f"[{out_pad}_blur][{out_pad}_fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[{out_pad}]"
+                )
+            if style_mode == "crop":
+                return (
+                    f"[{src_pad}]scale=1080:1920:force_original_aspect_ratio=increase,"
+                    f"crop=1080:1920,setsar=1[{out_pad}]"
+                )
+            return (
+                f"[{src_pad}]scale=1080:1440:force_original_aspect_ratio=decrease,"
+                f"pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
+                f"pad=1080:1920:0:240:black,setsar=1[{out_pad}]"
+            )
+
+        def _map_parent_cues(clip_start: float, clip_duration: float, hook_info: Optional[dict]) -> list[dict]:
+            if not (parent_tr and parent_tr.get("segments")):
+                return []
+            if hook_info:
+                h_dur = float(hook_info["duration"])
+                raw_hook = slice_transcript_for_clip(
+                    parent_tr, float(hook_info["start"]), float(hook_info["start"] + h_dur)
+                )
+                hook_chunks = create_voice_synced_word_chunks(raw_hook, max_words=3)
+                for hc in hook_chunks:
+                    hc["end"] = min(h_dur, hc["end"])
+                raw_body = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
+                body_chunks = create_voice_synced_word_chunks(raw_body, max_words=3)
+                for bc in body_chunks:
+                    bc["start"] = round(bc["start"] + h_dur, 2)
+                    bc["end"] = round(bc["end"] + h_dur, 2)
+                    for w in bc.get("words", []):
+                        w["start"] = round(w["start"] + h_dur, 2)
+                        w["end"] = round(w["end"] + h_dur, 2)
+                cues_out = hook_chunks + body_chunks
+                for idx_c, c_item in enumerate(cues_out):
+                    c_item["id"] = idx_c
+            else:
+                raw_cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
+                cues_out = create_voice_synced_word_chunks(raw_cues, max_words=3)
+
+            raw_pl = str(parent_tr.get("language", "")).lower()
+            if cues_out and (
+                any(has_devanagari_characters(c.get("text", "")) for c in cues_out)
+                or raw_pl in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa")
+            ):
+                try:
+                    cues_out = convert_cues_to_hinglish(cues_out)
+                except Exception:
+                    pass
+            return cues_out
+
+        def _process_single_clip_task(slot_idx: int, spec: tuple) -> None:
+            index, current_moment, clip_start, clip_duration, raw_title = spec
+            if cancel_event and cancel_event.is_set():
+                return
+
             has_part_in_title = bool(re.search(r"\{part\}", raw_title, re.IGNORECASE))
             if has_part_in_title:
                 formatted_title = re.sub(r"\{part\}", str(index + 1), raw_title, flags=re.IGNORECASE)
@@ -1094,8 +1238,6 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 formatted_title = raw_title
 
             title = formatted_title if request.show_title else ""
-
-            # If user already embedded {part} into the title itself, don't duplicate a standalone "Part X" label
             part_format_template = getattr(request, "part_format", None) or "Part {part}"
             if has_part_in_title:
                 part = ""
@@ -1109,13 +1251,9 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             stem_base = re.sub(r"[_\-\s]*\{part\}", "", raw_title, flags=re.IGNORECASE).strip()
             stem_base = re.sub(r"[_\-\s]+part[_\-\s]*$", "", stem_base, flags=re.IGNORECASE).strip()
             safe_stem = safe_name(stem_base or "clip")
-            if current_moment:
-                filename = f"{safe_stem} Viral {index + 1}.mp4"
-            else:
-                filename = f"{safe_stem} Part {index + 1}.mp4"
+            filename = f"{safe_stem} Viral {index + 1}.mp4" if current_moment else f"{safe_stem} Part {index + 1}.mp4"
             output_path = output_folder / filename
 
-            # Calculate dynamic vertical positions & styles
             title_y = request.title_y if getattr(request, "title_y", None) is not None else 180
             title_size = int(getattr(request, "title_font_size", 48) or 48)
             part_size = int(getattr(request, "part_font_size", 34) or 34)
@@ -1133,11 +1271,9 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             else:
                 part_y = title_y + title_size + 45
 
-            # Check for AI Teaser Hook (Prepend 1-6s Cold Open)
             prepend_hook = bool(getattr(request, "prepend_hook", False))
             teaser_hook = current_moment.get("teaser_hook") if current_moment else None
             hook_info = None
-
             if prepend_hook and teaser_hook and isinstance(teaser_hook, dict):
                 h_start = float(teaser_hook.get("start_time", clip_start))
                 h_end = float(teaser_hook.get("end_time", h_start + 3.2))
@@ -1152,329 +1288,126 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 }
 
             total_render_duration = clip_duration + (hook_info["duration"] if hook_info else 0.0)
-            source_has_audio = has_audio_stream(source_path)
 
-            # Compute horizontal text alignment expressions (center, left, right)
             title_align = (getattr(request, "title_alignment", "center") or "center").lower()
-            if getattr(request, "title_x", None) is not None:
-                title_x_expr = str(request.title_x)
-            elif title_align == "left":
-                title_x_expr = "60"
-            elif title_align == "right":
-                title_x_expr = "w-text_w-60"
-            else:
-                title_x_expr = "(w-text_w)/2"
-
+            title_x_expr = str(request.title_x) if getattr(request, "title_x", None) is not None else (
+                "60" if title_align == "left" else ("w-text_w-60" if title_align == "right" else "(w-text_w)/2")
+            )
             part_align = (getattr(request, "part_alignment", "center") or "center").lower()
-            if getattr(request, "part_x", None) is not None:
-                part_x_expr = str(request.part_x)
-            elif part_align == "left":
-                part_x_expr = "60"
-            elif part_align == "right":
-                part_x_expr = "w-text_w-60"
-            else:
-                part_x_expr = "(w-text_w)/2"
+            part_x_expr = str(request.part_x) if getattr(request, "part_x", None) is not None else (
+                "60" if part_align == "left" else ("w-text_w-60" if part_align == "right" else "(w-text_w)/2")
+            )
+
+            # Map cues BEFORE FFmpeg so subtitles can burn in the same single pass!
+            pre_cues = _map_parent_cues(clip_start, clip_duration, hook_info)
+            ass_temp_path = None
+            single_pass_ass_filter = ""
+            if should_burn and pre_cues:
+                try:
+                    ass_temp_path = output_path.with_name(f"{output_path.stem}.{threading.get_ident()}.singlepass.ass")
+                    with open(ass_temp_path, "w", encoding="utf-8") as af:
+                        af.write(build_ass_content(pre_cues, style=default_sub_styles))
+                    esc_ass = str(ass_temp_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+                    single_pass_ass_filter = f"ass='{esc_ass}'"
+                except Exception as ass_err:
+                    logger.warning("Could not prepare single-pass ASS subtitles for %s: %s", filename, ass_err)
+                    ass_temp_path = None
+
+            bg_mode = (request.background_style or "blur").lower()
 
             if hook_info:
-                # -------------------------------------------------------------
-                # DUAL-INPUT PIPELINE: Input 0 = Hook Teaser, Input 1 = Main Body
-                # -------------------------------------------------------------
-                safe_badge = escape_drawtext(hook_info["badge"]) if hook_info["badge"] else ""
-
-                if request.background_style == "blur":
-                    # Hook teaser vertical format
-                    filter_script = (
-                        "[0:v:0]split=2[h_bg][h_fg];"
-                        "[h_bg]scale=180:320:force_original_aspect_ratio=increase,"
-                        "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[h_blurred];"
-                        "[h_fg]scale=1080:1440:force_original_aspect_ratio=decrease[h_scaled];"
-                        "[h_blurred][h_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[h_base]"
+                parts = [_build_base_916_chain("0:v:0", "h_base", bg_mode)]
+                h_last = "h_base"
+                if hook_info["badge"]:
+                    safe_badge = escape_drawtext(hook_info["badge"])
+                    badge_fontfile = escape_filter_path(find_windows_font(hook_info["badge"]))
+                    parts.append(
+                        f"[{h_last}]drawtext=text='{safe_badge}':fontfile='{badge_fontfile}':"
+                        "fontcolor=yellow:fontsize=46:x=(w-text_w)/2:y=220:box=1:"
+                        "boxcolor=black@0.70:boxborderw=16[h_t]"
                     )
-                    h_last = "h_base"
-                    if safe_badge:
-                        badge_fontfile = escape_filter_path(find_windows_font(hook_info["badge"]))
-                        filter_script += (
-                            f";[{h_last}]drawtext=text='{safe_badge}':"
-                            f"fontfile='{badge_fontfile}':"
-                            "fontcolor=yellow:"
-                            "fontsize=46:"
-                            "x=(w-text_w)/2:"
-                            "y=220:"
-                            "box=1:"
-                            "boxcolor=black@0.70:"
-                            "boxborderw=16[h_t]"
-                        )
-                        h_last = "h_t"
+                    h_last = "h_t"
 
-                    # Main body vertical format
-                    filter_script += (
-                        ";[1:v:0]split=2[b_bg][b_fg];"
-                        "[b_bg]scale=180:320:force_original_aspect_ratio=increase,"
-                        "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[b_blurred];"
-                        "[b_fg]scale=1080:1440:force_original_aspect_ratio=decrease[b_scaled];"
-                        "[b_blurred][b_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[b_base]"
-                    )
-                    b_last = "b_base"
-                    if title:
-                        title_fontfile = escape_filter_path(find_windows_font(title))
-                        safe_title = escape_drawtext(title)
-                        filter_script += (
-                            f";[{b_last}]drawtext=text='{safe_title}':"
-                            f"fontfile='{title_fontfile}':"
-                            f"fontcolor={title_color}:"
-                            f"fontsize={title_size}:"
-                            f"x={title_x_expr}:"
-                            f"y={title_y}:"
-                            "box=1:"
-                            f"boxcolor={title_box}:"
-                            "boxborderw=14[b_t1]"
-                        )
-                        b_last = "b_t1"
+                parts.append(_build_base_916_chain("1:v:0", "b_base", bg_mode))
+                ov_chain, b_last = _append_overlay_filters(
+                    "b_base", title, part, "b_", title_x_expr, part_x_expr,
+                    title_y, part_y, title_size, part_size, title_color, part_color, title_box, part_box,
+                )
+                if ov_chain:
+                    parts.append(ov_chain)
 
-                    if part:
-                        part_fontfile = escape_filter_path(find_windows_font(part))
-                        safe_part = escape_drawtext(part)
-                        filter_script += (
-                            f";[{b_last}]drawtext=text='{safe_part}':"
-                            f"fontfile='{part_fontfile}':"
-                            f"fontcolor={part_color}:"
-                            f"fontsize={part_size}:"
-                            f"x={part_x_expr}:"
-                            f"y={part_y}:"
-                            "box=1:"
-                            f"boxcolor={part_box}:"
-                            "boxborderw=10[b_t2]"
-                        )
-                        b_last = "b_t2"
-
-                    if source_has_audio:
-                        filter_script += (
-                            f";[0:a]aformat=channel_layouts=stereo:sample_rates=48000[h_a];"
-                            f"[1:a]aformat=channel_layouts=stereo:sample_rates=48000[b_a];"
-                            f"[{h_last}][h_a][{b_last}][b_a]concat=n=2:v=1:a=1[v_out][a_out]"
-                        )
-                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]", "-map", "[a_out]"]
-                    else:
-                        filter_script += f";[{h_last}][{b_last}]concat=n=2:v=1:a=0[v_out]"
-                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]"]
-
-                else:
-                    # Classic centered letterbox with black padding
-                    filter_script = (
-                        "[0:v:0]scale=1080:1440:force_original_aspect_ratio=decrease,"
-                        "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
-                        "pad=1080:1920:0:240:black,setsar=1[h_base]"
-                    )
-                    h_last = "h_base"
-                    if safe_badge:
-                        badge_fontfile = escape_filter_path(find_windows_font(hook_info["badge"]))
-                        filter_script += (
-                            f";[{h_last}]drawtext=text='{safe_badge}':"
-                            f"fontfile='{badge_fontfile}':"
-                            "fontcolor=yellow:"
-                            "fontsize=46:"
-                            "x=(w-text_w)/2:"
-                            "y=220:"
-                            "box=1:"
-                            "boxcolor=black@0.70:"
-                            "boxborderw=16[h_t]"
-                        )
-                        h_last = "h_t"
-
-                    filter_script += (
-                        ";[1:v:0]scale=1080:1440:force_original_aspect_ratio=decrease,"
-                        "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
-                        "pad=1080:1920:0:240:black,setsar=1[b_base]"
-                    )
-                    b_last = "b_base"
-                    if title:
-                        title_fontfile = escape_filter_path(find_windows_font(title))
-                        safe_title = escape_drawtext(title)
-                        filter_script += (
-                            f";[{b_last}]drawtext=text='{safe_title}':"
-                            f"fontfile='{title_fontfile}':"
-                            f"fontcolor={title_color}:"
-                            f"fontsize={title_size}:"
-                            f"x={title_x_expr}:"
-                            f"y={title_y}:"
-                            "box=1:"
-                            f"boxcolor={title_box}:"
-                            "boxborderw=14[b_t1]"
-                        )
-                        b_last = "b_t1"
-
-                    if part:
-                        part_fontfile = escape_filter_path(find_windows_font(part))
-                        safe_part = escape_drawtext(part)
-                        filter_script += (
-                            f";[{b_last}]drawtext=text='{safe_part}':"
-                            f"fontfile='{part_fontfile}':"
-                            f"fontcolor={part_color}:"
-                            f"fontsize={part_size}:"
-                            f"x={part_x_expr}:"
-                            f"y={part_y}:"
-                            "box=1:"
-                            f"boxcolor={part_box}:"
-                            "boxborderw=10[b_t2]"
-                        )
-                        b_last = "b_t2"
-
-                    if source_has_audio:
-                        filter_script += (
-                            f";[0:a]aformat=channel_layouts=stereo:sample_rates=48000[h_a];"
-                            f"[1:a]aformat=channel_layouts=stereo:sample_rates=48000[b_a];"
-                            f"[{h_last}][h_a][{b_last}][b_a]concat=n=2:v=1:a=1[v_out][a_out]"
-                        )
-                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]", "-map", "[a_out]"]
-                    else:
-                        filter_script += f";[{h_last}][{b_last}]concat=n=2:v=1:a=0[v_out]"
-                        filter_args = ["-filter_complex", filter_script, "-map", "[v_out]"]
-
-                command = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-y",
-                    "-threads", "0",
-                    "-ss", str(hook_info["start"]),
-                    "-t", str(hook_info["duration"]),
-                    "-i", str(source_path),
-                    "-ss", str(clip_start),
-                    "-t", str(clip_duration),
-                    "-i", str(source_path),
-                    *filter_args,
-                    "-c:v", "libx264",
-                    "-profile:v", "main",
-                    "-level", "4.0",
-                    "-preset", "superfast",
-                    "-crf", "23",
-                    "-pix_fmt", "yuv420p",
-                ]
                 if source_has_audio:
-                    command.extend(["-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
-                command.extend(["-movflags", "+faststart", str(output_path)])
-
-            else:
-                # -------------------------------------------------------------
-                # STANDARD SINGLE-INPUT PIPELINE
-                # -------------------------------------------------------------
-                if request.background_style == "blur":
-                    # High-speed cinematic blur: downscale background to 180x320, apply light blur, and upscale to 1080x1920
-                    filter_script = (
-                        "[0:v:0]split=2[bg][fg];"
-                        "[bg]scale=180:320:force_original_aspect_ratio=increase,"
-                        "crop=180:320,boxblur=8:2,scale=1080:1920:flags=fast_bilinear[blurred];"
-                        "[fg]scale=1080:1440:force_original_aspect_ratio=decrease[fg_scaled];"
-                        "[blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2,setsar=1[base]"
+                    parts.append(
+                        "[0:a]aformat=channel_layouts=stereo:sample_rates=48000[h_a];"
+                        "[1:a]aformat=channel_layouts=stereo:sample_rates=48000[b_a];"
+                        f"[{h_last}][h_a][{b_last}][b_a]concat=n=2:v=1:a=1[v_concat][a_out]"
                     )
-                    last_pad = "base"
-                    if title:
-                        title_fontfile = escape_filter_path(find_windows_font(title))
-                        safe_title = escape_drawtext(title)
-                        filter_script += (
-                            f";[{last_pad}]drawtext=text='{safe_title}':"
-                            f"fontfile='{title_fontfile}':"
-                            f"fontcolor={title_color}:"
-                            f"fontsize={title_size}:"
-                            f"x={title_x_expr}:"
-                            f"y={title_y}:"
-                            "box=1:"
-                            f"boxcolor={title_box}:"
-                            "boxborderw=14[t1]"
-                        )
-                        last_pad = "t1"
-
-                    if part:
-                        part_fontfile = escape_filter_path(find_windows_font(part))
-                        safe_part = escape_drawtext(part)
-                        filter_script += (
-                            f";[{last_pad}]drawtext=text='{safe_part}':"
-                            f"fontfile='{part_fontfile}':"
-                            f"fontcolor={part_color}:"
-                            f"fontsize={part_size}:"
-                            f"x={part_x_expr}:"
-                            f"y={part_y}:"
-                            "box=1:"
-                            f"boxcolor={part_box}:"
-                            "boxborderw=10[t2]"
-                        )
-                        last_pad = "t2"
-
-                    filter_args = ["-filter_complex", filter_script, "-map", f"[{last_pad}]"]
+                    v_final = "v_concat"
+                    if single_pass_ass_filter:
+                        parts.append(f"[{v_final}]{single_pass_ass_filter}[v_sub]")
+                        v_final = "v_sub"
+                    filter_args = ["-filter_complex", ";".join(parts), "-map", f"[{v_final}]", "-map", "[a_out]"]
                 else:
-                    # Classic centered letterbox with black padding
-                    filters = (
-                        "scale=1080:1440:"
-                        "force_original_aspect_ratio=decrease,"
-                        "pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,"
-                        "pad=1080:1920:0:240:black,"
-                        "setsar=1"
-                    )
+                    parts.append(f"[{h_last}][{b_last}]concat=n=2:v=1:a=0[v_concat]")
+                    v_final = "v_concat"
+                    if single_pass_ass_filter:
+                        parts.append(f"[{v_final}]{single_pass_ass_filter}[v_sub]")
+                        v_final = "v_sub"
+                    filter_args = ["-filter_complex", ";".join(parts), "-map", f"[{v_final}]"]
 
-                    if title:
-                        title_fontfile = escape_filter_path(find_windows_font(title))
-                        safe_title = escape_drawtext(title)
-                        filters += (
-                            f",drawtext=text='{safe_title}':"
-                            f"fontfile='{title_fontfile}':"
-                            f"fontcolor={title_color}:"
-                            f"fontsize={title_size}:"
-                            f"x={title_x_expr}:"
-                            f"y={title_y}:"
-                            "box=1:"
-                            f"boxcolor={title_box}:"
-                            "boxborderw=14"
-                        )
+                def _build_clip_cmd(encoder: str) -> list[str]:
+                    c = [
+                        "ffmpeg", "-hide_banner", "-y", "-nostats", "-loglevel", "error", "-threads", "0",
+                        "-progress", "pipe:1",
+                        "-ss", str(hook_info["start"]), "-t", str(hook_info["duration"]), "-i", str(source_path),
+                        "-ss", str(clip_start), "-t", str(clip_duration), "-i", str(source_path),
+                        *filter_args,
+                        *build_video_encoder_args(encoder, crf=22, preset="veryfast"),
+                    ]
+                    if source_has_audio:
+                        c.extend(["-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
+                    c.extend(["-movflags", "+faststart", str(output_path)])
+                    return c
+            else:
+                parts = [_build_base_916_chain("0:v:0", "base", bg_mode)]
+                ov_chain, last_pad = _append_overlay_filters(
+                    "base", title, part, "", title_x_expr, part_x_expr,
+                    title_y, part_y, title_size, part_size, title_color, part_color, title_box, part_box,
+                )
+                if ov_chain:
+                    parts.append(ov_chain)
+                if single_pass_ass_filter:
+                    parts.append(f"[{last_pad}]{single_pass_ass_filter}[v_sub]")
+                    last_pad = "v_sub"
+                filter_args = ["-filter_complex", ";".join(parts), "-map", f"[{last_pad}]"]
 
-                    if part:
-                        part_fontfile = escape_filter_path(find_windows_font(part))
-                        safe_part = escape_drawtext(part)
-                        filters += (
-                            f",drawtext=text='{safe_part}':"
-                            f"fontfile='{part_fontfile}':"
-                            f"fontcolor={part_color}:"
-                            f"fontsize={part_size}:"
-                            f"x={part_x_expr}:"
-                            f"y={part_y}:"
-                            "box=1:"
-                            f"boxcolor={part_box}:"
-                            "boxborderw=10"
-                        )
-
-                    filter_args = ["-vf", filters, "-map", "0:v:0"]
-
-                command = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-y",
-                    "-threads", "0",
-                    "-ss", str(clip_start),
-                    "-t", str(clip_duration),
-                    "-i", str(source_path),
-                    *filter_args,
-                    "-map", "0:a?",
-                    "-c:v", "libx264",
-                    "-profile:v", "main",
-                    "-level", "4.0",
-                    "-preset", "superfast",
-                    "-crf", "23",
-                    "-pix_fmt", "yuv420p",
-                    "-c:a", "aac",
-                    "-ar", "48000",
-                    "-b:a", "128k",
-                    "-movflags", "+faststart",
-                    str(output_path),
-                ]
-
-            clip_start_pct = 38 + (index / max(count, 1)) * 58
-            clip_range_pct = 58 / max(count, 1)
+                def _build_clip_cmd(encoder: str) -> list[str]:
+                    c = [
+                        "ffmpeg", "-hide_banner", "-y", "-nostats", "-loglevel", "error", "-threads", "0",
+                        "-progress", "pipe:1",
+                        "-ss", str(clip_start), "-t", str(clip_duration), "-i", str(source_path),
+                        *filter_args,
+                    ]
+                    if source_has_audio:
+                        c.extend(["-map", "0:a?", "-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
+                    c.extend([
+                        *build_video_encoder_args(encoder, crf=22, preset="veryfast"),
+                        "-movflags", "+faststart",
+                        str(output_path),
+                    ])
+                    return c
 
             def on_clip_progress(processed_secs: float, total_clip_secs: float):
                 if total_clip_secs > 0:
                     sub_pct = min(1.0, processed_secs / total_clip_secs)
+                    with progress_lock:
+                        clip_fractions[slot_idx] = sub_pct
+                        done_n = sum(1 for f in completed_flags if f)
+                        overall_frac = sum(clip_fractions) / max(actual_count, 1)
+                    overall_pct = int(38 + overall_frac * 58)
                     clip_pct = int(sub_pct * 100)
-                    overall_pct = int(clip_start_pct + sub_pct * clip_range_pct)
                     insider_msg = (
-                        f"Clipping {index + 1}/{count} ({filename}): "
+                        f"Clipping ({done_n}/{actual_count} done, rendering {filename}): "
                         f"{int(processed_secs)}s/{int(total_clip_secs)}s ({clip_pct}%) • Overall {overall_pct}%"
                     )
                     update_job(
@@ -1483,8 +1416,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         stage="clipping",
                         progress=min(96, max(38, overall_pct)),
                         stage_progress=clip_pct,
-                        current_clip=index + 1,
-                        total_clips=count,
+                        current_clip=min(actual_count, done_n + 1),
+                        total_clips=actual_count,
                         current_clip_name=filename,
                         current_clip_seconds=round(processed_secs, 1),
                         current_clip_total_seconds=round(total_clip_secs, 1),
@@ -1492,16 +1425,26 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         stage_msg=insider_msg,
                     )
 
-            run_ffmpeg_with_progress(command, total_render_duration, on_progress=on_clip_progress, cancel_event=cancel_event)
+            try:
+                run_ffmpeg_with_fallback(
+                    _build_clip_cmd,
+                    total_duration=total_render_duration,
+                    progress_callback=on_clip_progress,
+                    cancel_event=cancel_event,
+                )
+            finally:
+                if ass_temp_path and ass_temp_path.exists():
+                    try:
+                        ass_temp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
             if not output_path.exists() or output_path.stat().st_size == 0:
-                raise RuntimeError(
-                    f"FFmpeg did not create a valid clip: {filename}"
-                )
+                raise RuntimeError(f"FFmpeg did not create a valid clip: {filename}")
 
-            # Persist clip metadata for zero-cost subtitle mapping
+            burned_in_single_pass = bool(should_burn and pre_cues and single_pass_ass_filter)
+
             try:
-                eff_video_id = video_id if "video_id" in locals() and video_id else (source_path.stem if source_path else "")
                 clip_meta = {
                     "clip_name": filename,
                     "source_file": source_path.name if source_path else "",
@@ -1518,180 +1461,100 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     "hook_duration": float(hook_info["duration"]) if hook_info else 0.0,
                     "hook_badge": hook_info["badge"] if hook_info else "",
                     "hook_text": hook_info["text"] if hook_info else "",
+                    "subtitles_burned": burned_in_single_pass,
                 }
                 meta_path = output_path.with_name(f"{filename}.meta.json")
 
-                # Auto-generate or map voice-synced subtitles for this generated clip
-                try:
-                    from services.transcription_service import (
-                        get_stored_transcript,
-                        slice_transcript_for_clip,
-                        create_voice_synced_word_chunks,
-                        transcribe_video_with_groq,
-                        get_groq_api_key,
-                        convert_cues_to_hinglish,
-                        has_devanagari_characters,
-                        clean_hallucinated_text,
-                    )
-                    cues = []
+                cues = pre_cues
+                # Fallback ONLY if no parent transcript covered this clip
+                if not cues and output_path.exists() and get_groq_api_key():
+                    try:
+                        clip_tr = transcribe_video_with_groq(output_path, video_id=output_path.stem)
+                        if clip_tr and clip_tr.get("segments"):
+                            cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=3)
+                            raw_l = str(clip_tr.get("language", "")).lower()
+                            if any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_l in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa"):
+                                cues = convert_cues_to_hinglish(cues)
+                    except Exception as c_err:
+                        logger.warning("Direct clip auto-transcribe fallback failed (%s)", c_err)
 
-                    # 1. Primary method: Transcribe the rendered clip directly with Groq Whisper for 100% audio sync
-                    if output_path.exists() and get_groq_api_key():
+                if cues:
+                    sub_file = output_path.with_name(f"{filename}.subtitles.json")
+                    tmp_sub_file = output_path.with_name(f"{filename}.{threading.get_ident()}.subtitles.tmp")
+                    with open(tmp_sub_file, "w", encoding="utf-8") as sf:
+                        json.dump({
+                            "clip_name": filename,
+                            "cues": cues,
+                            "styles": default_sub_styles,
+                        }, sf, indent=2, ensure_ascii=False)
+                    tmp_sub_file.replace(sub_file)
+
+                    clip_meta["has_subtitles"] = True
+                    raw_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
+                    clip_meta["caption"] = clean_hallucinated_text(raw_caption)
+
+                    if should_burn and not burned_in_single_pass:
                         try:
-                            logger.info("Transcribing generated viral clip %s directly for 100%% voice-audio sync...", filename)
-                            clip_tr = transcribe_video_with_groq(output_path, video_id=output_path.stem)
-                            if clip_tr and clip_tr.get("segments"):
-                                cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=3)
-                                raw_l = str(clip_tr.get("language", "")).lower()
-                                if any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_l in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa"):
-                                    cues = convert_cues_to_hinglish(cues)
-                        except Exception as c_err:
-                            logger.warning("Direct clip auto-transcribe failed (%s), falling back to parent slice", c_err)
-
-                    # 2. Fallback: Slicing parent transcript with clean hook/body boundary isolation
-                    if not cues:
-                        parent_tr = get_stored_transcript(eff_video_id)
-                        if not parent_tr and source_path:
-                            parent_tr = get_stored_transcript(source_path.stem)
-
-                        if parent_tr and parent_tr.get("segments"):
-                            if hook_info:
-                                h_dur = float(hook_info["duration"])
-                                raw_hook = slice_transcript_for_clip(
-                                    parent_tr,
-                                    float(hook_info["start"]),
-                                    float(hook_info["start"] + h_dur)
-                                )
-                                hook_chunks = create_voice_synced_word_chunks(raw_hook, max_words=3)
-                                for hc in hook_chunks:
-                                    hc["end"] = min(h_dur, hc["end"])
-
-                                raw_body = slice_transcript_for_clip(
-                                    parent_tr,
-                                    float(clip_start),
-                                    float(clip_start + clip_duration)
-                                )
-                                body_chunks = create_voice_synced_word_chunks(raw_body, max_words=3)
-                                for bc in body_chunks:
-                                    bc["start"] = round(bc["start"] + h_dur, 2)
-                                    bc["end"] = round(bc["end"] + h_dur, 2)
-                                    for w in bc.get("words", []):
-                                        w["start"] = round(w["start"] + h_dur, 2)
-                                        w["end"] = round(w["end"] + h_dur, 2)
-
-                                cues = hook_chunks + body_chunks
-                                for idx, c in enumerate(cues):
-                                    c["id"] = idx
-                            else:
-                                raw_cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
-                                cues = create_voice_synced_word_chunks(raw_cues, max_words=3)
-
-                            # Automatically convert Hindi speech to Hinglish by default
-                            raw_pl = str(parent_tr.get("language", "")).lower() if parent_tr else ""
-                            if cues and (any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_pl in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa")):
-                                try:
-                                    cues = convert_cues_to_hinglish(cues)
-                                except Exception as h_err:
-                                    logger.warning("Auto-Hinglish conversion failed for %s: %s", filename, h_err)
-
-                    if cues:
-                        sub_file = output_path.with_name(f"{filename}.subtitles.json")
-                        default_styles = {
-                            "font_family": "Montserrat",
-                            "font_size": 48,
-                            "primary_color": "#FFFFFF",
-                            "highlight_color": "#FACC15",
-                            "outline_color": "#000000",
-                            "outline_width": 0.5,
-                            "text_transform": "uppercase",
-                            "highlight_mode": "active_word",
-                            "words_per_screen": 3,
-                            "margin_v": 320
-                        }
-                        tmp_sub_file = output_path.with_name(f"{filename}.subtitles.json.tmp")
-                        with open(tmp_sub_file, "w", encoding="utf-8") as sf:
-                            json.dump({
-                                "clip_name": filename,
-                                "cues": cues,
-                                "styles": default_styles
-                            }, sf, indent=2, ensure_ascii=False)
-                        tmp_sub_file.replace(sub_file)
-
-                        clip_meta["has_subtitles"] = True
-                        raw_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
-                        clip_meta["caption"] = clean_hallucinated_text(raw_caption)
-
-                        # Optional: Auto-burn animated subtitles directly into reel if requested
-                        if getattr(request, "burn_subtitles", False):
-                            try:
-                                from services.subtitle_service import burn_subtitles_to_clip
-                                temp_burn = output_path.with_name(f"{output_path.stem}_burn_temp.mp4")
-
-                                def on_burn_clip_progress(p_sec: float, t_sec: float):
-                                    b_pct = int(min(1.0, p_sec / max(t_sec, 1.0)) * 100)
-                                    sub_msg = f"Mounting subtitles to clip {index + 1}/{count} ({filename}): {int(p_sec)}s/{int(t_sec)}s ({b_pct}%)"
-                                    update_job(
-                                        job_id,
-                                        stage="subtitles",
-                                        stage_progress=b_pct,
-                                        current_clip=index + 1,
-                                        total_clips=count,
-                                        current_clip_name=filename,
-                                        message=sub_msg,
-                                        stage_msg=sub_msg,
-                                    )
-
-                                burn_subtitles_to_clip(
-                                    output_path,
-                                    temp_burn,
-                                    cues,
-                                    default_styles,
-                                    progress_callback=on_burn_clip_progress,
-                                )
-                                if temp_burn.exists() and temp_burn.stat().st_size > 0:
-                                    import time
-                                    time.sleep(0.1)
-                                    output_path.unlink(missing_ok=True)
-                                    temp_burn.rename(output_path)
-                                    clip_meta["subtitles_burned"] = True
-                                    logger.info("Successfully auto-burned subtitles into %s", filename)
-                            except Exception as b_err:
-                                logger.warning("Auto-burn subtitles on %s failed: %s", filename, b_err)
-                except Exception as sub_err:
-                    logger.warning("Auto-mapping subtitles for clip skipped: %s", sub_err)
+                            from services.subtitle_service import burn_subtitles_to_clip
+                            temp_burn = output_path.with_name(f"{output_path.stem}_burn_temp.mp4")
+                            burn_subtitles_to_clip(output_path, temp_burn, cues, default_sub_styles)
+                            if temp_burn.exists() and temp_burn.stat().st_size > 0:
+                                output_path.unlink(missing_ok=True)
+                                temp_burn.rename(output_path)
+                                clip_meta["subtitles_burned"] = True
+                        except Exception as b_err:
+                            logger.warning("Auto-burn fallback on %s failed: %s", filename, b_err)
 
                 with open(meta_path, "w", encoding="utf-8") as f_meta:
-                    import json
                     json.dump(clip_meta, f_meta, indent=2)
                 if db.is_db_connected():
                     db.db_save_clip_metadata(filename, clip_meta)
             except Exception as meta_err:
                 logger.warning("Could not persist clip metadata: %s", meta_err)
 
-            import urllib.parse
-            rel_clip_path = str(output_path.relative_to(CLIPS_DIR)).replace("\\", "/")
-            created_files.append({
-                "name": filename,
-                "relative_path": rel_clip_path,
-                "url": f"/media/clips/{urllib.parse.quote(rel_clip_path)}",
-            })
             try:
                 ensure_clip_thumbnail(output_path)
             except Exception:
                 pass
 
+            rel_clip_path = str(output_path.relative_to(CLIPS_DIR)).replace("\\", "/")
+            file_entry = {
+                "name": filename,
+                "relative_path": rel_clip_path,
+                "url": f"/media/clips/{urllib.parse.quote(rel_clip_path)}",
+            }
+
+            with progress_lock:
+                clip_fractions[slot_idx] = 1.0
+                completed_flags[slot_idx] = True
+                created_slots[slot_idx] = file_entry
+                done_n = sum(1 for f in completed_flags if f)
+                overall_pct = min(96, int(38 + (sum(clip_fractions) / max(actual_count, 1)) * 58))
+                snapshot_files = [item for item in created_slots if item is not None]
+
             update_job(
                 job_id,
-                files=list(created_files),
-                progress=min(96, int(clip_start_pct + clip_range_pct)),
+                files=snapshot_files,
+                progress=overall_pct,
                 stage="clipping",
                 stage_progress=100,
-                current_clip=index + 1,
-                total_clips=count,
+                current_clip=done_n,
+                total_clips=actual_count,
                 current_clip_name=filename,
-                message=f"Created clip {index + 1} of {count} ({filename})",
-                stage_msg=f"Created clip {index + 1} of {count} ({filename})",
+                message=f"Created clip {done_n} of {actual_count} ({filename})",
+                stage_msg=f"Created clip {done_n} of {actual_count} ({filename})",
             )
+
+        workers = get_max_encode_workers() if actual_count > 1 else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_process_single_clip_task, idx_s, spec) for idx_s, spec in enumerate(clip_specs)]
+            for fut in futures:
+                fut.result()
+
+        created_files = [item for item in created_slots if item is not None]
+        if cancel_event and cancel_event.is_set():
+            update_job(job_id, status="cancelled", message="Job cancelled by user", files=created_files)
+            return
 
         if not created_files:
             raise RuntimeError(
@@ -1802,17 +1665,51 @@ def cache_check(url: str):
     Return whether a local cached download already exists for this YouTube URL.
     Used by the frontend to show/hide the 'Source cached' pill.
     """
+    local_candidate = _resolve_local_download_from_input(url)
+    if local_candidate:
+        return {"cached": True, "video_id": None, "file": local_candidate.name}
+
     check_url(url)
     video_id = extract_video_id(url)
     if not video_id:
         return {"cached": False, "video_id": None}
 
-    cached = find_cached_source(DOWNLOAD_DIR / "downloads", video_id)
+    cached = find_cached_source(DOWNLOAD_DIR, video_id)
     return {"cached": cached is not None, "video_id": video_id, "file": cached.name if cached else None}
+
+
+def _resolve_local_download_from_input(raw_url: str) -> Path | None:
+    """Resolve `/media/downloads/<name>` or local filename inside DOWNLOAD_DIR."""
+    cleaned = str(raw_url or "").strip()
+    if not cleaned:
+        return None
+    if "/media/downloads/" in cleaned:
+        parsed_path = urlparse(cleaned).path
+        rel_name = parsed_path.split("/media/downloads/", 1)[1]
+        return find_file_in_dir(DOWNLOAD_DIR, urllib.parse.unquote(rel_name))
+    if not cleaned.startswith(("http://", "https://")):
+        return find_file_in_dir(DOWNLOAD_DIR, urllib.parse.unquote(cleaned))
+    return None
 
 
 @app.get("/api/preview")
 def preview_video(url: str):
+    local_file = _resolve_local_download_from_input(url)
+    if local_file:
+        info_data = get_download_file_info(local_file.name)
+        return {
+            "title": info_data["clean_title"],
+            "channel": "Downloaded Source",
+            "duration": info_data["duration"],
+            "duration_formatted": info_data["duration_formatted"],
+            "thumbnail": info_data["thumbnail"],
+            "view_count": None,
+            "upload_date": None,
+            "video_id": info_data["video_id"],
+            "source_file": info_data["filename"],
+            "cached": True,
+        }
+
     check_url(url)
 
     # Try client chains in order of reliability to avoid bot check challenges
@@ -2203,10 +2100,7 @@ def list_available_clips():
                         pass
 
                 if duration <= 0:
-                    try:
-                        duration = probe_duration(file)
-                    except Exception:
-                        duration = 30.0
+                    duration = get_video_duration_cached(file) or 30.0
 
                 mins = int(duration // 60)
                 secs = int(duration % 60)
@@ -2343,9 +2237,27 @@ def list_available_downloads():
     }
 
 
+@app.get("/media/download-thumbs/{filename:path}")
+def serve_download_thumbnail(filename: str):
+    """Serve or generate a cached JPEG thumbnail for a downloaded source video."""
+    unquoted = urllib.parse.unquote(filename).replace("\\", "/")
+    dl_path = find_file_in_dir(DOWNLOAD_DIR, unquoted)
+    if not dl_path:
+        raise HTTPException(status_code=404, detail=f"Downloaded video '{Path(unquoted).name}' not found")
+    thumb = ensure_clip_thumbnail(dl_path)
+    if not thumb or not thumb.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail could not be generated")
+    return FileResponse(
+        thumb,
+        media_type="image/jpeg",
+        filename=thumb.name,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/api/downloads/{filename:path}/info")
 def get_download_file_info(filename: str):
-    """Get metadata, thumbnail, and probed duration of a downloaded video."""
+    """Get metadata, thumbnail, and cached duration of a downloaded video."""
     unquoted = urllib.parse.unquote(filename)
     source_path = find_file_in_dir(DOWNLOAD_DIR, unquoted)
     if not source_path:
@@ -2358,11 +2270,7 @@ def get_download_file_info(filename: str):
     video_id = vid_match.group(1) if vid_match else None
     clean_title = re.sub(r"\s*\[[a-zA-Z0-9_-]{11}\]", "", source_path.stem).replace("_", " ").strip()
 
-    duration = 0.0
-    try:
-        duration = probe_duration(source_path)
-    except Exception:
-        pass
+    duration = get_video_duration_cached(source_path)
 
     mins = int(duration // 60)
     secs = int(duration % 60)
@@ -2370,16 +2278,29 @@ def get_download_file_info(filename: str):
     mins = mins % 60
     duration_str = f"{hours}:{mins:02d}:{secs:02d}" if hours > 0 else f"{mins:02d}:{secs:02d}"
 
+    encoded_name = urllib.parse.quote(source_path.name)
+    thumbnail = (
+        f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
+        if video_id
+        else f"/media/download-thumbs/{encoded_name}"
+    )
+
+    display_title = clean_title or source_path.stem
     return {
         "filename": source_path.name,
-        "clean_title": clean_title or source_path.stem,
+        "source_file": source_path.name,
+        "title": display_title,
+        "clean_title": display_title,
+        "channel": "Local Downloads",
+        "cached": True,
         "video_id": video_id,
-        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if video_id else None,
+        "thumbnail": thumbnail,
         "youtube_url": f"https://www.youtube.com/watch?v={video_id}" if video_id else None,
         "duration": duration,
+        "duration_string": duration_str,
         "duration_formatted": duration_str,
         "size_mb": round(source_path.stat().st_size / (1024 * 1024), 2),
-        "url": f"/media/downloads/{urllib.parse.quote(source_path.name)}",
+        "url": f"/media/downloads/{encoded_name}",
     }
 
 
@@ -2465,10 +2386,11 @@ def get_media_storage():
         d["title"] = d.get("clean_title") or d["name"]
         d["thumb_url"] = d.get("thumbnail")
     for c in clips:
-        c["url"] = f"/media/clips/{urllib.parse.quote(c['name'])}"
+        rel_c = urllib.parse.quote(c.get("relative_path") or c["name"])
+        c["url"] = f"/media/clips/{rel_c}"
         c["filename"] = c["name"]
         c["title"] = c.get("clean_title") or c["name"]
-        c["thumb_url"] = c.get("thumbnail")
+        c["thumb_url"] = f"/media/clip-thumbs/{rel_c}"
 
     total_dl_mb = round(dl_bytes / (1024 * 1024), 2)
     total_cl_mb = round(clip_bytes / (1024 * 1024), 2)
@@ -2539,18 +2461,23 @@ def delete_downloads(filename: str | None = None):
 
 
 @app.delete("/api/media/clips")
-def delete_clips(filename: str | None = None):
-    """Delete a specific clip from data/clips or clear all generated clips."""
+def delete_clips(
+    filename: str | None = None,
+    name: str | None = None,
+    confirm_all: bool = False,
+):
+    """Delete a specific clip from data/clips, or clear all only when confirm_all=True."""
     if not CLIPS_DIR.exists():
         return {"success": True, "deleted_count": 0, "freed_mb": 0.0, "message": "No clips directory found"}
 
+    target_filename = filename or name
     deleted_count = 0
     freed_bytes = 0
 
-    if filename:
-        p = find_file_in_dir(CLIPS_DIR, filename)
+    if target_filename:
+        p = find_file_in_dir(CLIPS_DIR, target_filename)
         if not p:
-            raise HTTPException(status_code=404, detail=f"Clip '{Path(filename).name}' not found")
+            raise HTTPException(status_code=404, detail=f"Clip '{Path(target_filename).name}' not found")
         try:
             parent_dir = p.parent
             size = p.stat().st_size
@@ -2565,6 +2492,7 @@ def delete_clips(filename: str | None = None):
                 p.with_name(f"{p.stem}.subtitles.json"),
                 p.with_name(f"{p.stem}.thumb.jpg"),
                 p.with_name(f"{p.name}.thumb.jpg"),
+                p.with_name(f"{p.stem}.raw.mp4"),
             ]:
                 if comp.exists() and comp.is_file():
                     try:
@@ -2580,7 +2508,7 @@ def delete_clips(filename: str | None = None):
                     pass
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to delete {p.name}: {exc}")
-    else:
+    elif confirm_all:
         for p in list(CLIPS_DIR.glob("**/*")):
             if p.is_file():
                 try:
@@ -2596,6 +2524,11 @@ def delete_clips(filename: str | None = None):
                     d.rmdir()
                 except Exception:
                     pass
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing 'filename' query parameter. Pass confirm_all=true to delete all clips.",
+        )
 
     return {
         "success": True,
@@ -2606,9 +2539,12 @@ def delete_clips(filename: str | None = None):
 
 
 @app.delete("/api/media/clips/folder")
-def delete_clip_folder(folder_path: str):
+def delete_clip_folder(folder_path: str | None = None, folder: str | None = None):
     """Delete an entire video folder and all clips contained within it."""
-    unquoted = urllib.parse.unquote(folder_path).replace("\\", "/").strip("/")
+    raw_folder = folder_path or folder
+    if not raw_folder:
+        raise HTTPException(status_code=400, detail="Missing 'folder_path' query parameter.")
+    unquoted = urllib.parse.unquote(raw_folder).replace("\\", "/").strip("/")
     target_dir = CLIPS_DIR / unquoted
     if not target_dir.exists() or not target_dir.is_dir():
         safe_target = Path(unquoted).name
@@ -2648,7 +2584,7 @@ def delete_clip_folder(folder_path: str):
 def delete_all_media():
     """Purge all downloaded source videos and generated clips to free up storage."""
     res_dl = delete_downloads()
-    res_cl = delete_clips()
+    res_cl = delete_clips(confirm_all=True)
     total_freed = round(res_dl["freed_mb"] + res_cl["freed_mb"], 2)
     total_count = res_dl["deleted_count"] + res_cl["deleted_count"]
     return {

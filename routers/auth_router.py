@@ -16,6 +16,17 @@ class SignupRequest(BaseModel):
     email: Optional[str] = ""
     password: str
     name: Optional[str] = ""
+    full_name: Optional[str] = ""
+
+
+def _with_user_aliases(user: Optional[dict]) -> Optional[dict]:
+    if not user:
+        return None
+    normalized = dict(user)
+    display_name = normalized.get("full_name") or normalized.get("name") or normalized.get("username", "")
+    normalized["name"] = display_name
+    normalized["full_name"] = display_name
+    return normalized
 
 
 class LoginRequest(BaseModel):
@@ -36,7 +47,7 @@ def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Op
 @router.get("/status")
 def auth_status(authorization: Optional[str] = Header(None)):
     """Check MongoDB status and current logged in session."""
-    user = get_current_user_optional(authorization)
+    user = _with_user_aliases(get_current_user_optional(authorization))
     return {
         "db_connected": db.is_db_connected(),
         "user": user,
@@ -59,11 +70,14 @@ def signup(req: SignupRequest):
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
 
     try:
-        user = db.create_user(
-            username=username,
-            email=req.email or "",
-            password=req.password,
-            name=req.name or "",
+        resolved_name = (req.full_name or req.name or "").strip()
+        user = _with_user_aliases(
+            db.create_user(
+                username=username,
+                email=req.email or "",
+                password=req.password,
+                name=resolved_name,
+            )
         )
         token = db.create_session(user["id"])
         return {
@@ -87,7 +101,7 @@ def login(req: LoginRequest):
             detail="Database is currently unavailable. Please ensure MongoDB is running.",
         )
 
-    user = db.authenticate_user(req.username, req.password)
+    user = _with_user_aliases(db.authenticate_user(req.username, req.password))
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
@@ -103,7 +117,7 @@ def login(req: LoginRequest):
 @router.get("/me")
 def get_me(authorization: Optional[str] = Header(None)):
     """Get the current authenticated user's profile."""
-    user = get_current_user_optional(authorization)
+    user = _with_user_aliases(get_current_user_optional(authorization))
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return {"user": user}

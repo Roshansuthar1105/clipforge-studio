@@ -44,7 +44,12 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onSwitchView }) => 
       : currentView;
 
   const runningJobsCount = jobsList.filter(
-    (j) => j.status === 'pending' || j.status === 'downloading' || j.status === 'slicing'
+    (j) =>
+      j.status === 'queued' ||
+      j.status === 'pending' ||
+      j.status === 'downloading' ||
+      j.status === 'slicing' ||
+      j.status === 'processing'
   ).length;
 
   interface NavItem {

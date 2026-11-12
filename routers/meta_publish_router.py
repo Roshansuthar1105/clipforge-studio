@@ -46,6 +46,25 @@ _ALLOWED_EXTENSIONS = {".mp4", ".mov"}
 # Main publish endpoint
 # ---------------------------------------------------------------------------
 
+def _resolve_meta_clip_path(clips_dir: Path, clip_filename: str) -> Path:
+    """Resolve clip_filename directly or inside subfolders while blocking path traversal."""
+    clean = str(clip_filename or "").replace("\\", "/").strip("/")
+    base = clips_dir.resolve()
+    direct = (clips_dir / clean).resolve()
+    try:
+        direct.relative_to(base)
+        if direct.is_file():
+            return direct
+    except ValueError:
+        pass
+
+    target_name = Path(clean).name
+    for cand in clips_dir.rglob(target_name):
+        if cand.is_file():
+            return cand
+    return direct
+
+
 @router.post("/", response_model=MetaPublishResponse)
 async def publish_clip(req: MetaPublishRequest) -> MetaPublishResponse:
     """
@@ -70,7 +89,7 @@ async def publish_clip(req: MetaPublishRequest) -> MetaPublishResponse:
     # ------------------------------------------------------------------ #
     # Validate the clip file                                               #
     # ------------------------------------------------------------------ #
-    clip_path = Path(settings.clips_directory) / req.clip_filename
+    clip_path = _resolve_meta_clip_path(Path(settings.clips_directory), req.clip_filename)
 
     if not clip_path.is_file():
         raise HTTPException(

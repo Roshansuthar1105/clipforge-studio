@@ -373,7 +373,7 @@ def db_record_publish_job(job: Dict[str, Any]) -> None:
     db = get_db()
     if db is None:
         import storage
-        storage.record_publish_job(job)
+        storage.append_history_record(job)
         return
 
     doc = dict(job)
@@ -385,7 +385,7 @@ def db_get_publish_history(user_id: Optional[str] = None, limit: int = 50) -> Li
     db = get_db()
     if db is None:
         import storage
-        return storage.load_publish_history(limit)
+        return storage.load_history()[:limit]
 
     query = {}
     if user_id:
