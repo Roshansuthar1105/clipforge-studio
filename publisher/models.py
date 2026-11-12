@@ -44,7 +44,11 @@ class PublishRequest(BaseModel):
     # Quick overrides applied across targets if not individually set:
     title: Optional[str] = None
     caption: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
     privacy: Optional[str] = "public"
+    publish_at: Optional[str] = None
+    facebook_as_reel: bool = True
+    instagram_share_to_feed: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -73,7 +77,12 @@ class BatchPublishRequest(BaseModel):
     title: Optional[str] = None
     title_prefix: Optional[str] = None
     caption: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
     privacy: Optional[str] = "public"
+    publish_at: Optional[str] = None
+    stagger_minutes: int = 0
+    facebook_as_reel: bool = True
+    instagram_share_to_feed: bool = True
 
     @model_validator(mode="before")
     @classmethod

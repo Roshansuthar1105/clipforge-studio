@@ -11,9 +11,11 @@ import {
   X,
   FolderOpen,
   RefreshCw,
+  Rocket,
 } from 'lucide-react';
 import { useStudioStore } from '../../stores/useStudioStore';
 import { useJobsStore } from '../../stores/useJobsStore';
+import { CreateAndPostModal } from './CreateAndPostModal';
 
 export const StudioView: React.FC = () => {
   const {
@@ -50,6 +52,7 @@ export const StudioView: React.FC = () => {
     viralIncludeTeaser,
     setViralSetting,
     submitStudioJob,
+    openCreateAndPostModal,
   } = useStudioStore();
 
   useEffect(() => {
@@ -147,6 +150,16 @@ export const StudioView: React.FC = () => {
                 <Sparkles className="w-4 h-4" /> Fetch Info
               </>
             )}
+          </button>
+
+          <button
+            type="button"
+            className="px-5 py-3 rounded-2xl text-xs font-bold text-white bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 shadow-lg shadow-pink-600/25 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            disabled={!hasSource}
+            onClick={openCreateAndPostModal}
+            title="Configure clips, title/part layout, subtitles, accounts, tags & schedule in one workflow"
+          >
+            <Rocket className="w-4 h-4" /> Create &amp; Post
           </button>
         </form>
 
@@ -587,7 +600,18 @@ export const StudioView: React.FC = () => {
             ? `Slice ${viralMoments.length} Viral Moments`
             : 'Render All 9:16 Vertical Clips'}
         </button>
+
+        <button
+          type="button"
+          className="flex-1 py-3.5 px-6 rounded-2xl text-white font-bold text-sm bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 shadow-xl shadow-pink-600/25 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+          onClick={openCreateAndPostModal}
+          disabled={!hasSource}
+        >
+          <Rocket className="w-4 h-4" /> Create &amp; Post
+        </button>
       </div>
+
+      <CreateAndPostModal />
     </div>
   );
 };

@@ -13,6 +13,7 @@ class CreateScheduleRequest(BaseModel):
     targets: List[PublishTarget]
     title: Optional[str] = None
     caption: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
     privacy: Optional[str] = "public"
     scheduled_time: str  # ISO 8601 string, e.g. "2026-10-31T14:30:00"
 
@@ -21,6 +22,7 @@ class UpdateScheduleRequest(BaseModel):
     scheduled_time: Optional[str] = None
     title: Optional[str] = None
     caption: Optional[str] = None
+    tags: Optional[List[str]] = None
     targets: Optional[List[PublishTarget]] = None
     privacy: Optional[str] = None
 
@@ -33,6 +35,7 @@ class ScheduledPost(BaseModel):
     targets: List[Dict[str, Any]]
     title: Optional[str] = None
     caption: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
     privacy: str = "public"
     scheduled_time: str
     status: str = "scheduled"  # scheduled | publishing | completed | failed | cancelled

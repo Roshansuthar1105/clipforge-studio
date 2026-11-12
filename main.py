@@ -184,6 +184,42 @@ job_cancel_events: dict[str, threading.Event] = {}
 # REQUEST SETTINGS
 # --------------------------------------------------
 
+class OverlayStyleConfig(BaseModel):
+    enabled: bool = False
+    text: str = ""
+    position_preset: str = "top"
+    position_y_pct: float = 14.0
+    alignment: str = "center"
+    font_family: str = "Arial Black"
+    font_size: int = 52
+    text_color: str = "#FFFFFF"
+    text_transform: str = "uppercase"
+    outline_color: str = "#000000"
+    outline_width: float = 4.0
+    box_style: str = "box"  # none | box | banner
+    box_color: str = "#000000"
+    box_opacity: float = 0.65
+
+
+class AutoPublishTargetConfig(BaseModel):
+    account_id: str
+    platform: str = "youtube"
+
+
+class AutoPublishConfig(BaseModel):
+    enabled: bool = False
+    mode: str = "now"  # now | native_schedule | backend_schedule
+    targets: List[AutoPublishTargetConfig] = Field(default_factory=list)
+    title: str = ""
+    caption: str = ""
+    tags: List[str] = Field(default_factory=list)
+    privacy: str = "public"
+    facebook_as_reel: bool = True
+    instagram_share_to_feed: bool = True
+    scheduled_time: Optional[str] = None
+    stagger_minutes: int = 0
+
+
 class ClipRequest(BaseModel):
     url: str = ""
     title: str = ""
@@ -247,6 +283,15 @@ class ClipRequest(BaseModel):
 
     # Subtitle Automation (Auto-burn animated word subtitles into reel)
     burn_subtitles: bool = False
+    subtitle_language: str = "hinglish"  # hinglish | english | original
+    subtitle_style: Optional[Dict[str, Any]] = None
+
+    # Structured WYSIWYG Overlays (Title Banner & Part Name Badge)
+    title_overlay: Optional[OverlayStyleConfig] = None
+    part_overlay: Optional[OverlayStyleConfig] = None
+
+    # End-to-End Auto-Publish / Scheduling Pipeline
+    auto_publish: Optional[AutoPublishConfig] = None
 
     def model_post_init(self, __context):
         if self.count is not None:
@@ -754,6 +799,215 @@ def update_job(job_id: str, **values):
 # VIDEO PROCESSING
 # --------------------------------------------------
 
+def _build_clip_overlays_for_part(
+    request: ClipRequest,
+    part_num: int,
+    formatted_title: str,
+    is_viral: bool,
+) -> List[Dict[str, Any]]:
+    """Build ASS overlay dicts for Title and Part Name layers for a given clip index."""
+    overlays: List[Dict[str, Any]] = []
+    if request.title_overlay and request.title_overlay.enabled:
+        ov = request.title_overlay.model_dump()
+        raw_t = (ov.get("text") or "").strip() or formatted_title
+        ov["text"] = re.sub(r"\{part\}|\{n\}", str(part_num), raw_t, flags=re.IGNORECASE)
+        ov["apply_to_whole"] = True
+        ov["start_time"] = 0.0
+        ov["end_time"] = 0.0
+        overlays.append(ov)
+
+    if request.part_overlay and request.part_overlay.enabled:
+        ov = request.part_overlay.model_dump()
+        default_tpl = "Viral #{part}" if is_viral else "Part {part}"
+        raw_p = (ov.get("text") or "").strip() or default_tpl
+        if re.search(r"\{part\}|\{n\}", raw_p, flags=re.IGNORECASE):
+            ov["text"] = re.sub(r"\{part\}|\{n\}", str(part_num), raw_p, flags=re.IGNORECASE)
+        else:
+            ov["text"] = f"{raw_p} {part_num}".strip()
+        ov["apply_to_whole"] = True
+        ov["start_time"] = 0.0
+        ov["end_time"] = 0.0
+        overlays.append(ov)
+    return overlays
+
+
+def _normalize_job_sub_styles(custom_style: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge user-supplied subtitle style dict with safe defaults for ASS generation."""
+    styles: Dict[str, Any] = {
+        "preset_name": "hormozi",
+        "font_family": "Arial Black",
+        "font_size": 48,
+        "text_color": "#FFFFFF",
+        "primary_color": "#FFFFFF",
+        "highlight_color": "#FACC15",
+        "outline_color": "#000000",
+        "outline_width": 0.5,
+        "shadow_depth": 1.5,
+        "position_percent": 83,
+        "uppercase": True,
+        "text_transform": "uppercase",
+        "highlight_mode": "active_word",
+        "words_per_screen": 3,
+        "margin_v": 320,
+    }
+    if custom_style:
+        styles.update(custom_style)
+        if custom_style.get("text_color") and not custom_style.get("primary_color"):
+            styles["primary_color"] = custom_style["text_color"]
+        if custom_style.get("primary_color") and not custom_style.get("text_color"):
+            styles["text_color"] = custom_style["primary_color"]
+        if custom_style.get("font_family") and not custom_style.get("font_name"):
+            styles["font_name"] = custom_style["font_family"]
+        if "uppercase" in custom_style and "text_transform" not in custom_style:
+            styles["text_transform"] = "uppercase" if custom_style["uppercase"] else "none"
+        if "position_percent" in custom_style:
+            pct = float(custom_style["position_percent"])
+            styles["margin_v"] = int(round(1920 * (1.0 - pct / 100.0)))
+    return styles
+
+
+def _dispatch_auto_publish_for_job(
+    job_id: str,
+    request: ClipRequest,
+    created_files: List[Dict[str, Any]],
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Chain post-render publishing or scheduling once all clips finish rendering.
+    Supports:
+      - 'now': immediate sequential batch upload across all selected targets
+      - 'native_schedule': immediate upload with native FB/YT scheduled_publish_time/publishAt,
+        plus automatic fallback to ClipForge backend scheduler for any Instagram targets
+      - 'backend_schedule': ClipForge backend scheduler queue for all targets
+    """
+    ap = request.auto_publish
+    if not ap or not ap.enabled or not ap.targets or not created_files:
+        return {}
+
+    from publisher.models import BatchPublishRequest, PublishTarget
+    from publisher.jobs import start_batch_publish_job
+    from publisher.schedule_models import CreateScheduleRequest
+    from publisher.scheduler import create_scheduled_post
+
+    pub_targets = [
+        PublishTarget(account_id=t.account_id, platform=t.platform)
+        for t in ap.targets
+    ]
+    clip_paths = [f["relative_path"] for f in created_files]
+    base_title = (ap.title or request.title or request.video_title or "ClipForge Short").strip()
+    base_caption = (ap.caption or base_title).strip()
+    mode = (ap.mode or "now").lower()
+
+    meta_updates: Dict[str, Any] = {"auto_publish_mode": mode}
+
+    if mode == "now":
+        batch_req = BatchPublishRequest(
+            clip_paths=clip_paths,
+            targets=pub_targets,
+            title=base_title,
+            title_prefix=base_title,
+            caption=base_caption,
+            tags=ap.tags,
+            privacy=ap.privacy or "public",
+            facebook_as_reel=ap.facebook_as_reel,
+            instagram_share_to_feed=ap.instagram_share_to_feed,
+        )
+        batch_job = start_batch_publish_job(batch_req)
+        meta_updates["publish_batch_id"] = batch_job["batch_id"]
+        return meta_updates
+
+    # Parse base schedule datetime for native_schedule / backend_schedule
+    base_dt: datetime.datetime
+    if ap.scheduled_time and str(ap.scheduled_time).strip():
+        clean_iso = str(ap.scheduled_time).strip().replace("Z", "+00:00")
+        base_dt = datetime.datetime.fromisoformat(clean_iso)
+        if base_dt.tzinfo is None:
+            base_dt = base_dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            base_dt = base_dt.astimezone(datetime.timezone.utc)
+    else:
+        base_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=20)
+
+    stagger = max(0, int(ap.stagger_minutes or 0))
+    base_iso_str = base_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _schedule_on_clipforge_backend(targets_subset: List[PublishTarget]) -> List[str]:
+        sched_ids: List[str] = []
+        total_n = len(clip_paths)
+        for idx_c, c_path in enumerate(clip_paths):
+            part_n = idx_c + 1
+            part_dt = base_dt + datetime.timedelta(minutes=idx_c * stagger)
+            if re.search(r"\{part\}|\{n\}", base_title, flags=re.IGNORECASE):
+                p_title = re.sub(r"\{part\}|\{n\}", str(part_n), base_title, flags=re.IGNORECASE)
+            elif total_n > 1:
+                p_title = f"{base_title} - Part {part_n}"
+            else:
+                p_title = base_title
+            p_caption = re.sub(r"\{part\}|\{n\}", str(part_n), base_caption, flags=re.IGNORECASE)
+
+            # Attach per-platform reel/grid config on PublishTarget
+            enriched_targets = []
+            for pt in targets_subset:
+                t_copy = pt.model_copy()
+                if t_copy.platform.lower() == "facebook":
+                    from publisher.models import FacebookPublishConfig
+                    t_copy.facebook_config = FacebookPublishConfig(
+                        title=p_title,
+                        description=p_caption,
+                        as_reel=ap.facebook_as_reel,
+                    )
+                elif t_copy.platform.lower() == "instagram":
+                    from publisher.models import InstagramPublishConfig
+                    t_copy.instagram_config = InstagramPublishConfig(
+                        caption=p_caption,
+                        share_to_feed=ap.instagram_share_to_feed,
+                    )
+                enriched_targets.append(t_copy)
+
+            sched_req = CreateScheduleRequest(
+                clip_path=c_path,
+                targets=enriched_targets,
+                title=p_title,
+                caption=p_caption,
+                tags=ap.tags,
+                privacy=ap.privacy or "public",
+                scheduled_time=part_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            post_doc = create_scheduled_post(sched_req, user_id=user_id)
+            sched_ids.append(post_doc["id"])
+        return sched_ids
+
+    if mode == "native_schedule":
+        native_targets = [t for t in pub_targets if (t.platform or "").lower() in ("facebook", "youtube")]
+        ig_targets = [t for t in pub_targets if (t.platform or "").lower() == "instagram"]
+
+        if native_targets:
+            batch_req = BatchPublishRequest(
+                clip_paths=clip_paths,
+                targets=native_targets,
+                title=base_title,
+                title_prefix=base_title,
+                caption=base_caption,
+                tags=ap.tags,
+                privacy=ap.privacy or "public",
+                publish_at=base_iso_str,
+                stagger_minutes=stagger,
+                facebook_as_reel=ap.facebook_as_reel,
+                instagram_share_to_feed=ap.instagram_share_to_feed,
+            )
+            batch_job = start_batch_publish_job(batch_req)
+            meta_updates["publish_batch_id"] = batch_job["batch_id"]
+
+        if ig_targets:
+            meta_updates["scheduled_post_ids"] = _schedule_on_clipforge_backend(ig_targets)
+
+        return meta_updates
+
+    # Default: backend_schedule (existing ClipForge daemon queue for all targets)
+    meta_updates["scheduled_post_ids"] = _schedule_on_clipforge_backend(pub_targets)
+    return meta_updates
+
+
 def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[threading.Event] = None):
     source_path = None
     downloaded_by_job = False
@@ -1067,6 +1321,8 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             slice_transcript_for_clip,
             create_voice_synced_word_chunks,
             transcribe_video_with_groq,
+            translate_video_to_english_with_groq,
+            translate_clip_to_english_with_groq,
             get_groq_api_key,
             convert_cues_to_hinglish,
             has_devanagari_characters,
@@ -1076,37 +1332,46 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
 
         # Check or generate parent transcript ONCE so every clip gets instant <5ms subtitle cues
         # and burn_subtitles=True can render in a single FFmpeg pass without double re-encoding.
-        parent_tr = get_stored_transcript(eff_video_id)
-        if not parent_tr and source_path:
-            parent_tr = get_stored_transcript(source_path.stem)
-
+        sub_lang = (getattr(request, "subtitle_language", "hinglish") or "hinglish").lower()
         should_burn = bool(getattr(request, "burn_subtitles", False))
-        if should_burn and not (parent_tr and parent_tr.get("segments")) and get_groq_api_key():
-            try:
-                update_job(
-                    job_id,
-                    status="processing",
-                    stage="transcribing",
-                    progress=37,
-                    message="Transcribing source audio once for fast single-pass subtitles...",
-                    stage_msg="Transcribing source audio once for fast single-pass subtitles...",
-                )
-                parent_tr = transcribe_video_with_groq(source_path, video_id=eff_video_id)
-            except Exception as tr_err:
-                logger.warning("Pre-clipping parent transcription failed (%s), will slice/transcribe per clip", tr_err)
 
-        default_sub_styles = {
-            "font_family": "Montserrat",
-            "font_size": 48,
-            "primary_color": "#FFFFFF",
-            "highlight_color": "#FACC15",
-            "outline_color": "#000000",
-            "outline_width": 0.5,
-            "text_transform": "uppercase",
-            "highlight_mode": "active_word",
-            "words_per_screen": 3,
-            "margin_v": 320,
-        }
+        if sub_lang == "english":
+            parent_tr = get_stored_transcript(f"{eff_video_id}_en")
+            if not parent_tr and source_path:
+                parent_tr = get_stored_transcript(f"{source_path.stem}_en")
+            if should_burn and not (parent_tr and parent_tr.get("segments")) and get_groq_api_key():
+                try:
+                    update_job(
+                        job_id,
+                        status="processing",
+                        stage="transcribing",
+                        progress=37,
+                        message="Translating source audio to English for single-pass subtitles...",
+                        stage_msg="Translating source audio to English for single-pass subtitles...",
+                    )
+                    parent_tr = translate_video_to_english_with_groq(source_path, video_id=eff_video_id)
+                except Exception as tr_err:
+                    logger.warning("Pre-clipping parent English translation failed (%s), will slice/translate per clip", tr_err)
+        else:
+            parent_tr = get_stored_transcript(eff_video_id)
+            if not parent_tr and source_path:
+                parent_tr = get_stored_transcript(source_path.stem)
+            if should_burn and not (parent_tr and parent_tr.get("segments")) and get_groq_api_key():
+                try:
+                    update_job(
+                        job_id,
+                        status="processing",
+                        stage="transcribing",
+                        progress=37,
+                        message="Transcribing source audio once for fast single-pass subtitles...",
+                        stage_msg="Transcribing source audio once for fast single-pass subtitles...",
+                    )
+                    parent_tr = transcribe_video_with_groq(source_path, video_id=eff_video_id)
+                except Exception as tr_err:
+                    logger.warning("Pre-clipping parent transcription failed (%s), will slice/transcribe per clip", tr_err)
+
+        default_sub_styles = _normalize_job_sub_styles(getattr(request, "subtitle_style", None))
+        max_words_per_screen = max(1, min(10, int(default_sub_styles.get("words_per_screen", 3) or 3)))
 
         source_has_audio = has_audio_stream(source_path)
 
@@ -1197,11 +1462,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 raw_hook = slice_transcript_for_clip(
                     parent_tr, float(hook_info["start"]), float(hook_info["start"] + h_dur)
                 )
-                hook_chunks = create_voice_synced_word_chunks(raw_hook, max_words=3)
+                hook_chunks = create_voice_synced_word_chunks(raw_hook, max_words=max_words_per_screen)
                 for hc in hook_chunks:
                     hc["end"] = min(h_dur, hc["end"])
                 raw_body = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
-                body_chunks = create_voice_synced_word_chunks(raw_body, max_words=3)
+                body_chunks = create_voice_synced_word_chunks(raw_body, max_words=max_words_per_screen)
                 for bc in body_chunks:
                     bc["start"] = round(bc["start"] + h_dur, 2)
                     bc["end"] = round(bc["end"] + h_dur, 2)
@@ -1213,10 +1478,10 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     c_item["id"] = idx_c
             else:
                 raw_cues = slice_transcript_for_clip(parent_tr, float(clip_start), float(clip_start + clip_duration))
-                cues_out = create_voice_synced_word_chunks(raw_cues, max_words=3)
+                cues_out = create_voice_synced_word_chunks(raw_cues, max_words=max_words_per_screen)
 
             raw_pl = str(parent_tr.get("language", "")).lower()
-            if cues_out and (
+            if sub_lang == "hinglish" and cues_out and (
                 any(has_devanagari_characters(c.get("text", "")) for c in cues_out)
                 or raw_pl in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa")
             ):
@@ -1237,16 +1502,27 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             else:
                 formatted_title = raw_title
 
-            title = formatted_title if request.show_title else ""
-            part_format_template = getattr(request, "part_format", None) or "Part {part}"
-            if has_part_in_title:
+            clip_overlays = _build_clip_overlays_for_part(
+                request,
+                index + 1,
+                formatted_title,
+                bool(current_moment),
+            )
+            if clip_overlays:
+                # ASS overlay renderer handles Title & Part overlays with exact WYSIWYG styling
+                title = ""
                 part = ""
-            elif request.show_parts and not current_moment:
-                part = part_format_template.replace("{part}", str(index + 1))
-            elif request.show_parts and current_moment:
-                part = f"Viral #{index + 1}"
             else:
-                part = ""
+                title = formatted_title if request.show_title else ""
+                part_format_template = getattr(request, "part_format", None) or "Part {part}"
+                if has_part_in_title:
+                    part = ""
+                elif request.show_parts and not current_moment:
+                    part = part_format_template.replace("{part}", str(index + 1))
+                elif request.show_parts and current_moment:
+                    part = f"Viral #{index + 1}"
+                else:
+                    part = ""
 
             stem_base = re.sub(r"[_\-\s]*\{part\}", "", raw_title, flags=re.IGNORECASE).strip()
             stem_base = re.sub(r"[_\-\s]+part[_\-\s]*$", "", stem_base, flags=re.IGNORECASE).strip()
@@ -1298,19 +1574,20 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 "60" if part_align == "left" else ("w-text_w-60" if part_align == "right" else "(w-text_w)/2")
             )
 
-            # Map cues BEFORE FFmpeg so subtitles can burn in the same single pass!
+            # Map cues BEFORE FFmpeg so subtitles & ASS overlays can burn in the same single pass!
             pre_cues = _map_parent_cues(clip_start, clip_duration, hook_info)
             ass_temp_path = None
             single_pass_ass_filter = ""
-            if should_burn and pre_cues:
+            cues_for_ass = pre_cues if (should_burn and pre_cues) else []
+            if cues_for_ass or clip_overlays:
                 try:
                     ass_temp_path = output_path.with_name(f"{output_path.stem}.{threading.get_ident()}.singlepass.ass")
                     with open(ass_temp_path, "w", encoding="utf-8") as af:
-                        af.write(build_ass_content(pre_cues, style=default_sub_styles))
+                        af.write(build_ass_content(cues_for_ass, style=default_sub_styles, overlays=clip_overlays or None))
                     esc_ass = str(ass_temp_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
                     single_pass_ass_filter = f"ass='{esc_ass}'"
                 except Exception as ass_err:
-                    logger.warning("Could not prepare single-pass ASS subtitles for %s: %s", filename, ass_err)
+                    logger.warning("Could not prepare single-pass ASS subtitles/overlays for %s: %s", filename, ass_err)
                     ass_temp_path = None
 
             bg_mode = (request.background_style or "blur").lower()
@@ -1443,6 +1720,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 raise RuntimeError(f"FFmpeg did not create a valid clip: {filename}")
 
             burned_in_single_pass = bool(should_burn and pre_cues and single_pass_ass_filter)
+            overlays_burned_in_single_pass = bool(clip_overlays and single_pass_ass_filter)
 
             try:
                 clip_meta = {
@@ -1462,6 +1740,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     "hook_badge": hook_info["badge"] if hook_info else "",
                     "hook_text": hook_info["text"] if hook_info else "",
                     "subtitles_burned": burned_in_single_pass,
+                    "overlays_burned": overlays_burned_in_single_pass,
                 }
                 meta_path = output_path.with_name(f"{filename}.meta.json")
 
@@ -1469,16 +1748,22 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                 # Fallback ONLY if no parent transcript covered this clip
                 if not cues and output_path.exists() and get_groq_api_key():
                     try:
-                        clip_tr = transcribe_video_with_groq(output_path, video_id=output_path.stem)
+                        if sub_lang == "english":
+                            clip_tr = translate_clip_to_english_with_groq(output_path)
+                        else:
+                            clip_tr = transcribe_video_with_groq(output_path, video_id=output_path.stem)
                         if clip_tr and clip_tr.get("segments"):
-                            cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=3)
+                            cues = create_voice_synced_word_chunks(clip_tr["segments"], max_words=max_words_per_screen)
                             raw_l = str(clip_tr.get("language", "")).lower()
-                            if any(has_devanagari_characters(c.get("text", "")) for c in cues) or raw_l in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa"):
+                            if sub_lang == "hinglish" and (
+                                any(has_devanagari_characters(c.get("text", "")) for c in cues)
+                                or raw_l in ("hi", "hindi", "urdu", "pa", "mr", "gu", "bn", "ne", "sa")
+                            ):
                                 cues = convert_cues_to_hinglish(cues)
                     except Exception as c_err:
                         logger.warning("Direct clip auto-transcribe fallback failed (%s)", c_err)
 
-                if cues:
+                if cues or clip_overlays:
                     sub_file = output_path.with_name(f"{filename}.subtitles.json")
                     tmp_sub_file = output_path.with_name(f"{filename}.{threading.get_ident()}.subtitles.tmp")
                     with open(tmp_sub_file, "w", encoding="utf-8") as sf:
@@ -1486,9 +1771,11 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                             "clip_name": filename,
                             "cues": cues,
                             "styles": default_sub_styles,
+                            "overlays": clip_overlays,
                         }, sf, indent=2, ensure_ascii=False)
                     tmp_sub_file.replace(sub_file)
 
+                if cues:
                     clip_meta["has_subtitles"] = True
                     raw_caption = " ".join([c.get("text", "").strip() for c in cues if c.get("text", "").strip()])
                     clip_meta["caption"] = clean_hallucinated_text(raw_caption)
@@ -1497,7 +1784,13 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                         try:
                             from services.subtitle_service import burn_subtitles_to_clip
                             temp_burn = output_path.with_name(f"{output_path.stem}_burn_temp.mp4")
-                            burn_subtitles_to_clip(output_path, temp_burn, cues, default_sub_styles)
+                            burn_subtitles_to_clip(
+                                output_path,
+                                temp_burn,
+                                cues,
+                                default_sub_styles,
+                                overlays=None if overlays_burned_in_single_pass else (clip_overlays or None),
+                            )
                             if temp_burn.exists() and temp_burn.stat().st_size > 0:
                                 output_path.unlink(missing_ok=True)
                                 temp_burn.rename(output_path)
@@ -1581,11 +1874,45 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
                     ),
                 )
 
-        completion_msg = (
-            f"Preview clip ready! Adjust settings or click Generate All to create all clips."
-            if request.is_preview
-            else f"Successfully created {len(created_files)} clip(s)"
-        )
+        auto_meta: Dict[str, Any] = {}
+        if not request.is_preview and request.auto_publish and request.auto_publish.enabled:
+            try:
+                job_user_id = None
+                with jobs_lock:
+                    job_user_id = (jobs.get(job_id) or {}).get("user_id")
+                auto_meta = _dispatch_auto_publish_for_job(
+                    job_id,
+                    request,
+                    created_files,
+                    user_id=job_user_id,
+                )
+            except Exception as ap_err:
+                logger.exception("Auto-publish dispatch failed for job %s: %s", job_id, ap_err)
+                auto_meta = {"auto_publish_error": str(ap_err)[:500]}
+
+        if request.is_preview:
+            completion_msg = "Preview clip ready! Adjust settings or click Generate All to create all clips."
+        elif auto_meta.get("publish_batch_id") and auto_meta.get("scheduled_post_ids"):
+            completion_msg = (
+                f"Created {len(created_files)} clip(s) — uploading FB/YT native schedule & "
+                f"queued {len(auto_meta['scheduled_post_ids'])} Instagram post(s)"
+            )
+        elif auto_meta.get("publish_batch_id"):
+            ap_mode = auto_meta.get("auto_publish_mode", "now")
+            label = "native schedule upload" if ap_mode == "native_schedule" else "auto-publish"
+            completion_msg = f"Created {len(created_files)} clip(s) — {label} started!"
+        elif auto_meta.get("scheduled_post_ids"):
+            completion_msg = (
+                f"Created {len(created_files)} clip(s) — queued {len(auto_meta['scheduled_post_ids'])} "
+                f"scheduled post(s)!"
+            )
+        elif auto_meta.get("auto_publish_error"):
+            completion_msg = (
+                f"Created {len(created_files)} clip(s), but auto-publish failed: {auto_meta['auto_publish_error']}"
+            )
+        else:
+            completion_msg = f"Successfully created {len(created_files)} clip(s)"
+
         update_job(
             job_id,
             status="completed",
@@ -1593,6 +1920,7 @@ def process_job(job_id: str, request: ClipRequest, cancel_event: Optional[thread
             message=completion_msg,
             files=created_files,
             is_preview=request.is_preview,
+            **auto_meta,
         )
 
     except Exception as error:
@@ -1819,8 +2147,10 @@ def create_job(request: ClipRequest, authorization: Optional[str] = Header(None)
             "hook_duration": getattr(request, "hook_duration", 3.5),
             "hook_badge": getattr(request, "hook_badge", "WAIT FOR IT..."),
             "burn_subtitles": getattr(request, "burn_subtitles", False),
+            "subtitle_language": getattr(request, "subtitle_language", "hinglish"),
             "title_alignment": getattr(request, "title_alignment", "center"),
             "part_alignment": getattr(request, "part_alignment", "center"),
+            "auto_publish": request.auto_publish.model_dump() if getattr(request, "auto_publish", None) else None,
         },
     }
 

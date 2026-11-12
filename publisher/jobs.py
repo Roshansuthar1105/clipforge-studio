@@ -23,6 +23,30 @@ _batch_publish_jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
+def _compute_part_schedule_times(
+    base_iso: Optional[str],
+    offset_minutes: int = 0,
+) -> tuple[Optional[str], Optional[int]]:
+    """
+    Compute per-part schedule timestamps from an ISO-8601 base string and minute offset.
+    Returns (iso_utc_str, unix_seconds) or (None, None) if base_iso is unset/invalid.
+    """
+    if not base_iso or not str(base_iso).strip():
+        return None, None
+    try:
+        clean = str(base_iso).strip().replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            dt = dt.astimezone(datetime.timezone.utc)
+        if offset_minutes:
+            dt = dt + datetime.timedelta(minutes=int(offset_minutes))
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), int(dt.timestamp())
+    except Exception:
+        return None, None
+
+
 def resolve_clip_file(clip_path_str: str) -> Path:
     """Find the clip file on disk given a relative or absolute path, or filename."""
     import urllib.parse
@@ -102,6 +126,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
 
         # Execute upload for this target
         platform = target.platform.lower()
+        yt_publish_iso, fb_schedule_unix = _compute_part_schedule_times(request.publish_at, 0)
 
         if platform == "youtube":
             def yt_progress(pct: int):
@@ -117,7 +142,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
             )
             video_title = (raw_single_title or "ClipForge Short").replace("_", " ").strip()
             video_desc = (yt_cfg.description if yt_cfg else "") or request.caption or ""
-            video_tags = (yt_cfg.tags if yt_cfg else []) or ["ClipForge", "Shorts"]
+            video_tags = (yt_cfg.tags if yt_cfg and yt_cfg.tags else None) or request.tags or ["ClipForge", "Shorts"]
             privacy = (yt_cfg.privacy if yt_cfg else None) or request.privacy or "public"
             kids = yt_cfg.made_for_kids if yt_cfg else False
             cat_id = yt_cfg.category_id if yt_cfg else "22"
@@ -132,11 +157,14 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                     category_id=cat_id,
                     privacy_status=privacy,
                     made_for_kids=kids,
+                    publish_at=yt_publish_iso,
                     progress_callback=yt_progress,
                 )
                 with _jobs_lock:
                     job["targets"][i]["status"] = "success"
-                    job["targets"][i]["stage"] = "Published to YouTube Shorts!"
+                    job["targets"][i]["stage"] = (
+                        "Scheduled natively on YouTube!" if yt_publish_iso else "Published to YouTube Shorts!"
+                    )
                     job["targets"][i]["progress"] = 100
                     job["targets"][i]["url"] = res.get("shorts_url") or res.get("url")
                     job["targets"][i]["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -160,7 +188,9 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                 or request.title
                 or clip_file.stem
             )
-            share_feed = ig_cfg.share_to_feed if ig_cfg else True
+            share_feed = (
+                ig_cfg.share_to_feed if ig_cfg is not None else request.instagram_share_to_feed
+            )
 
             # Try direct resumable binary upload first (no public URL required)
             ig_token = account.get("access_token")
@@ -243,7 +273,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                 or request.title
                 or clip_file.stem
             )
-            as_reel = fb_cfg.as_reel if fb_cfg is not None else True
+            as_reel = fb_cfg.as_reel if fb_cfg is not None else request.facebook_as_reel
 
             page_id = account.get("channel_id")
             token = account.get("access_token")
@@ -261,6 +291,7 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                             title=video_title,
                             page_id=page_id,
                             page_access_token=token,
+                            scheduled_publish_time=fb_schedule_unix,
                         )
                     )
                 else:
@@ -271,13 +302,19 @@ def _run_publish_job(job_id: str, request: PublishRequest, clip_file: Path) -> N
                             description=caption,
                             page_id=page_id,
                             page_access_token=token,
+                            scheduled_publish_time=fb_schedule_unix,
                         )
                     )
 
                 if res.status.value == "published":
                     with _jobs_lock:
                         job["targets"][i]["status"] = "success"
-                        job["targets"][i]["stage"] = "Published to Facebook Reel!" if as_reel else "Published to Facebook Video!"
+                        if fb_schedule_unix:
+                            job["targets"][i]["stage"] = (
+                                "Scheduled natively on Facebook Reel!" if as_reel else "Scheduled natively on Facebook Video!"
+                            )
+                        else:
+                            job["targets"][i]["stage"] = "Published to Facebook Reel!" if as_reel else "Published to Facebook Video!"
                         job["targets"][i]["progress"] = 100
                         vid = res.media_id
                         permalink = res.details.get("permalink_url") if res.details else None
@@ -519,6 +556,17 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                         batch["clips"][clip_idx]["targets"][target_idx]["error"] = f"Retry attempt {attempt}/{MAX_RETRIES}..."
 
                 try:
+                    yt_publish_iso, fb_schedule_unix = _compute_part_schedule_times(
+                        request.publish_at,
+                        clip_idx * int(getattr(request, "stagger_minutes", 0) or 0),
+                    )
+                    batch_tags = request.tags if request.tags else ["ClipForge", "Shorts"]
+                    ig_share_feed = (
+                        target.instagram_config.share_to_feed
+                        if target.instagram_config is not None
+                        else request.instagram_share_to_feed
+                    )
+
                     if platform == "youtube":
                         def yt_progress(pct: int):
                             _update_batch_target_progress(target_idx, pct, account.get("alias", "YouTube"))
@@ -528,8 +576,9 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                             video_path=clip_file,
                             title=clip_title,
                             description=clip_caption,
-                            tags=["ClipForge", "Shorts"],
+                            tags=batch_tags,
                             privacy_status=request.privacy or "public",
+                            publish_at=yt_publish_iso,
                             progress_callback=yt_progress,
                         )
                         with _jobs_lock:
@@ -559,7 +608,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                                     publish_ig_direct(
                                         video_path=clip_file,
                                         caption=clip_caption,
-                                        share_to_feed=True,
+                                        share_to_feed=ig_share_feed,
                                         ig_user_id=ig_uid,
                                         page_access_token=ig_token,
                                     )
@@ -589,7 +638,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                                 account=account,
                                 video_public_url=video_public_url,
                                 caption=clip_caption,
-                                share_to_feed=True,
+                                share_to_feed=ig_share_feed,
                                 progress_callback=ig_progress,
                             )
                             with _jobs_lock:
@@ -607,7 +656,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                             _update_batch_target_progress(target_idx, pct, account.get("alias", "Facebook"))
 
                         fb_cfg = target.facebook_config
-                        as_reel = fb_cfg.as_reel if fb_cfg is not None else True
+                        as_reel = fb_cfg.as_reel if fb_cfg is not None else request.facebook_as_reel
                         page_id = account.get("channel_id")
                         token = account.get("access_token")
 
@@ -623,6 +672,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                                     title=clip_title,
                                     page_id=page_id,
                                     page_access_token=token,
+                                    scheduled_publish_time=fb_schedule_unix,
                                 )
                             )
                         else:
@@ -633,6 +683,7 @@ def _run_batch_publish_job(batch_id: str, request: BatchPublishRequest, start_in
                                     description=clip_caption,
                                     page_id=page_id,
                                     page_access_token=token,
+                                    scheduled_publish_time=fb_schedule_unix,
                                 )
                             )
 

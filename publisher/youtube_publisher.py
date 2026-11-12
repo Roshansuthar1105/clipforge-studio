@@ -3,6 +3,7 @@ publisher/youtube_publisher.py — Upload video clips to YouTube via Data API v3
 """
 
 import os
+import datetime
 from pathlib import Path
 from typing import Callable, Optional
 from googleapiclient.http import MediaFileUpload
@@ -10,6 +11,17 @@ from googleapiclient.errors import HttpError
 
 from accounts.youtube_oauth import get_youtube_service
 from storage import upsert_account
+
+
+def _normalize_publish_at_iso(publish_at: str) -> str:
+    """Normalize an ISO-8601 timestamp string to YouTube's UTC YYYY-MM-DDTHH:MM:SSZ format."""
+    clean = str(publish_at).strip().replace("Z", "+00:00")
+    dt = datetime.datetime.fromisoformat(clean)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    else:
+        dt = dt.astimezone(datetime.timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def upload_to_youtube(
@@ -21,10 +33,13 @@ def upload_to_youtube(
     category_id: str = "22",
     privacy_status: str = "public",
     made_for_kids: bool = False,
+    publish_at: Optional[str] = None,
     progress_callback: Optional[Callable[[int], None]] = None,
 ) -> dict:
     """
     Perform resumable chunked upload to YouTube for the given account.
+    When ``publish_at`` is provided, forces ``privacyStatus="private"`` and sets
+    ``status.publishAt`` so YouTube schedules the Short/Video natively.
     Returns: {"video_id": str, "url": str, "shorts_url": str}
     """
     if not video_path.exists():
@@ -35,6 +50,14 @@ def upload_to_youtube(
     upsert_account(refreshed_account)
 
     safe_title = (title or "ClipForge Short")[:100]
+    status_obj = {
+        "privacyStatus": privacy_status.lower() if privacy_status.lower() in ("public", "private", "unlisted") else "public",
+        "selfDeclaredMadeForKids": bool(made_for_kids),
+    }
+    if publish_at and str(publish_at).strip():
+        status_obj["privacyStatus"] = "private"
+        status_obj["publishAt"] = _normalize_publish_at_iso(publish_at)
+
     body = {
         "snippet": {
             "title": safe_title,
@@ -42,10 +65,7 @@ def upload_to_youtube(
             "tags": tags or ["Shorts", "ClipForge"],
             "categoryId": category_id or "22",
         },
-        "status": {
-            "privacyStatus": privacy_status.lower() if privacy_status.lower() in ("public", "private", "unlisted") else "public",
-            "selfDeclaredMadeForKids": bool(made_for_kids),
-        },
+        "status": status_obj,
     }
 
     # Use 5MB chunks for reliable resumable upload

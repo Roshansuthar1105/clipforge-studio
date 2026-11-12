@@ -83,6 +83,7 @@ def create_scheduled_post(req: CreateScheduleRequest, user_id: Optional[str] = N
         "targets": enriched_targets,
         "title": req.title or resolved.stem.replace("_", " "),
         "caption": req.caption or "",
+        "tags": req.tags or [],
         "privacy": req.privacy or "public",
         "scheduled_time": req.scheduled_time,
         "status": "scheduled",  # scheduled | publishing | completed | failed | cancelled
@@ -176,6 +177,8 @@ def update_scheduled_post(schedule_id: str, updates: UpdateScheduleRequest) -> O
         fields_to_update["title"] = updates.title
     if updates.caption is not None:
         fields_to_update["caption"] = updates.caption
+    if updates.tags is not None:
+        fields_to_update["tags"] = updates.tags
     if updates.privacy is not None:
         fields_to_update["privacy"] = updates.privacy
     if updates.targets is not None:
@@ -272,6 +275,7 @@ def publish_scheduled_post_now(schedule_id: str) -> Dict[str, Any]:
         targets=target_objs,
         title=post.get("title"),
         caption=post.get("caption"),
+        tags=post.get("tags") or [],
         privacy=post.get("privacy", "public"),
     )
 

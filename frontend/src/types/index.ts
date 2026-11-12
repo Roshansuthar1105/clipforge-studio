@@ -55,6 +55,9 @@ export interface Job {
   output_clips?: string[];
   output_folder?: string;
   is_viral?: boolean;
+  publish_batch_id?: string;
+  scheduled_post_ids?: string[];
+  auto_publish_mode?: 'now' | 'native_schedule' | 'backend_schedule' | string;
 }
 
 export interface SubtitleJob {
@@ -248,6 +251,39 @@ export interface TextOverlayConfig {
   box_opacity: number;
 }
 
+export interface OverlayLayerConfig extends TextOverlayConfig {
+  enabled: boolean;
+}
+
+export interface CreateAndPostSubtitleConfig {
+  enabled: boolean;
+  language: 'hinglish' | 'english' | 'original';
+  preset_name: 'hormozi' | 'devin' | 'beast' | 'neon' | 'minimal' | string;
+  font_family: string;
+  font_size: number;
+  text_color: string;
+  highlight_color: string;
+  outline_color: string;
+  outline_width: number;
+  position_percent: number;
+  uppercase: boolean;
+  words_per_screen: number;
+}
+
+export interface AutoPublishConfig {
+  enabled: boolean;
+  mode: 'now' | 'native_schedule' | 'backend_schedule';
+  targets: Array<{ account_id: string; platform: string }>;
+  title?: string;
+  caption?: string;
+  tags: string[];
+  privacy: 'public' | 'unlisted' | 'private';
+  facebook_as_reel: boolean;
+  instagram_share_to_feed: boolean;
+  scheduled_time?: string;
+  stagger_minutes: number;
+}
+
 export interface ViralMoment {
   headline: string;
   virality_score: number;
@@ -279,6 +315,7 @@ export interface ScheduledPost {
   targets: ScheduledPostTarget[];
   title?: string;
   caption?: string;
+  tags?: string[];
   privacy: string;
   scheduled_time: string;
   status: 'scheduled' | 'publishing' | 'completed' | 'failed' | 'cancelled';
@@ -301,6 +338,7 @@ export interface CreateSchedulePayload {
   }[];
   title?: string;
   caption?: string;
+  tags?: string[];
   privacy?: string;
   scheduled_time: string;
 }
@@ -309,6 +347,7 @@ export interface UpdateSchedulePayload {
   scheduled_time?: string;
   title?: string;
   caption?: string;
+  tags?: string[];
   targets?: {
     account_id: string;
     platform: string;

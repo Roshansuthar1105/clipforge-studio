@@ -131,35 +131,35 @@ async def _fb_reel_finish(
     token: str,
     title: str = "",
     description: str = "",
+    scheduled_publish_time: Optional[int] = None,
 ) -> None:
     """
     Phase 3 — Finalise the Reel upload and trigger Meta's processing pipeline.
 
-    Facebook handles the rest after this call returns.  The Reel will appear on
-    the Page within minutes once Meta finishes processing (no polling needed).
-
-    Args:
-        client: Shared httpx async client.
-        page_id: Facebook Page ID.
-        video_id: The video ID from Phase 1.
-        token: Page Access Token.
-        title: Optional Reel title.
-        description: Optional Reel description / caption.
+    When ``scheduled_publish_time`` (Unix seconds) is provided, finishes with
+    ``video_state="SCHEDULED"`` so Meta schedules the Reel natively.
     """
     settings = get_settings()
     url = f"{settings.graph_url}/{page_id}/video_reels"
+    is_scheduled = scheduled_publish_time is not None and int(scheduled_publish_time) > 0
     data = {
         "upload_phase": "finish",
         "video_id": video_id,
         "access_token": token,
-        "video_state": "PUBLISHED",
+        "video_state": "SCHEDULED" if is_scheduled else "PUBLISHED",
     }
+    if is_scheduled:
+        data["scheduled_publish_time"] = str(int(scheduled_publish_time))
     if title:
         data["title"] = title
     if description:
         data["description"] = description
 
-    logger.info("[FB Reels] Phase 3 – Finishing upload for video_id=%s with video_state=PUBLISHED", video_id)
+    logger.info(
+        "[FB Reels] Phase 3 – Finishing upload for video_id=%s with video_state=%s",
+        video_id,
+        data["video_state"],
+    )
     resp = await client.post(url, data=data)
     resp.raise_for_status()
     body = resp.json()
@@ -178,6 +178,7 @@ async def publish_facebook_reel(
     title: str = "",
     page_id: Optional[str] = None,
     page_access_token: Optional[str] = None,
+    scheduled_publish_time: Optional[int] = None,
 ) -> PublishResult:
     """
     Publish a vertical MP4 as a Facebook Page Reel.
@@ -240,7 +241,15 @@ async def publish_facebook_reel(
         async with httpx.AsyncClient(timeout=300) as client:
             video_id, upload_url = await _fb_reel_start(client, pid, token)
             await _fb_reel_upload(client, upload_url, video_path, token)
-            await _fb_reel_finish(client, pid, video_id, token, title=title, description=caption)
+            await _fb_reel_finish(
+                client,
+                pid,
+                video_id,
+                token,
+                title=title,
+                description=caption,
+                scheduled_publish_time=scheduled_publish_time,
+            )
 
             try:
                 p_resp = await client.get(
@@ -257,11 +266,15 @@ async def publish_facebook_reel(
         if not permalink_url:
             permalink_url = f"/reel/{video_id}/"
 
+        details = {"page_id": pid, "permalink_url": permalink_url}
+        if scheduled_publish_time is not None and int(scheduled_publish_time) > 0:
+            details["scheduled_publish_time"] = int(scheduled_publish_time)
+
         return PublishResult(
             platform=PublishPlatform.facebook_reels,
             status=PublishStatus.published,
             media_id=video_id,
-            details={"page_id": pid, "permalink_url": permalink_url},
+            details=details,
         )
 
     except FacebookPublishError as exc:
@@ -419,32 +432,34 @@ async def _fb_video_finish(
     token: str,
     title: str = "",
     description: str = "",
+    scheduled_publish_time: Optional[int] = None,
 ) -> None:
     """
     Phase 3 — Finalise the Feed Video upload.
 
-    Args:
-        client: Shared httpx async client.
-        page_id: Facebook Page ID.
-        upload_session_id: Session ID from Phase 1.
-        token: Page Access Token.
-        title: Optional video title.
-        description: Optional video description / caption.
+    When ``scheduled_publish_time`` (Unix seconds) is provided, passes
+    ``published="false"`` and ``scheduled_publish_time`` for native Facebook scheduling.
     """
     settings = get_settings()
     url = f"{settings.graph_url}/{page_id}/videos"
+    is_scheduled = scheduled_publish_time is not None and int(scheduled_publish_time) > 0
     data = {
         "upload_phase": "finish",
         "upload_session_id": upload_session_id,
         "access_token": token,
     }
+    if is_scheduled:
+        data["published"] = "false"
+        data["scheduled_publish_time"] = str(int(scheduled_publish_time))
     if title:
         data["title"] = title
     if description:
         data["description"] = description
 
     logger.info(
-        "[FB Video] Phase 3 – Finishing upload for session %s", upload_session_id
+        "[FB Video] Phase 3 – Finishing upload for session %s (scheduled=%s)",
+        upload_session_id,
+        is_scheduled,
     )
     resp = await client.post(url, data=data)
     resp.raise_for_status()
@@ -464,6 +479,7 @@ async def publish_facebook_video(
     title: str = "",
     page_id: Optional[str] = None,
     page_access_token: Optional[str] = None,
+    scheduled_publish_time: Optional[int] = None,
 ) -> PublishResult:
     """
     Publish an MP4 as a Facebook Page Feed Video using the 3-phase chunked
@@ -529,14 +545,24 @@ async def publish_facebook_video(
                 client, pid, session_id, video_path, start_offset, end_offset, token
             )
             await _fb_video_finish(
-                client, pid, session_id, token, title=title, description=caption
+                client,
+                pid,
+                session_id,
+                token,
+                title=title,
+                description=caption,
+                scheduled_publish_time=scheduled_publish_time,
             )
+
+        details = {"page_id": pid, "upload_session_id": session_id}
+        if scheduled_publish_time is not None and int(scheduled_publish_time) > 0:
+            details["scheduled_publish_time"] = int(scheduled_publish_time)
 
         return PublishResult(
             platform=PublishPlatform.facebook_video,
             status=PublishStatus.published,
             media_id=video_id,
-            details={"page_id": pid, "upload_session_id": session_id},
+            details=details,
         )
 
     except FacebookPublishError as exc:

@@ -10,6 +10,9 @@ import {
   Zap,
   Clock,
   Check,
+  CloudUpload,
+  Tag,
+  Plus,
 } from 'lucide-react';
 import { usePublishStore } from '../../stores/usePublishStore';
 import { useAccountsStore } from '../../stores/useAccountsStore';
@@ -29,6 +32,15 @@ export const PublishModal: React.FC = () => {
     caption,
     setCaption,
     appendHashtag,
+    tags,
+    addTag,
+    removeTag,
+    facebookAsReel,
+    setFacebookAsReel,
+    instagramShareToFeed,
+    setInstagramShareToFeed,
+    staggerMinutes,
+    setStaggerMinutes,
     isPublishing,
     activeBatchId,
     activeClipName,
@@ -46,8 +58,9 @@ export const PublishModal: React.FC = () => {
   const { accounts } = useAccountsStore();
   const { createSchedule } = useScheduleStore();
 
-  // Mode: 'now' vs 'schedule'
-  const [publishMode, setPublishMode] = useState<'now' | 'schedule'>('now');
+  // Mode: 'now' | 'native_schedule' | 'backend_schedule'
+  const [publishMode, setPublishMode] = useState<'now' | 'native_schedule' | 'backend_schedule'>('now');
+  const [tagInput, setTagInput] = useState('');
 
   // Default scheduled time to 1 hour from now
   const getDefaultScheduledTime = () => {
@@ -63,6 +76,59 @@ export const PublishModal: React.FC = () => {
 
   const HASHTAG_PRESETS = ['shorts', 'reels', 'viral', 'trending', 'fyp', 'clipforge'];
 
+  const selectedAccountsList = Array.from(selectedAccountIds)
+    .map((id) => accounts.find((a) => a.id === id))
+    .filter((a): a is NonNullable<typeof a> => Boolean(a));
+  const hasFacebookTarget = selectedAccountsList.some((a) => a.platform === 'facebook');
+  const hasInstagramTarget = selectedAccountsList.some((a) => a.platform === 'instagram');
+  const hasYouTubeTarget = selectedAccountsList.some((a) => a.platform === 'youtube');
+
+  const scheduleWithClipForgeBackend = async (
+    targetsSubset: Array<{ account_id: string; platform: string }>,
+    baseMs: number
+  ) => {
+    let successCount = 0;
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      const partIso = new Date(baseMs + i * Math.max(0, staggerMinutes) * 60_000).toISOString();
+      let schedTitle = title || clip.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
+      if (clips.length > 1) {
+        if (schedTitle.includes('{part}') || schedTitle.includes('{n}')) {
+          schedTitle = schedTitle.replace(/\{part\}|\{n\}/gi, String(i + 1));
+        } else if (!schedTitle.toLowerCase().endsWith(`part ${i + 1}`)) {
+          schedTitle = `${schedTitle.trim()} - Part ${i + 1}`;
+        }
+      }
+      const partCaption = caption.replace(/\{part\}|\{n\}/gi, String(i + 1));
+      const enrichedTargets = targetsSubset.map((t) => {
+        if (t.platform === 'facebook') {
+          return {
+            ...t,
+            facebook_config: { title: schedTitle, description: partCaption, as_reel: facebookAsReel },
+          };
+        }
+        if (t.platform === 'instagram') {
+          return {
+            ...t,
+            instagram_config: { caption: partCaption, share_to_feed: instagramShareToFeed },
+          };
+        }
+        return t;
+      });
+      const ok = await createSchedule({
+        clip_path: clip.name,
+        targets: enrichedTargets,
+        title: schedTitle,
+        caption: partCaption,
+        tags,
+        privacy: 'public',
+        scheduled_time: partIso,
+      });
+      if (ok) successCount++;
+    }
+    return successCount;
+  };
+
   const handleAction = async () => {
     if (selectedAccountIds.size === 0) {
       showToast('Please select at least one social media channel', 'warning');
@@ -71,51 +137,60 @@ export const PublishModal: React.FC = () => {
 
     if (publishMode === 'now') {
       await executePublish();
-    } else {
-      // Schedule mode
-      if (!scheduledDateTime) {
-        showToast('Please select a valid scheduled date & time', 'warning');
-        return;
-      }
+      return;
+    }
 
-      setIsScheduling(true);
-      const isoTime = new Date(scheduledDateTime).toISOString();
+    if (!scheduledDateTime) {
+      showToast('Please select a valid scheduled date & time', 'warning');
+      return;
+    }
+    const parsedDate = new Date(scheduledDateTime);
+    if (Number.isNaN(parsedDate.getTime()) || parsedDate.getTime() <= Date.now() + 60_000) {
+      showToast('Scheduled time must be in the future (10+ mins ahead for Facebook)', 'warning');
+      return;
+    }
+    const isoTime = parsedDate.toISOString();
 
-      const targets = Array.from(selectedAccountIds).map((accId) => {
-        const acc = accounts.find((a) => a.id === accId);
-        return {
-          account_id: accId,
-          platform: acc?.platform || 'youtube',
-        };
-      });
+    const targets = Array.from(selectedAccountIds).map((accId) => {
+      const acc = accounts.find((a) => a.id === accId);
+      return {
+        account_id: accId,
+        platform: acc?.platform || 'youtube',
+      };
+    });
 
-      // Schedule each selected clip
-      let successCount = 0;
-      for (let i = 0; i < clips.length; i++) {
-        const clip = clips[i];
-        let schedTitle = title || clip.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
-        if (clips.length > 1) {
-          if (schedTitle.includes('{part}') || schedTitle.includes('{n}')) {
-            schedTitle = schedTitle.replace(/\{part\}|\{n\}/gi, String(i + 1));
-          } else if (!schedTitle.toLowerCase().endsWith(`part ${i + 1}`)) {
-            schedTitle = `${schedTitle.trim()} - Part ${i + 1}`;
-          }
-        }
-        const ok = await createSchedule({
-          clip_path: clip.name,
-          targets,
-          title: schedTitle,
-          caption: caption.replace(/\{part\}|\{n\}/gi, String(i + 1)),
-          privacy: 'public',
-          scheduled_time: isoTime,
+    if (publishMode === 'native_schedule') {
+      const nativeTargets = targets.filter((t) => t.platform === 'facebook' || t.platform === 'youtube');
+      const igTargets = targets.filter((t) => t.platform === 'instagram');
+
+      let ok = true;
+      if (nativeTargets.length > 0) {
+        ok = await executePublish({
+          publishAtIso: isoTime,
+          staggerMinutes,
+          targetsOverride: nativeTargets,
         });
-        if (ok) successCount++;
       }
+      if (igTargets.length > 0) {
+        setIsScheduling(true);
+        const igCount = await scheduleWithClipForgeBackend(igTargets, parsedDate.getTime());
+        setIsScheduling(false);
+        if (igCount > 0 && nativeTargets.length === 0) {
+          showToast(`Instagram queued via ClipForge Scheduler (${igCount} clip(s))`, 'info');
+          closePublishModal();
+        }
+      } else if (ok && clips.length === 1) {
+        // leave modal open to show upload progress bar like normal publish
+      }
+      return;
+    }
 
-      setIsScheduling(false);
-      if (successCount > 0) {
-        closePublishModal();
-      }
+    // ClipForge backend schedule queue
+    setIsScheduling(true);
+    const successCount = await scheduleWithClipForgeBackend(targets, parsedDate.getTime());
+    setIsScheduling(false);
+    if (successCount > 0) {
+      closePublishModal();
     }
   };
 
@@ -151,15 +226,15 @@ export const PublishModal: React.FC = () => {
 
         {/* Content */}
         <div className="p-6 flex-1 overflow-y-auto space-y-5">
-          {/* Dispatch Timing Mode Toggle */}
+          {/* Dispatch Timing Mode Toggle (3 distinct modes) */}
           <div>
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2.5">
               Dispatch Mode
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <button
                 type="button"
-                className={`p-3.5 rounded-2xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                className={`p-3 rounded-2xl border text-left flex items-center gap-2.5 transition-all cursor-pointer ${
                   publishMode === 'now'
                     ? 'border-indigo-500 bg-indigo-950/40 text-white shadow-lg shadow-indigo-500/15 ring-1 ring-indigo-500/50'
                     : 'border-white/10 bg-slate-900/40 text-slate-400 hover:text-white hover:border-white/20'
@@ -167,56 +242,109 @@ export const PublishModal: React.FC = () => {
                 onClick={() => setPublishMode('now')}
               >
                 <div
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
                     publishMode === 'now' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-slate-400'
                   }`}
                 >
                   <Zap className="w-4 h-4" />
                 </div>
-                <div>
-                  <div className="text-xs font-bold text-white">Publish Immediately</div>
-                  <div className="text-[11px] text-slate-400">Upload to channels right now</div>
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-white truncate">Post Now</div>
+                  <div className="text-[10px] text-slate-400 truncate">Publish immediately</div>
                 </div>
               </button>
 
               <button
                 type="button"
-                className={`p-3.5 rounded-2xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
-                  publishMode === 'schedule'
+                className={`p-3 rounded-2xl border text-left flex items-center gap-2.5 transition-all cursor-pointer ${
+                  publishMode === 'native_schedule'
+                    ? 'border-cyan-500 bg-cyan-950/40 text-white shadow-lg shadow-cyan-500/15 ring-1 ring-cyan-500/50'
+                    : 'border-white/10 bg-slate-900/40 text-slate-400 hover:text-white hover:border-white/20'
+                }`}
+                onClick={() => setPublishMode('native_schedule')}
+              >
+                <div
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                    publishMode === 'native_schedule' ? 'bg-cyan-600 text-white' : 'bg-white/5 text-slate-400'
+                  }`}
+                >
+                  <CloudUpload className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-white truncate">Native Schedule</div>
+                  <div className="text-[10px] text-slate-400 truncate">FB &amp; YT platform queue</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className={`p-3 rounded-2xl border text-left flex items-center gap-2.5 transition-all cursor-pointer ${
+                  publishMode === 'backend_schedule'
                     ? 'border-purple-500 bg-purple-950/40 text-white shadow-lg shadow-purple-500/15 ring-1 ring-purple-500/50'
                     : 'border-white/10 bg-slate-900/40 text-slate-400 hover:text-white hover:border-white/20'
                 }`}
-                onClick={() => setPublishMode('schedule')}
+                onClick={() => setPublishMode('backend_schedule')}
               >
                 <div
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-                    publishMode === 'schedule' ? 'bg-purple-600 text-white' : 'bg-white/5 text-slate-400'
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                    publishMode === 'backend_schedule' ? 'bg-purple-600 text-white' : 'bg-white/5 text-slate-400'
                   }`}
                 >
                   <Calendar className="w-4 h-4" />
                 </div>
-                <div>
-                  <div className="text-xs font-bold text-white">Schedule for Later</div>
-                  <div className="text-[11px] text-slate-400">Auto-publish at specific time</div>
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-white truncate">ClipForge Queue</div>
+                  <div className="text-[10px] text-slate-400 truncate">Backend auto-scheduler</div>
                 </div>
               </button>
             </div>
           </div>
 
           {/* Schedule Date & Time Picker */}
-          {publishMode === 'schedule' && (
-            <div className="p-4 rounded-2xl border border-purple-500/30 bg-purple-950/20 animate-in fade-in space-y-2.5">
-              <div className="flex items-center gap-2 text-xs font-bold text-purple-300">
-                <Clock className="w-4 h-4 text-purple-400" /> Pick Auto-Publish Date & Time (Local Time)
+          {publishMode !== 'now' && (
+            <div
+              className={`p-4 rounded-2xl border animate-in fade-in space-y-3 ${
+                publishMode === 'native_schedule'
+                  ? 'border-cyan-500/30 bg-cyan-950/20'
+                  : 'border-purple-500/30 bg-purple-950/20'
+              }`}
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <div
+                    className={`flex items-center gap-2 text-xs font-bold ${
+                      publishMode === 'native_schedule' ? 'text-cyan-300' : 'text-purple-300'
+                    }`}
+                  >
+                    <Clock className="w-4 h-4" /> Publish Date &amp; Time (Local)
+                  </div>
+                  <input
+                    type="datetime-local"
+                    className="glass-input text-xs w-full font-mono"
+                    value={scheduledDateTime}
+                    onChange={(e) => setScheduledDateTime(e.target.value)}
+                  />
+                </div>
+                {clips.length > 1 && (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-300 block">
+                      Stagger Between Parts (mins)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={10080}
+                      className="glass-input text-xs w-full font-mono"
+                      value={staggerMinutes}
+                      onChange={(e) => setStaggerMinutes(Math.max(0, Number(e.target.value) || 0))}
+                    />
+                  </div>
+                )}
               </div>
-              <input
-                type="datetime-local"
-                className="glass-input text-xs w-full font-mono"
-                value={scheduledDateTime}
-                onChange={(e) => setScheduledDateTime(e.target.value)}
-              />
               <p className="text-[11px] text-slate-400">
-                ClipForge Studio's background auto-scheduler will automatically trigger and upload this clip to your selected channels when this time arrives.
+                {publishMode === 'native_schedule'
+                  ? 'Uploads right now directly to Facebook (Scheduled) & YouTube (Private + publishAt) so platforms release them automatically even if your PC is off. Any selected Instagram account is automatically queued in ClipForge Scheduler.'
+                  : "ClipForge Studio's background scheduler will automatically upload your clips when this scheduled time arrives."}
               </p>
             </div>
           )}
@@ -352,6 +480,94 @@ export const PublishModal: React.FC = () => {
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
             />
+          </div>
+
+          {/* YouTube API Tags & Platform Toggles */}
+          <div className="space-y-3 p-4 rounded-2xl border border-white/10 bg-slate-900/40">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-indigo-400" /> YouTube Tags &amp; Platform Format
+              </label>
+              <span className="text-[10px] text-slate-500">{tags.length} tags</span>
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                className="glass-input text-xs flex-1"
+                placeholder="Add YouTube tag & press Enter..."
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    if (tagInput.trim()) {
+                      addTag(tagInput);
+                      setTagInput('');
+                    }
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-indigo-600 text-xs font-semibold text-white cursor-pointer flex items-center gap-1"
+                onClick={() => {
+                  if (tagInput.trim()) {
+                    addTag(tagInput);
+                    setTagInput('');
+                  }
+                }}
+              >
+                <Plus className="w-3.5 h-3.5" /> Add
+              </button>
+            </div>
+
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <span
+                    key={t}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-[11px] text-indigo-200 font-medium"
+                  >
+                    {t}
+                    <button
+                      type="button"
+                      className="text-indigo-300 hover:text-white cursor-pointer"
+                      onClick={() => removeTag(t)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {(hasFacebookTarget || hasInstagramTarget || !hasYouTubeTarget) && (
+              <div className="flex flex-wrap gap-3 pt-1">
+                {hasFacebookTarget && (
+                  <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={facebookAsReel}
+                      onChange={(e) => setFacebookAsReel(e.target.checked)}
+                      className="accent-indigo-500"
+                    />
+                    Facebook: Upload as Reel (uncheck for Feed Video)
+                  </label>
+                )}
+                {hasInstagramTarget && (
+                  <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={instagramShareToFeed}
+                      onChange={(e) => setInstagramShareToFeed(e.target.checked)}
+                      className="accent-pink-500"
+                    />
+                    Instagram: Share Reel to Profile Grid
+                  </label>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Live Multi-Channel Uploading Progress */}
@@ -506,9 +722,11 @@ export const PublishModal: React.FC = () => {
           <button
             type="button"
             className={`px-5 py-2 rounded-xl text-xs font-bold text-white shadow-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-              publishMode === 'schedule'
+              publishMode === 'backend_schedule'
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-purple-500/20'
-                : 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 shadow-pink-500/20'
+                : publishMode === 'native_schedule'
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 shadow-cyan-500/20'
+                  : 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 shadow-pink-500/20'
             }`}
             onClick={handleAction}
             disabled={isPublishing || isScheduling || selectedAccountIds.size === 0}
@@ -516,14 +734,21 @@ export const PublishModal: React.FC = () => {
             {isPublishing || isScheduling ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                {publishMode === 'schedule' ? 'Scheduling...' : 'Publishing...'}
+                {publishMode === 'now' ? 'Publishing...' : 'Scheduling...'}
               </>
-            ) : publishMode === 'schedule' ? (
+            ) : publishMode === 'native_schedule' ? (
+              <>
+                <CloudUpload className="w-3.5 h-3.5" />
+                {clips.length > 1
+                  ? `Native Schedule ${clips.length} Clips`
+                  : 'Upload Native Schedule'}
+              </>
+            ) : publishMode === 'backend_schedule' ? (
               <>
                 <Calendar className="w-3.5 h-3.5" />
                 {clips.length > 1
-                  ? `Schedule ${clips.length} Clips`
-                  : 'Schedule Auto-Publish'}
+                  ? `Queue ${clips.length} Clips (ClipForge)`
+                  : 'Queue in ClipForge Scheduler'}
               </>
             ) : (
               <>

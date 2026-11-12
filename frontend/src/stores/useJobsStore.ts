@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { Job, PublishRecord } from '../types';
 import { apiClient, showToast } from '../api/client';
+import { usePublishStore } from './usePublishStore';
+import { useScheduleStore } from './useScheduleStore';
 
 interface JobsState {
   activeJobId: string | null;
@@ -102,7 +104,25 @@ export const useJobsStore = create<JobsState>((set, get) => ({
 
         if (job.status === 'completed') {
           get().stopJobPolling();
-          showToast(`Job finished! Ready to preview and publish.`, 'success');
+          if (job.publish_batch_id) {
+            usePublishStore
+              .getState()
+              .attachBatchPublishJob(
+                job.publish_batch_id,
+                job.clips_count || job.output_clips?.length || 1
+              );
+          }
+          if (job.scheduled_post_ids && job.scheduled_post_ids.length > 0) {
+            void useScheduleStore.getState().loadScheduledPosts();
+          }
+          showToast(
+            job.publish_batch_id
+              ? 'Clips rendered — auto-publishing to selected channels!'
+              : job.scheduled_post_ids && job.scheduled_post_ids.length > 0
+                ? `Clips rendered — queued ${job.scheduled_post_ids.length} scheduled post(s)!`
+                : 'Job finished! Ready to preview and publish.',
+            'success'
+          );
           get().loadJobsList();
           // Dispatch global refresh event for library
           window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));

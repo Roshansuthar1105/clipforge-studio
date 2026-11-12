@@ -15,6 +15,10 @@ interface PublishState {
   selectedAccountIds: Set<string>;
   title: string;
   caption: string;
+  tags: string[];
+  facebookAsReel: boolean;
+  instagramShareToFeed: boolean;
+  staggerMinutes: number;
   isPublishing: boolean;
   activeBatchId: string | null;
   activeJobId: string | null;
@@ -33,8 +37,77 @@ interface PublishState {
   setTitle: (title: string) => void;
   setCaption: (caption: string) => void;
   appendHashtag: (tag: string) => void;
+  addTag: (tag: string) => void;
+  removeTag: (tag: string) => void;
+  setFacebookAsReel: (val: boolean) => void;
+  setInstagramShareToFeed: (val: boolean) => void;
+  setStaggerMinutes: (mins: number) => void;
   dismissPublishJob: () => void;
-  executePublish: () => Promise<boolean>;
+  attachBatchPublishJob: (batchId: string, totalClips?: number) => void;
+  executePublish: (options?: {
+    publishAtIso?: string;
+    staggerMinutes?: number;
+    targetsOverride?: Array<{ account_id: string; platform: string }>;
+  }) => Promise<boolean>;
+}
+
+let activeBatchPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function startBatchPolling(
+  batchId: string,
+  totalClips: number,
+  set: (partial: Partial<PublishState>) => void
+) {
+  if (activeBatchPollTimer) {
+    clearInterval(activeBatchPollTimer);
+    activeBatchPollTimer = null;
+  }
+
+  const pollOnce = async () => {
+    try {
+      const batch = await apiClient.getBatchPublishJobStatus(batchId);
+      if (batch) {
+        const curIdx = batch.current_clip_index || 0;
+        const activeClip = batch.clips?.[curIdx];
+        const curTargets = activeClip?.targets || [];
+        const total = batch.total_clips || totalClips;
+        set({
+          overallProgress: batch.progress || 0,
+          currentClipProgress: batch.current_clip_progress || 0,
+          currentBatchIndex: batch.current_clip_number || curIdx + 1,
+          totalBatchCount: total,
+          activeClipName: batch.current_clip_name || activeClip?.clip_name || '',
+          targetProgress: curTargets,
+          batchStageMsg:
+            batch.stage_msg ||
+            batch.message ||
+            `Posting files ${batch.current_clip_number || curIdx + 1}/${total}...`,
+        });
+
+        if (batch.status === 'completed' || batch.all_done) {
+          if (activeBatchPollTimer) {
+            clearInterval(activeBatchPollTimer);
+            activeBatchPollTimer = null;
+          }
+          set({ isPublishing: false, overallProgress: 100 });
+          showToast(`Successfully published all ${total} clip(s)!`, 'success');
+          window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
+        } else if (batch.status === 'paused_on_failure') {
+          if (activeBatchPollTimer) {
+            clearInterval(activeBatchPollTimer);
+            activeBatchPollTimer = null;
+          }
+          set({ isPublishing: false });
+          showToast(batch.error_message || 'Batch publication paused on failure', 'error');
+        }
+      }
+    } catch {
+      // ignore transient poll errors
+    }
+  };
+
+  void pollOnce();
+  activeBatchPollTimer = setInterval(pollOnce, 1500);
 }
 
 export const usePublishStore = create<PublishState>((set, get) => ({
@@ -43,6 +116,10 @@ export const usePublishStore = create<PublishState>((set, get) => ({
   selectedAccountIds: new Set(),
   title: '',
   caption: '',
+  tags: ['shorts', 'reels', 'viral'],
+  facebookAsReel: true,
+  instagramShareToFeed: true,
+  staggerMinutes: 60,
   isPublishing: false,
   activeBatchId: null,
   activeJobId: null,
@@ -81,6 +158,10 @@ export const usePublishStore = create<PublishState>((set, get) => ({
       clips,
       title: initialTitle,
       caption: initialTitle ? `${initialTitle}\n\n#shorts #reels #viral` : '#shorts #reels #viral',
+      tags: ['shorts', 'reels', 'viral'],
+      facebookAsReel: true,
+      instagramShareToFeed: true,
+      staggerMinutes: 60,
       isPublishing: false,
       activeBatchId: null,
       targetProgress: [],
@@ -121,14 +202,49 @@ export const usePublishStore = create<PublishState>((set, get) => ({
     if (curr.includes(cleanTag)) return;
     set({ caption: curr ? `${curr} ${cleanTag}` : cleanTag });
   },
+  addTag: (tag) => {
+    const clean = tag.trim().replace(/^#+/, '');
+    if (!clean) return;
+    const curr = get().tags;
+    if (curr.some((t) => t.toLowerCase() === clean.toLowerCase())) return;
+    set({ tags: [...curr, clean] });
+  },
+  removeTag: (tag) => set((state) => ({ tags: state.tags.filter((t) => t !== tag) })),
+  setFacebookAsReel: (facebookAsReel) => set({ facebookAsReel }),
+  setInstagramShareToFeed: (instagramShareToFeed) => set({ instagramShareToFeed }),
+  setStaggerMinutes: (staggerMinutes) => set({ staggerMinutes }),
 
-  executePublish: async () => {
-    const { clips: rawClips, selectedAccountIds, title, caption } = get();
+  attachBatchPublishJob: (batchId, totalClips = 1) => {
+    if (!batchId) return;
+    set({
+      activeBatchId: batchId,
+      isPublishing: true,
+      currentBatchIndex: 1,
+      totalBatchCount: totalClips,
+      overallProgress: 5,
+      batchStageMsg: 'Auto-publish batch started...',
+    });
+    startBatchPolling(batchId, totalClips, set);
+  },
+
+  executePublish: async (options) => {
+    const {
+      clips: rawClips,
+      selectedAccountIds,
+      title,
+      caption,
+      tags,
+      facebookAsReel,
+      instagramShareToFeed,
+      staggerMinutes,
+    } = get();
+    const publishAtIso = options?.publishAtIso;
+    const effectiveStagger = options?.staggerMinutes ?? staggerMinutes;
     if (rawClips.length === 0) {
       showToast('No clips selected to publish', 'warning');
       return false;
     }
-    if (selectedAccountIds.size === 0) {
+    if (!options?.targetsOverride && selectedAccountIds.size === 0) {
       showToast('Please select at least one social media channel', 'warning');
       return false;
     }
@@ -148,16 +264,20 @@ export const usePublishStore = create<PublishState>((set, get) => ({
     set({ isPublishing: true, overallProgress: 5 });
     try {
       const accounts = useAccountsStore.getState().accounts;
-      const targets = Array.from(selectedAccountIds).map((accId) => {
-        const acc = accounts.find((a) => a.id === accId);
-        return {
-          account_id: accId,
-          platform: acc?.platform || 'youtube',
-        };
-      });
+      const targets =
+        options?.targetsOverride && options.targetsOverride.length > 0
+          ? options.targetsOverride
+          : Array.from(selectedAccountIds).map((accId) => {
+              const acc = accounts.find((a) => a.id === accId);
+              return {
+                account_id: accId,
+                platform: acc?.platform || 'youtube',
+              };
+            });
+      const effectiveAccountIds = targets.map((t) => t.account_id);
 
       if (clips.length === 1) {
-        // Single clip publish
+        // Single clip publish (or native schedule)
         const clip = clips[0];
         const res = await apiClient.publishSingle({
           clip_path: clip.url || clip.name,
@@ -165,11 +285,15 @@ export const usePublishStore = create<PublishState>((set, get) => ({
           clip_url: clip.url,
           title,
           caption,
-          target_account_ids: Array.from(selectedAccountIds),
+          tags,
+          publish_at: publishAtIso || undefined,
+          facebook_as_reel: facebookAsReel,
+          instagram_share_to_feed: instagramShareToFeed,
+          target_account_ids: effectiveAccountIds,
           targets,
         });
 
-        showToast('Publishing initiated!', 'success');
+        showToast(publishAtIso ? 'Native platform schedule upload initiated!' : 'Publishing initiated!', 'success');
         
         // Poll publish job
         const jobId = res.job_id;
@@ -207,14 +331,19 @@ export const usePublishStore = create<PublishState>((set, get) => ({
           }
         }, 1500);
       } else {
-        // Batch sequential publish
+        // Batch sequential publish (or native schedule batch)
         const res = await apiClient.publishBatch({
           clip_paths: clips.map((c) => c.url || c.name),
           clips: clips.map((c) => ({ clip_name: c.name, clip_url: c.url })),
           title,
           title_prefix: title,
           caption,
-          target_account_ids: Array.from(selectedAccountIds),
+          tags,
+          publish_at: publishAtIso || undefined,
+          stagger_minutes: effectiveStagger,
+          facebook_as_reel: facebookAsReel,
+          instagram_share_to_feed: instagramShareToFeed,
+          target_account_ids: effectiveAccountIds,
           targets,
         });
 
@@ -226,42 +355,17 @@ export const usePublishStore = create<PublishState>((set, get) => ({
           totalBatchCount: clips.length,
           activeClipName: clips[0]?.name || '',
           overallProgress: 5,
-          batchStageMsg: `Starting sequential batch publish for ${clips.length} clips...`,
+          batchStageMsg: publishAtIso
+            ? `Starting native schedule upload for ${clips.length} clips...`
+            : `Starting sequential batch publish for ${clips.length} clips...`,
         });
-        showToast(`Sequential batch publish dispatched for ${clips.length} clips!`, 'success');
-
-        const pollBatch = setInterval(async () => {
-          try {
-            const batch = await apiClient.getBatchPublishJobStatus(batchId);
-            if (batch) {
-              const curIdx = batch.current_clip_index || 0;
-              const activeClip = batch.clips?.[curIdx];
-              const curTargets = activeClip?.targets || [];
-              set({
-                overallProgress: batch.progress || 0,
-                currentClipProgress: batch.current_clip_progress || 0,
-                currentBatchIndex: batch.current_clip_number || (curIdx + 1),
-                totalBatchCount: batch.total_clips || clips.length,
-                activeClipName: batch.current_clip_name || activeClip?.clip_name || '',
-                targetProgress: curTargets,
-                batchStageMsg: batch.stage_msg || batch.message || `Posting files ${(batch.current_clip_number || curIdx + 1)}/${batch.total_clips}...`,
-              });
-
-              if (batch.status === 'completed' || batch.all_done) {
-                clearInterval(pollBatch);
-                set({ isPublishing: false, overallProgress: 100 });
-                showToast(`Successfully published all ${clips.length} clips!`, 'success');
-                window.dispatchEvent(new CustomEvent('clipforge:refresh-library'));
-              } else if (batch.status === 'paused_on_failure') {
-                clearInterval(pollBatch);
-                set({ isPublishing: false });
-                showToast(batch.error_message || 'Batch publication paused on failure', 'error');
-              }
-            }
-          } catch {
-            // ignore
-          }
-        }, 1500);
+        showToast(
+          publishAtIso
+            ? `Native platform schedule dispatched for ${clips.length} clips!`
+            : `Sequential batch publish dispatched for ${clips.length} clips!`,
+          'success'
+        );
+        startBatchPolling(batchId, clips.length, set);
       }
       return true;
     } catch (err: any) {
